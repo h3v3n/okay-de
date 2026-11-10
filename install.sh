@@ -51,9 +51,10 @@ elif [ "$MODE" = "--user" ]; then
     mkdir -p "$HOME/.config/okay-de"
     mkdir -p "$HOME/.local/bin"
     mkdir -p "$HOME/.local/share/applications"
+    mkdir -p "$HOME/.local/share/themes"
     mkdir -p "$HOME/Desktop"
 
-    # Kopiowanie konfiguracji (w tym masek przycisków XBM do labwc)
+    # Kopiowanie konfiguracji (w tym masek przycisków XBM i wektorów SVG do labwc)
     cp -r config/labwc/* "$HOME/.config/labwc/"
     cp -r config/waybar/* "$HOME/.config/waybar/"
     cp -r config/foot/* "$HOME/.config/foot/"
@@ -61,6 +62,7 @@ elif [ "$MODE" = "--user" ]; then
     cp -r config/mako/* "$HOME/.config/mako/"
     cp -r config/gtk-3.0/* "$HOME/.config/gtk-3.0/"
     cp -r config/gtk-4.0/* "$HOME/.config/gtk-4.0/"
+    cp -r themes/* "$HOME/.local/share/themes/"
 
     # Kopiowanie domyślnej tapety użytkownika jeśli jeszcze nie istnieje
     if [ ! -f "$HOME/.config/okay-de/wallpaper.png" ]; then

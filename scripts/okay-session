@@ -6,6 +6,8 @@ export XDG_SESSION_DESKTOP=OKay
 export XDG_SESSION_TYPE=wayland
 
 # Spójność kursorów na całym pulpicie Wayland
+# WLR_NO_HARDWARE_CURSORS=1 zapobiega niewidocznemu kursorowi na maszynach wirtualnych i kartach GPU
+export WLR_NO_HARDWARE_CURSORS=1
 export XCURSOR_THEME=Adwaita
 export XCURSOR_SIZE=24
 
@@ -17,10 +19,15 @@ export SDL_VIDEODRIVER=wayland
 export CLUTTER_BACKEND=wayland
 export _JAVA_AWT_WM_NONREPARENTING=1
 
-# Wymuszenie architektury Server-Side Decorations (SSD) - wyłączenie CSD w aplikacjach
-export GTK_CSD=0
+# Dekoracje i integracja z D-Bus / portalami (natychmiastowy start aplikacji GTK4/Libadwaita)
+export GTK_USE_PORTAL=0
 export QT_WAYLAND_DISABLE_WINDOWDECORATION=0
 export QT_QPA_PLATFORMTHEME="qt6ct"
+
+# Aktualizacja środowiska D-Bus dla usług systemd i portali (eliminuje 25-sekundowe opóźnienia)
+if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+    dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XCURSOR_THEME XCURSOR_SIZE 2>/dev/null || true
+fi
 
 # Inicjalizacja standardowych katalogów użytkownika XDG oraz pulpitu
 command -v xdg-user-dirs-update >/dev/null 2>&1 && xdg-user-dirs-update

@@ -4,6 +4,7 @@
   "height": 42,
   "spacing": 4,
 
+  "modules-left": [],
   "modules-center": [
     "custom/launcher",
     "wlr/taskbar",
@@ -15,6 +16,7 @@
     "clock",
     "custom/power"
   ],
+  "modules-right": [],
 
   "custom/launcher": {
     "format": "󰣇",
@@ -26,7 +28,7 @@
     "format": "{icon}",
     "icon-size": 24,
     "icon-theme": "Papirus-Dark",
-    "all-outputs": false,
+    "all-outputs": true,
     "tooltip-format": "{title}",
     "on-click": "minimize-raise",
     "on-click-middle": "close"

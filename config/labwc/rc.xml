@@ -14,8 +14,12 @@
   </snapping>
 
   <theme>
+    <name>OKay</name>
     <cornerRadius>8</cornerRadius>
-    <titlebar layout="Title:Iconify,Maximize,Close" />
+    <titlebar layout="icon:iconify,max,close">
+      <layout>icon:iconify,max,close</layout>
+      <showTitle>yes</showTitle>
+    </titlebar>
     <font place="MenuItem">
       <name>JetBrains Mono</name>
       <size>10</size>

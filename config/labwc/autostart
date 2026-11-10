@@ -12,8 +12,8 @@ fi
 # 2. Demon powiadomień
 mako &
 
-# 3. Pływający dock Waybar
-waybar &
+# 3. Pływający dock Waybar (opóźnienie zapobiega wyścigom z kompozytorem i serwerem audio)
+(sleep 0.5 && waybar) &
 
 # 4. Tapeta i tło pulpitu (swaybg z kolorem bazowym i tapetą)
 # Sprawdzenie w kolejności: tapeta użytkownika -> tapeta systemowa -> kolor awaryjny

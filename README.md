@@ -16,7 +16,9 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
   - Dynamiczną zmianę kolorów prostokątnych przycisków okien (zamknij, maksymalizuj, minimalizuj) z natychmiastowym przeładowaniem kompozytora `labwc`.
   - Szybki dostęp do konfiguracji ekranów (`wdisplays`) i miksera (`pavucontrol`).
   - Szczegółowe informacje o systemie (CPU, RAM, kernel, dystrybucja).
-- **Dekoracje okien:** Prostokątne przyciski w układzie `Title:Iconify,Maximize,Close` z zaokrągleniem narożników `8px` (`cornerRadius: 8`).
+- **Architektura Server-Side Decorations (SSD):** Belka kompozytora `labwc` o wysokości 30px (`titlebar.height: 30`) stanowi nadrzędną ramkę na zewnątrz każdego okna. Dzięki zmiennym sesyjnym `GTK_CSD=0` oraz `QT_WAYLAND_DISABLE_WINDOWDECORATION=0` aplikacje GTK3/GTK4 i Qt nie wstrzykują przycisków sterowania do pasków zakładek i nagłówków.
+- **Dekoracje okien:** Geometryczne prostokąty w układzie `Title:Iconify,Maximize,Close` z zaokrągleniem narożników `8px` (`cornerRadius: 8`) i maskami XBM 10x8.
+- **Tapeta i tło pulpitu (`swaybg`):** Demon tapety Wayland z bezpieczną kaskadą: tapeta użytkownika (`~/.config/okay-de/wallpaper.png`) -> tapeta systemowa (`/usr/share/backgrounds/okay-de/default.png`) -> awaryjny kolor bazowy Catppuccin Mocha (`#1e1e2e`).
 - **Dock Waybar (pływająca wyspa):** Umieszczony na dole ekranu, wyśrodkowany dock o zaokrąglonych krawędziach (`border-radius: 18px`), efekcie matowego szkła oraz płynnych mikrointerakcjach.
 - **Kafelkowanie (Snapping / Tiling):** Wbudowane przeciąganie okien myszą do krawędzi ekranu oraz skróty `Super + Strzałki`.
 - **Zadania (wlr/taskbar):** Wyświetlanie wyłącznie ikon (`icon-size: 24`), lewy klik podnosi/minimalizuje okno (`minimize-raise`), środkowy zamyka okno (`close`), wskaźnik aktywnego programu.

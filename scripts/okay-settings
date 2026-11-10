@@ -13,6 +13,9 @@ import shutil
 import platform
 import subprocess
 
+# Zapobieganie 25-sekundowemu opóźnieniu D-Bus xdg-desktop-portal
+os.environ.setdefault("GTK_USE_PORTAL", "0")
+
 try:
     import gi
     gi.require_version("Gtk", "4.0")
@@ -199,8 +202,6 @@ class ConfigManager:
                     "    border-radius: 0;\n"
                     "    padding: 0 8px;\n"
                     "    margin-bottom: 0;\n"
-                    "    margin-left: auto;\n"
-                    "    margin-right: auto;\n"
                     "    box-shadow: none;\n"
                     "}\n"
                 )
@@ -213,13 +214,11 @@ class ConfigManager:
                     "    box-shadow: none;\n"
                     "}\n\n"
                     ".modules-center {\n"
-                    "    background-color: rgba(30, 30, 46, 0.85);\n"
-                    "    border: 1px solid rgba(137, 180, 250, 0.2);\n"
+                    "    background-color: rgba(30, 30, 46, 0.92);\n"
+                    "    border: 1px solid rgba(137, 180, 250, 0.3);\n"
                     "    border-radius: 18px;\n"
-                    "    padding: 3px 8px;\n"
-                    "    margin-bottom: 10px;\n"
-                    "    margin-left: auto;\n"
-                    "    margin-right: auto;\n"
+                    "    padding: 3px 10px;\n"
+                    "    margin-bottom: 8px;\n"
                     "    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);\n"
                     "}\n"
                 )

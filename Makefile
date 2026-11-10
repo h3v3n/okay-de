@@ -37,13 +37,21 @@ install:
 	install -d $(DESTDIR)$(PREFIX)/share/backgrounds/okay-de
 	install -m 644 backgrounds/default.png $(DESTDIR)$(PREFIX)/share/backgrounds/okay-de/default.png
 
-	# Domyślne konfiguracje systemowe XDG i maski przycisków XBM
+	# Domyślny motyw graficzny OKay dla kompozytora labwc / Openbox (belki i przyciski SSD)
+	install -d $(DESTDIR)$(PREFIX)/share/themes/OKay/labwc
+	install -m 644 themes/OKay/labwc/* $(DESTDIR)$(PREFIX)/share/themes/OKay/labwc/
+	install -d $(DESTDIR)$(PREFIX)/share/themes/OKay/openbox-3
+	install -m 644 themes/OKay/openbox-3/* $(DESTDIR)$(PREFIX)/share/themes/OKay/openbox-3/
+
+	# Domyślne konfiguracje systemowe XDG i maski przycisków XBM / SVG
 	install -d $(DESTDIR)/etc/xdg/labwc
+	install -m 644 config/labwc/environment $(DESTDIR)/etc/xdg/labwc/environment
 	install -m 644 config/labwc/rc.xml $(DESTDIR)/etc/xdg/labwc/rc.xml
 	install -m 644 config/labwc/menu.xml $(DESTDIR)/etc/xdg/labwc/menu.xml
 	install -m 644 config/labwc/themerc $(DESTDIR)/etc/xdg/labwc/themerc
 	install -m 644 config/labwc/themerc-override $(DESTDIR)/etc/xdg/labwc/themerc-override
 	install -m 644 config/labwc/*.xbm $(DESTDIR)/etc/xdg/labwc/
+	install -m 644 config/labwc/*.svg $(DESTDIR)/etc/xdg/labwc/
 	install -m 755 config/labwc/autostart $(DESTDIR)/etc/xdg/labwc/autostart
 
 	install -d $(DESTDIR)/etc/xdg/waybar
@@ -85,6 +93,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/foot.desktop
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/pcmanfm.desktop
 	rm -rf $(DESTDIR)$(PREFIX)/share/backgrounds/okay-de
+	rm -rf $(DESTDIR)$(PREFIX)/share/themes/OKay
 	rm -rf $(DESTDIR)/etc/skel/Desktop
 	rm -rf $(DESTDIR)/etc/xdg/labwc
 	rm -rf $(DESTDIR)/etc/xdg/waybar
