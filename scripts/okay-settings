@@ -9,9 +9,15 @@ Stos technologiczny: Python 3, GTK4, Libadwaita.
 
 import os
 import sys
+import json
 import shutil
 import platform
 import subprocess
+import threading
+import tarfile
+import tempfile
+import urllib.request
+import urllib.error
 
 # Zapobieganie 25-sekundowemu opóźnieniu D-Bus xdg-desktop-portal
 os.environ.setdefault("GTK_USE_PORTAL", "0")
@@ -113,6 +119,236 @@ class SystemHelper:
             except Exception:
                 pass
         return "Nieskonfigurowany lub brak modułu zRAM"
+
+
+
+class UpdateManager:
+    """Zarządza sprawdzaniem i instalacją aktualizacji z repozytorium GitHub."""
+
+    GITHUB_REPO = "h3v3n/okay-de"
+    GITHUB_URL = "https://github.com/h3v3n/okay-de"
+    API_COMMITS_URL = "https://api.github.com/repos/h3v3n/okay-de/commits/main"
+    TARBALL_URL = "https://github.com/h3v3n/okay-de/archive/refs/heads/main.tar.gz"
+    LOCAL_VERSION_FILE = os.path.expanduser("~/.config/okay-de/version")
+
+    @classmethod
+    def get_local_commit(cls) -> str:
+        """Pobiera hash aktualnie zainstalowanego commita."""
+        if os.path.exists(cls.LOCAL_VERSION_FILE):
+            try:
+                with open(cls.LOCAL_VERSION_FILE, "r", encoding="utf-8") as f:
+                    val = f.read().strip()
+                    if val:
+                        return val
+            except Exception:
+                pass
+
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        project_root = os.path.abspath(os.path.join(script_dir, ".."))
+        try:
+            res = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=project_root if os.path.isdir(os.path.join(project_root, ".git")) else None,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+        except Exception:
+            pass
+
+        return "ba9de83"
+
+    @classmethod
+    def get_remote_commit_sync(cls) -> str:
+        """Pobiera skrót commita z API synchronicznie."""
+        try:
+            req = urllib.request.Request(
+                cls.API_COMMITS_URL,
+                headers={"User-Agent": "OKay-DE-Settings", "Accept": "application/vnd.github.v3+json"}
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return data.get("sha", "")[:7].lower()
+        except Exception:
+            return "latest"
+
+    @classmethod
+    def check_for_updates(cls, callback):
+        """Asynchronicznie sprawdza dostępność aktualizacji na GitHub."""
+        def worker():
+            local_sha = cls.get_local_commit().lower()
+            try:
+                # 1. Zapytanie do GitHub API
+                req = urllib.request.Request(
+                    cls.API_COMMITS_URL,
+                    headers={
+                        "User-Agent": "OKay-DE-Settings",
+                        "Accept": "application/vnd.github.v3+json"
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                    remote_sha = data.get("sha", "")[:7].lower()
+                    commit_msg = data.get("commit", {}).get("message", "").split("\n")[0]
+                    author_name = data.get("commit", {}).get("author", {}).get("name", "OKay Developer")
+                    commit_date = data.get("commit", {}).get("author", {}).get("date", "")[:10]
+
+                    has_update = (remote_sha != local_sha) and bool(remote_sha)
+
+                    result = {
+                        "success": True,
+                        "has_update": has_update,
+                        "local_sha": local_sha,
+                        "remote_sha": remote_sha,
+                        "commit_msg": commit_msg,
+                        "author": author_name,
+                        "date": commit_date
+                    }
+                    GLib.idle_add(callback, result)
+                    return
+            except Exception as e:
+                # 2. Fallback przez git ls-remote jeśli API zwróciło błąd lub rate-limit
+                try:
+                    res = subprocess.run(
+                        ["git", "ls-remote", f"{cls.GITHUB_URL}.git", "HEAD"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False
+                    )
+                    if res.returncode == 0 and res.stdout.strip():
+                        remote_sha = res.stdout.strip().split()[0][:7].lower()
+                        has_update = (remote_sha != local_sha) and bool(remote_sha)
+                        result = {
+                            "success": True,
+                            "has_update": has_update,
+                            "local_sha": local_sha,
+                            "remote_sha": remote_sha,
+                            "commit_msg": "Najnowsza wersja gałęzi main",
+                            "author": "GitHub",
+                            "date": ""
+                        }
+                        GLib.idle_add(callback, result)
+                        return
+                except Exception:
+                    pass
+
+                GLib.idle_add(callback, {
+                    "success": False,
+                    "error": str(e),
+                    "local_sha": local_sha
+                })
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    @classmethod
+    def install_update(cls, target_mode: str, progress_callback, finish_callback):
+        """Pobiera i instaluje aktualizację OKay DE."""
+        def worker():
+            try:
+                GLib.idle_add(progress_callback, "Przygotowywanie pobierania...")
+
+                # Sprawdzenie czy mamy lokalny klon git powiązany z h3v3n/okay-de
+                script_dir = os.path.dirname(os.path.realpath(__file__))
+                project_root = os.path.abspath(os.path.join(script_dir, ".."))
+                is_git_clone = False
+
+                if os.path.isdir(os.path.join(project_root, ".git")):
+                    res = subprocess.run(
+                        ["git", "remote", "get-url", "origin"],
+                        cwd=project_root,
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+                    if "okay-de" in res.stdout:
+                        is_git_clone = True
+
+                work_dir = None
+                if is_git_clone:
+                    GLib.idle_add(progress_callback, "Pobieranie zmian z repozytorium git (git pull)...")
+                    pull_res = subprocess.run(
+                        ["git", "pull", "origin", "main"],
+                        cwd=project_root,
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+                    work_dir = project_root
+                else:
+                    GLib.idle_add(progress_callback, "Pobieranie archiwum z GitHub...")
+                    temp_dir = tempfile.mkdtemp(prefix="okay-de-update-")
+                    archive_path = os.path.join(temp_dir, "main.tar.gz")
+
+                    req = urllib.request.Request(
+                        cls.TARBALL_URL,
+                        headers={"User-Agent": "OKay-DE-Settings"}
+                    )
+                    with urllib.request.urlopen(req, timeout=30) as resp, open(archive_path, "wb") as out_f:
+                        shutil.copyfileobj(resp, out_f)
+
+                    GLib.idle_add(progress_callback, "Rozpakowywanie archiwum aktualizacji...")
+                    with tarfile.open(archive_path, "r:gz") as tar:
+                        tar.extractall(path=temp_dir)
+
+                    extracted_dirs = [os.path.join(temp_dir, d) for d in os.listdir(temp_dir) if os.path.isdir(os.path.join(temp_dir, d))]
+                    if extracted_dirs:
+                        work_dir = extracted_dirs[0]
+                    else:
+                        work_dir = temp_dir
+
+                if not work_dir or not os.path.exists(work_dir):
+                    raise RuntimeError("Nie udało się przygotować katalogu źródłowego aktualizacji.")
+
+                # Instalacja
+                GLib.idle_add(progress_callback, f"Instalowanie aktualizacji ({target_mode})...")
+                install_script = os.path.join(work_dir, "install.sh")
+                if os.path.exists(install_script):
+                    os.chmod(install_script, 0o755)
+
+                if target_mode == "system":
+                    if shutil.which("pkexec"):
+                        cmd = ["pkexec", "bash", install_script, "--system"]
+                    else:
+                        cmd = ["sudo", "bash", install_script, "--system"]
+                    res = subprocess.run(cmd, cwd=work_dir, capture_output=True, text=True, check=False)
+                    if res.returncode != 0:
+                        raise RuntimeError(f"Błąd instalacji systemowej: {res.stderr or res.stdout}")
+                else:
+                    cmd = ["bash", install_script, "--user"]
+                    res = subprocess.run(cmd, cwd=work_dir, capture_output=True, text=True, check=False)
+                    if res.returncode != 0:
+                        raise RuntimeError(f"Błąd instalacji użytkownika: {res.stderr or res.stdout}")
+
+                # Zapis nowego hasha commita
+                try:
+                    latest_sha = cls.get_remote_commit_sync()
+                    os.makedirs(os.path.dirname(cls.LOCAL_VERSION_FILE), exist_ok=True)
+                    with open(cls.LOCAL_VERSION_FILE, "w", encoding="utf-8") as f:
+                        f.write(latest_sha)
+                except Exception:
+                    pass
+
+                # Przeładowanie kompozytora i Waybara
+                GLib.idle_add(progress_callback, "Przeładowywanie kompozytora i paska...")
+                subprocess.run(["labwc", "--reconfigure"], check=False)
+                subprocess.run(["pkill", "-SIGUSR2", "waybar"], check=False)
+
+                if shutil.which("notify-send"):
+                    subprocess.Popen([
+                        "notify-send",
+                        "OKay DE",
+                        "Aktualizacja środowiska została pomyślnie zainstalowana!",
+                        "-u", "normal"
+                    ])
+
+                GLib.idle_add(finish_callback, True, "Aktualizacja zakończona pomyślnie!")
+            except Exception as e:
+                GLib.idle_add(finish_callback, False, str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
 
 
 class ConfigManager:
@@ -363,6 +599,7 @@ class OkaySettingsWindow(Adw.PreferencesWindow):
         self._init_system_page()
         self._init_performance_page()
         self._init_shortcuts_page()
+        self._init_updates_page()
         self._init_about_page()
 
     def _show_alert(self, title: str, message: str):
@@ -737,7 +974,193 @@ class OkaySettingsWindow(Adw.PreferencesWindow):
         group.add(row)
 
     # -------------------------------------------------------------
-    # Moduł 5: O systemie (Informacje)
+    # Moduł 5: Aktualizacje (GitHub)
+    # -------------------------------------------------------------
+    def _init_updates_page(self):
+        page = Adw.PreferencesPage()
+        page.set_title("Aktualizacje")
+        page.set_icon_name("software-update-available-symbolic")
+
+        # Grupa 1: Stan aktualizacji
+        group_status = Adw.PreferencesGroup()
+        group_status.set_title("Stan aktualizacji")
+        group_status.set_description("Sprawdź dostępność nowszej wersji OKay DE w repozytorium GitHub.")
+
+        # Wiersz: Zainstalowana wersja
+        row_local = Adw.ActionRow()
+        row_local.set_title("Zainstalowana wersja")
+        row_local.set_subtitle(f"Repozytorium: {UpdateManager.GITHUB_REPO}")
+        row_local.set_icon_name("application-x-executable-symbolic")
+
+        self.lbl_local_version = Gtk.Label(label=UpdateManager.get_local_commit())
+        self.lbl_local_version.add_css_class("heading")
+        self.lbl_local_version.add_css_class("dim-label")
+        self.lbl_local_version.set_valign(Gtk.Align.CENTER)
+        row_local.add_suffix(self.lbl_local_version)
+        group_status.add(row_local)
+
+        # Wiersz: Status i sprawdzanie
+        self.row_status_msg = Adw.ActionRow()
+        self.row_status_msg.set_title("Sprawdzanie aktualizacji")
+        self.row_status_msg.set_subtitle("Kliknij przycisk, aby połączyć się z GitHub.")
+        self.row_status_msg.set_icon_name("view-refresh-symbolic")
+
+        box_check = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        box_check.set_valign(Gtk.Align.CENTER)
+
+        self.check_spinner = Gtk.Spinner()
+        self.check_spinner.set_visible(False)
+        box_check.append(self.check_spinner)
+
+        self.btn_check = Gtk.Button(label="Sprawdź teraz")
+        self.btn_check.add_css_class("suggested-action")
+        self.btn_check.connect("clicked", self._on_check_updates_clicked)
+        box_check.append(self.btn_check)
+
+        self.row_status_msg.add_suffix(box_check)
+        group_status.add(self.row_status_msg)
+
+        page.add(group_status)
+
+        # Grupa 2: Dostępne uaktualnienie (widoczna gdy znaleziono nową wersję)
+        self.group_update_info = Adw.PreferencesGroup()
+        self.group_update_info.set_title("Dostępne uaktualnienie")
+        self.group_update_info.set_description("W repozytorium GitHub opublikowano nowsze wydanie środowiska.")
+        self.group_update_info.set_visible(False)
+
+        self.row_remote_version = Adw.ActionRow()
+        self.row_remote_version.set_title("Najnowszy commit")
+        self.row_remote_version.set_subtitle("-")
+        self.row_remote_version.set_icon_name("emblem-synchronizing-symbolic")
+        self.group_update_info.add(self.row_remote_version)
+
+        self.row_commit_msg = Adw.ActionRow()
+        self.row_commit_msg.set_title("Opis zmian")
+        self.row_commit_msg.set_subtitle("-")
+        self.row_commit_msg.set_icon_name("document-properties-symbolic")
+        self.group_update_info.add(self.row_commit_msg)
+
+        # Wybór trybu instalacji
+        self.row_install_mode = Adw.ComboRow()
+        self.row_install_mode.set_title("Zakres instalacji")
+        self.row_install_mode.set_subtitle("Wybierz czy aktualizacja ma dotyczyć profilu użytkownika czy całego systemu")
+        self.row_install_mode.set_icon_name("preferences-system-symbolic")
+
+        mode_model = Gtk.StringList.new([
+            "Katalog użytkownika (~/.config, ~/.local)",
+            "Systemowy (/etc, /usr - wymaga uprawnień)"
+        ])
+        self.row_install_mode.set_model(mode_model)
+        self.row_install_mode.set_selected(0)
+        self.group_update_info.add(self.row_install_mode)
+
+        # Przycisk instalacji
+        self.row_install_action = Adw.ActionRow()
+        self.row_install_action.set_title("Rozpocznij instalację")
+        self.row_install_action.set_subtitle("Pobierze pliki z gałęzi main i zaaplikuje konfigurację.")
+        self.row_install_action.set_icon_name("system-software-install-symbolic")
+
+        box_install = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        box_install.set_valign(Gtk.Align.CENTER)
+
+        self.install_spinner = Gtk.Spinner()
+        self.install_spinner.set_visible(False)
+        box_install.append(self.install_spinner)
+
+        self.btn_install = Gtk.Button(label="Zainstaluj teraz")
+        self.btn_install.add_css_class("suggested-action")
+        self.btn_install.connect("clicked", self._on_install_update_clicked)
+        box_install.append(self.btn_install)
+
+        self.row_install_action.add_suffix(box_install)
+        self.group_update_info.add(self.row_install_action)
+
+        page.add(self.group_update_info)
+        self.add(page)
+
+    def _on_check_updates_clicked(self, _btn):
+        """Uruchamia asynchroniczne sprawdzanie aktualizacji."""
+        self.btn_check.set_sensitive(False)
+        self.check_spinner.set_visible(True)
+        self.check_spinner.start()
+        self.row_status_msg.set_title("Sprawdzanie...")
+        self.row_status_msg.set_subtitle("Łączenie z GitHub API (h3v3n/okay-de)...")
+
+        UpdateManager.check_for_updates(self._on_update_check_finished)
+
+    def _on_update_check_finished(self, result: dict):
+        """Obsługuje wynik sprawdzania aktualizacji w głównym wątku GTK."""
+        self.btn_check.set_sensitive(True)
+        self.check_spinner.stop()
+        self.check_spinner.set_visible(False)
+
+        if not result.get("success"):
+            err = result.get("error", "Błąd połączenia z siecią")
+            self.row_status_msg.set_title("Błąd sprawdzania aktualizacji")
+            self.row_status_msg.set_subtitle(f"Nie udało się pobrać informacji: {err}")
+            self.row_status_msg.set_icon_name("dialog-error-symbolic")
+            self.group_update_info.set_visible(False)
+            return
+
+        local_sha = result.get("local_sha", "")
+        remote_sha = result.get("remote_sha", "")
+        has_update = result.get("has_update", False)
+
+        if has_update:
+            self.row_status_msg.set_title("Dostępna jest nowa wersja!")
+            self.row_status_msg.set_subtitle(f"Lokalna: {local_sha} ➔ GitHub: {remote_sha}")
+            self.row_status_msg.set_icon_name("software-update-available-symbolic")
+
+            author = result.get("author", "OKay Developer")
+            date = result.get("date", "")
+            date_info = f" | {date}" if date else ""
+            self.row_remote_version.set_subtitle(f"Commit {remote_sha} ({author}{date_info})")
+            self.row_commit_msg.set_subtitle(result.get("commit_msg", "Brak opisu zmian"))
+            self.group_update_info.set_visible(True)
+        else:
+            self.row_status_msg.set_title("System jest aktualny")
+            self.row_status_msg.set_subtitle(f"Posiadasz najnowszą wersję OKay DE ({local_sha}).")
+            self.row_status_msg.set_icon_name("emblem-ok-symbolic")
+            self.group_update_info.set_visible(False)
+
+    def _on_install_update_clicked(self, _btn):
+        """Uruchamia asynchroniczną instalację aktualizacji."""
+        mode = "system" if self.row_install_mode.get_selected() == 1 else "user"
+        self.btn_install.set_sensitive(False)
+        self.btn_check.set_sensitive(False)
+        self.install_spinner.set_visible(True)
+        self.install_spinner.start()
+        self.row_install_action.set_subtitle("Inicjowanie procesu aktualizacji...")
+
+        def on_progress(msg: str):
+            self.row_install_action.set_subtitle(msg)
+
+        def on_finish(success: bool, msg: str):
+            self.btn_install.set_sensitive(True)
+            self.btn_check.set_sensitive(True)
+            self.install_spinner.stop()
+            self.install_spinner.set_visible(False)
+            self.row_install_action.set_subtitle(msg)
+
+            if success:
+                new_sha = UpdateManager.get_local_commit()
+                self.lbl_local_version.set_text(new_sha)
+                self.group_update_info.set_visible(False)
+                self.row_status_msg.set_title("System jest aktualny")
+                self.row_status_msg.set_subtitle(f"Pomyślnie zaktualizowano do wersji {new_sha}.")
+                self.row_status_msg.set_icon_name("emblem-ok-symbolic")
+                self._show_alert(
+                    "Aktualizacja zakończona",
+                    "OKay DE zostało pomyślnie zaktualizowane!\n"
+                    "Konfiguracja kompozytora labwc oraz pasek Waybar zostały odświeżone."
+                )
+            else:
+                self._show_alert("Błąd aktualizacji", f"Instalacja aktualizacji nie powiodła się:\n\n{msg}")
+
+        UpdateManager.install_update(mode, on_progress, on_finish)
+
+    # -------------------------------------------------------------
+    # Moduł 6: O systemie (Informacje)
     # -------------------------------------------------------------
     def _init_about_page(self):
         page = Adw.PreferencesPage()
@@ -750,6 +1173,7 @@ class OkaySettingsWindow(Adw.PreferencesWindow):
 
         self._add_info_row(group, "Dystrybucja", SystemHelper.get_distro_name(), "distributor-logo-symbolic")
         self._add_info_row(group, "Środowisko graficzne", SystemHelper.get_desktop_info(), "user-desktop-symbolic")
+        self._add_info_row(group, "Wersja OKay DE", f"Commit {UpdateManager.get_local_commit()}", "software-update-available-symbolic")
         self._add_info_row(group, "Wersja jądra Linux", SystemHelper.get_kernel_release(), "applications-system-symbolic")
         self._add_info_row(group, "Procesor (CPU)", SystemHelper.get_cpu_info(), "cpu-symbolic")
         self._add_info_row(group, "Pamięć operacyjna", SystemHelper.get_memory_info(), "drive-harddisk-symbolic")

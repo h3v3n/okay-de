@@ -15,7 +15,8 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
   - Zmianę tapety pulpitu i stylu paska zadań (pływająca wyspa vs pełna belka).
   - Dynamiczną zmianę kolorów prostokątnych przycisków okien (zamknij, maksymalizuj, minimalizuj) z natychmiastowym przeładowaniem kompozytora `labwc`.
   - Szybki dostęp do konfiguracji ekranów (`wdisplays`) i miksera (`pavucontrol`).
-  - Szczegółowe informacje o systemie (CPU, RAM, kernel, dystrybucja).
+  - Sprawdzanie i instalację aktualizacji bezpośrednio z repozytorium GitHub (`h3v3n/okay-de`).
+  - Szczegółowe informacje o systemie (CPU, RAM, kernel, dystrybucja, wersja commita).
 - **Architektura Server-Side Decorations (SSD):** Belka kompozytora `labwc` o wysokości 30px (`titlebar.height: 30`) stanowi nadrzędną ramkę na zewnątrz każdego okna. Dzięki zmiennym sesyjnym `GTK_CSD=0` oraz `QT_WAYLAND_DISABLE_WINDOWDECORATION=0` aplikacje GTK3/GTK4 i Qt nie wstrzykują przycisków sterowania do pasków zakładek i nagłówków.
 - **Dekoracje okien:** Geometryczne prostokąty w układzie `Title:Iconify,Maximize,Close` z zaokrągleniem narożników `8px` (`cornerRadius: 8`) i maskami XBM 10x8.
 - **Tapeta i tło pulpitu (`swaybg`):** Demon tapety Wayland z bezpieczną kaskadą: tapeta użytkownika (`~/.config/okay-de/wallpaper.png`) -> tapeta systemowa (`/usr/share/backgrounds/okay-de/default.png`) -> awaryjny kolor bazowy Catppuccin Mocha (`#1e1e2e`).
@@ -110,3 +111,17 @@ Kopiuje konfiguracje do `~/.config/`, skrypty do `~/.local/bin/`, ikony na `$HOM
 ```bash
 ./install.sh --user
 ```
+
+---
+
+## Aktualizacje
+
+Środowisko OKay DE można aktualizować bezpośrednio z oficjalnego repozytorium GitHub:
+- **Graficznie:** Otwórz `OKay Settings` (skrót `Super + I`), przejdź do zakładki **Aktualizacje** i kliknij **Sprawdź teraz**. Jeśli dostępna jest nowa wersja, pojawi się lista zmian oraz przycisk **Zainstaluj teraz** z wyborem trybu (użytkownik lub system).
+- **Z wiersza poleceń:**
+  ```bash
+  git pull origin main
+  ./install.sh --user   # lub: sudo ./install.sh --system
+  labwc --reconfigure
+  pkill -SIGUSR2 waybar
+  ```
