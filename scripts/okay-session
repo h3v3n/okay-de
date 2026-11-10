@@ -19,7 +19,8 @@ export SDL_VIDEODRIVER=wayland
 export CLUTTER_BACKEND=wayland
 export _JAVA_AWT_WM_NONREPARENTING=1
 
-# Dekoracje i integracja z D-Bus / portalami (natychmiastowy start aplikacji PyQt6/Qt6)
+# Wymuszenie architektury Server-Side Decorations (SSD) oraz integracja Qt6/GTK
+export GTK_CSD=0
 export GTK_USE_PORTAL=0
 export QT_WAYLAND_DISABLE_WINDOWDECORATION=0
 export QT_QPA_PLATFORMTHEME="qt6ct"

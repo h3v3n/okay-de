@@ -49,7 +49,6 @@ elif [ "$MODE" = "--user" ]; then
 
     # Tworzenie katalogów docelowych
     mkdir -p "$HOME/.config/labwc"
-    mkdir -p "$HOME/.config/waybar"
     mkdir -p "$HOME/.config/foot"
     mkdir -p "$HOME/.config/fuzzel"
     mkdir -p "$HOME/.config/mako"
@@ -64,7 +63,6 @@ elif [ "$MODE" = "--user" ]; then
 
     # Kopiowanie konfiguracji (w tym masek przycisków XBM i wektorów SVG do labwc)
     cp -r config/labwc/* "$HOME/.config/labwc/"
-    cp -r config/waybar/* "$HOME/.config/waybar/"
     cp -r config/foot/* "$HOME/.config/foot/"
     cp -r config/fuzzel/* "$HOME/.config/fuzzel/"
     cp -r config/mako/* "$HOME/.config/mako/"
@@ -103,8 +101,8 @@ elif [ "$MODE" = "--user" ]; then
     fi
 
     echo "Konfiguracja użytkownika zainstalowana pomyślnie."
-    echo "Wymagane pakiety dla OKay Settings: python-pyqt6, qt6-wayland."
-    echo "Sugerowane pakiety narzędzi: swaybg, waybar, wdisplays, pavucontrol, papirus-icon-theme."
+    echo "Wymagane pakiety dla OKay Settings i OKay Dock: python-pyqt6, qt6-wayland."
+    echo "Sugerowane pakiety narzędzi: swaybg, wdisplays, pavucontrol, papirus-icon-theme."
     echo "Upewnij się, że \$HOME/.local/bin znajduje się w Twojej zmiennej PATH."
 else
     echo "Użycie: $0 [--user | --system]"

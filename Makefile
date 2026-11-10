@@ -9,6 +9,7 @@ install:
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m 755 scripts/okay-session $(DESTDIR)$(PREFIX)/bin/okay-session
 	install -m 755 scripts/okay-settings $(DESTDIR)$(PREFIX)/bin/okay-settings
+	install -m 755 scripts/okay-dock $(DESTDIR)$(PREFIX)/bin/okay-dock
 	install -m 755 scripts/okay-powermenu $(DESTDIR)$(PREFIX)/bin/okay-powermenu
 	install -m 755 scripts/okay-clipboard $(DESTDIR)$(PREFIX)/bin/okay-clipboard
 	install -m 755 scripts/okay-screenshot $(DESTDIR)$(PREFIX)/bin/okay-screenshot
@@ -54,11 +55,6 @@ install:
 	install -m 644 config/labwc/*.svg $(DESTDIR)/etc/xdg/labwc/
 	install -m 755 config/labwc/autostart $(DESTDIR)/etc/xdg/labwc/autostart
 
-	install -d $(DESTDIR)/etc/xdg/waybar
-	install -m 644 config/waybar/config.jsonc $(DESTDIR)/etc/xdg/waybar/config.jsonc
-	install -m 644 config/waybar/style.css $(DESTDIR)/etc/xdg/waybar/style.css
-	install -m 644 config/waybar/dock-style.css $(DESTDIR)/etc/xdg/waybar/dock-style.css
-
 	install -d $(DESTDIR)/etc/xdg/foot
 	install -m 644 config/foot/foot.ini $(DESTDIR)/etc/xdg/foot/foot.ini
 
@@ -81,6 +77,7 @@ install:
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-session
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-settings
+	rm -f $(DESTDIR)$(PREFIX)/bin/okay-dock
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-powermenu
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-clipboard
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-screenshot
@@ -96,7 +93,6 @@ uninstall:
 	rm -rf $(DESTDIR)$(PREFIX)/share/themes/OKay
 	rm -rf $(DESTDIR)/etc/skel/Desktop
 	rm -rf $(DESTDIR)/etc/xdg/labwc
-	rm -rf $(DESTDIR)/etc/xdg/waybar
 	rm -rf $(DESTDIR)/etc/xdg/foot
 	rm -rf $(DESTDIR)/etc/xdg/fuzzel
 	rm -rf $(DESTDIR)/etc/xdg/mako

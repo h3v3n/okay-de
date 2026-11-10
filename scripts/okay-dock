@@ -1,0 +1,564 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+OKay Dock (okay-dock)
+Natywny, nowoczesny pływający dock i pasek zadań dla środowiska OKay DE w PyQt6.
+Obsługuje menu aplikacji, przypięte programy, kontrolę głośności, zegar i zasilanie.
+"""
+
+import os
+import sys
+import json
+import shutil
+import subprocess
+
+try:
+    from PyQt6.QtWidgets import (
+        QApplication, QWidget, QHBoxLayout, QVBoxLayout, QPushButton,
+        QLabel, QMenu, QInputDialog, QMessageBox, QFrame, QSizePolicy
+    )
+    from PyQt6.QtCore import Qt, QTimer, QSize, QFileSystemWatcher, QDateTime, QPoint
+    from PyQt6.QtGui import QColor, QFont, QCursor, QAction, QIcon, QWheelEvent
+except ImportError as err:
+    print(
+        f"Błąd krytyczny: Brak wymaganych bibliotek PyQt6 dla OKay Dock: {err}\n"
+        "Zainstaluj wymagany pakiet: python-pyqt6.",
+        file=sys.stderr
+    )
+    sys.exit(1)
+
+
+DOCK_QSS = """
+/* Styl pływającego docka OKay Dock (Catppuccin Mocha) */
+QWidget#dockWindow {
+    background: transparent;
+}
+
+QFrame#dockContainer {
+    background-color: rgba(30, 30, 46, 0.94);
+    border: 1px solid rgba(137, 180, 250, 0.35);
+    border-radius: 18px;
+}
+
+/* Przyciski w docku */
+QPushButton.dock-btn {
+    background-color: transparent;
+    color: #cdd6f4;
+    border: none;
+    border-radius: 12px;
+    padding: 4px 10px;
+    font-family: 'JetBrains Mono', 'Noto Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    min-height: 28px;
+}
+
+QPushButton.dock-btn:hover {
+    background-color: rgba(137, 180, 250, 0.22);
+    color: #89b4fa;
+}
+
+QPushButton.dock-btn:pressed {
+    background-color: rgba(137, 180, 250, 0.35);
+}
+
+/* Przycisk Menu Launchera */
+QPushButton#launcherBtn {
+    color: #89b4fa;
+    font-size: 16px;
+    font-weight: bold;
+    padding: 4px 12px;
+}
+
+QPushButton#launcherBtn:hover {
+    background-color: #89b4fa;
+    color: #11111b;
+}
+
+/* Przyciski przypiętych aplikacji */
+QPushButton.pinned-btn {
+    font-size: 15px;
+    color: #89b4fa;
+    padding: 4px 10px;
+}
+
+QPushButton.pinned-btn:hover {
+    background-color: rgba(137, 180, 250, 0.25);
+    color: #b4befe;
+}
+
+/* Separator pionowy */
+QFrame.dock-sep {
+    color: rgba(205, 214, 244, 0.25);
+    background-color: rgba(205, 214, 244, 0.25);
+    width: 1px;
+    margin: 8px 4px;
+    border: none;
+}
+
+/* Menu podręczne */
+QMenu {
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+    border-radius: 10px;
+    padding: 6px;
+    font-family: 'Cantarell', 'Noto Sans', sans-serif;
+}
+
+QMenu::item {
+    padding: 8px 20px 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+QMenu::item:selected {
+    background-color: #89b4fa;
+    color: #11111b;
+    font-weight: 500;
+}
+
+QMenu::separator {
+    height: 1px;
+    background-color: #313244;
+    margin: 4px 6px;
+}
+"""
+
+
+class VolumeButton(QPushButton):
+    """Przycisk apletu głośności z obsługą kółka myszy."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("volBtn")
+        self.setProperty("class", "dock-btn")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Głośność\nLewy klik: Wycisz\nPrawy klik: Mikser\nKółko myszy: Regulacja")
+        self.update_volume()
+
+    def update_volume(self):
+        vol, muted = self._get_volume()
+        if muted:
+            icon = "󰝟"
+            text = "Mute"
+        else:
+            if vol >= 66:
+                icon = "󰕾"
+            elif vol >= 33:
+                icon = "󰖀"
+            else:
+                icon = "󰕿"
+            text = f"{vol}%"
+        self.setText(f"{icon} {text}")
+
+    def _get_volume(self):
+        try:
+            out = subprocess.check_output(
+                ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
+                text=True,
+                timeout=1
+            ).strip()
+            muted = "[MUTED]" in out
+            parts = out.split()
+            vol = int(float(parts[1]) * 100) if len(parts) > 1 else 50
+            return vol, muted
+        except Exception:
+            return 50, False
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            subprocess.run(["okay-volume", "mute"], check=False)
+            self.update_volume()
+        elif event.button() == Qt.MouseButton.RightButton:
+            if shutil.which("pavucontrol"):
+                subprocess.Popen(["pavucontrol"])
+        else:
+            super().mousePressEvent(event)
+
+    def wheelEvent(self, event: QWheelEvent):
+        delta = event.angleDelta().y()
+        if delta > 0:
+            subprocess.run(["okay-volume", "raise"], check=False)
+        elif delta < 0:
+            subprocess.run(["okay-volume", "lower"], check=False)
+        self.update_volume()
+        event.accept()
+
+
+class PinnedAppButton(QPushButton):
+    """Przycisk przypiętej aplikacji z menu kontekstowym odpinania."""
+
+    def __init__(self, app_id: str, app_info: dict, on_unpin_callback, parent=None):
+        super().__init__(parent)
+        self.app_id = app_id
+        self.app_info = app_info
+        self.on_unpin_callback = on_unpin_callback
+
+        icon_char = app_info.get("icon", "󰣇")
+        self.setText(icon_char)
+        self.setToolTip(f"{app_info.get('name', 'Aplikacja')}\n(Prawy klik: Opcje)")
+        self.setProperty("class", "dock-btn pinned-btn")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clicked.connect(self._launch)
+
+    def _launch(self):
+        cmd = self.app_info.get("cmd", "")
+        if cmd:
+            subprocess.Popen([cmd], shell=True)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        action_launch = menu.addAction(f"Uruchom: {self.app_info.get('name', '')}")
+        action_launch.triggered.connect(self._launch)
+        menu.addSeparator()
+        action_unpin = menu.addAction("Odepnij z docka")
+        action_unpin.triggered.connect(lambda: self.on_unpin_callback(self.app_id))
+        menu.exec(event.globalPos())
+
+
+class OkayDock(QWidget):
+    """Główne okno pływającego docka OKay DE."""
+
+    CONFIG_FILE = os.path.expanduser("~/.config/okay-de/pinned_apps.json")
+    DOCK_STYLE_FILE = os.path.expanduser("~/.config/okay-de/dock_style")
+
+    DEFAULT_PINNED_APPS = {
+        "foot": {"name": "Terminal (foot)", "icon": "", "cmd": "foot", "enabled": True},
+        "pcmanfm": {"name": "Menedżer plików (pcmanfm)", "icon": "󰉋", "cmd": "pcmanfm", "enabled": True},
+        "settings": {"name": "Ustawienia OKay", "icon": "󰒓", "cmd": "okay-settings", "enabled": True},
+        "firefox": {"name": "Przeglądarka internetowa (firefox)", "icon": "󰈹", "cmd": "firefox", "enabled": False}
+    }
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("dockWindow")
+
+        # Flagi okna dla docka Wayland
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+        self._init_ui()
+        self._setup_watcher()
+        self._setup_timers()
+
+        self.reposition()
+
+        # Reakcja na zmianę rozdzielczości ekranu
+        screen = QApplication.primaryScreen()
+        if screen:
+            screen.geometryChanged.connect(lambda _g: self.reposition())
+
+    def _init_ui(self):
+        root_layout = QHBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        # Kontener wyspy
+        self.container = QFrame()
+        self.container.setObjectName("dockContainer")
+        self.layout_dock = QHBoxLayout(self.container)
+        self.layout_dock.setContentsMargins(6, 4, 6, 4)
+        self.layout_dock.setSpacing(4)
+
+        # 1. Przycisk Menu Launchera
+        self.btn_launcher = QPushButton("󰣇")
+        self.btn_launcher.setObjectName("launcherBtn")
+        self.btn_launcher.setProperty("class", "dock-btn")
+        self.btn_launcher.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_launcher.setToolTip("Menu aplikacji OKay (Kliknij, aby otworzyć)")
+        self.btn_launcher.clicked.connect(self._show_launcher_menu)
+        self.layout_dock.addWidget(self.btn_launcher)
+
+        # Separator 1
+        sep1 = QFrame()
+        sep1.setProperty("class", "dock-sep")
+        sep1.setFrameShape(QFrame.Shape.VLine)
+        self.layout_dock.addWidget(sep1)
+
+        # 2. Kontener przypiętych aplikacji
+        self.pinned_widget = QWidget()
+        self.layout_pinned = QHBoxLayout(self.pinned_widget)
+        self.layout_pinned.setContentsMargins(0, 0, 0, 0)
+        self.layout_pinned.setSpacing(4)
+        self.layout_dock.addWidget(self.pinned_widget)
+
+        self._reload_pinned_buttons()
+
+        # Separator 2
+        sep2 = QFrame()
+        sep2.setProperty("class", "dock-sep")
+        sep2.setFrameShape(QFrame.Shape.VLine)
+        self.layout_dock.addWidget(sep2)
+
+        # 3. Schowek
+        self.btn_clipboard = QPushButton("󰅍")
+        self.btn_clipboard.setProperty("class", "dock-btn")
+        self.btn_clipboard.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_clipboard.setToolTip("Historia schowka (okay-clipboard)")
+        self.btn_clipboard.clicked.connect(lambda: subprocess.Popen(["okay-clipboard"]))
+        self.layout_dock.addWidget(self.btn_clipboard)
+
+        # 4. Głośność
+        self.btn_volume = VolumeButton()
+        self.layout_dock.addWidget(self.btn_volume)
+
+        # 5. Zegar
+        self.btn_clock = QPushButton()
+        self.btn_clock.setProperty("class", "dock-btn")
+        self.btn_clock.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_clock()
+        self.btn_clock.clicked.connect(self._show_clock_info)
+        self.layout_dock.addWidget(self.btn_clock)
+
+        # 6. Zasilanie
+        self.btn_power = QPushButton("")
+        self.btn_power.setProperty("class", "dock-btn")
+        self.btn_power.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_power.setToolTip("Menu zasilania i sesji (okay-powermenu)")
+        self.btn_power.clicked.connect(lambda: subprocess.Popen(["okay-powermenu"]))
+        self.layout_dock.addWidget(self.btn_power)
+
+        root_layout.addWidget(self.container)
+
+    def _setup_timers(self):
+        # Aktualizacja zegara co sekundę
+        self.timer_clock = QTimer(self)
+        self.timer_clock.timeout.connect(self._update_clock)
+        self.timer_clock.start(1000)
+
+        # Okresowa aktualizacja głośności
+        self.timer_vol = QTimer(self)
+        self.timer_vol.timeout.connect(self.btn_volume.update_volume)
+        self.timer_vol.start(3000)
+
+    def _setup_watcher(self):
+        # Obserwator plików konfiguracji docka dla natychmiastowego odświeżania z okay-settings
+        cfg_dir = os.path.dirname(self.CONFIG_FILE)
+        os.makedirs(cfg_dir, exist_ok=True)
+        if not os.path.exists(self.CONFIG_FILE):
+            try:
+                with open(self.CONFIG_FILE, "w", encoding="utf-8") as f:
+                    json.dump(self.DEFAULT_PINNED_APPS, f, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+
+        if not os.path.exists(self.DOCK_STYLE_FILE):
+            try:
+                with open(self.DOCK_STYLE_FILE, "w", encoding="utf-8") as f:
+                    f.write("floating")
+            except Exception:
+                pass
+
+        self.watcher = QFileSystemWatcher(self)
+        self.watcher.addPath(cfg_dir)
+        if os.path.exists(self.CONFIG_FILE):
+            self.watcher.addPath(self.CONFIG_FILE)
+        if os.path.exists(self.DOCK_STYLE_FILE):
+            self.watcher.addPath(self.DOCK_STYLE_FILE)
+
+        self.watcher.fileChanged.connect(self._on_config_changed)
+        self.watcher.directoryChanged.connect(self._on_config_changed)
+
+    def _get_dock_style(self) -> str:
+        if os.path.exists(self.DOCK_STYLE_FILE):
+            try:
+                with open(self.DOCK_STYLE_FILE, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+        return "floating"
+
+    def _on_config_changed(self, _path):
+        self._reload_pinned_buttons()
+        self.reposition()
+
+    def _get_pinned_apps(self) -> dict:
+        apps = dict(self.DEFAULT_PINNED_APPS)
+        if os.path.exists(self.CONFIG_FILE):
+            try:
+                with open(self.CONFIG_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    for k, v in data.items():
+                        apps[k] = v
+            except Exception:
+                pass
+        return apps
+
+    def _reload_pinned_buttons(self):
+        # Usunięcie starych przycisków
+        while self.layout_pinned.count() > 0:
+            item = self.layout_pinned.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        apps = self._get_pinned_apps()
+        for app_id, app_info in apps.items():
+            if app_info.get("enabled", False):
+                btn = PinnedAppButton(app_id, app_info, self._unpin_app)
+                self.layout_pinned.addWidget(btn)
+
+    def _unpin_app(self, app_id: str):
+        apps = self._get_pinned_apps()
+        if app_id in apps:
+            apps[app_id]["enabled"] = False
+            try:
+                with open(self.CONFIG_FILE, "w", encoding="utf-8") as f:
+                    json.dump(apps, f, indent=2, ensure_ascii=False)
+                self._reload_pinned_buttons()
+                self.reposition()
+            except Exception as e:
+                print(f"Błąd odpinania aplikacji: {e}", file=sys.stderr)
+
+    def _update_clock(self):
+        now = QDateTime.currentDateTime()
+        time_str = now.toString("HH:mm")
+        self.btn_clock.setText(f"󰥔 {time_str}")
+        self.btn_clock.setToolTip(now.toString("dddd, d MMMM yyyy\nGodzina: HH:mm:ss"))
+
+    def _show_clock_info(self):
+        now = QDateTime.currentDateTime()
+        date_str = now.toString("dddd, d MMMM yyyy")
+        if shutil.which("notify-send"):
+            subprocess.Popen([
+                "notify-send",
+                "Kalendarz OKay",
+                f"Dzisiaj jest:\n{date_str}",
+                "-u", "low"
+            ])
+
+    def _show_launcher_menu(self):
+        menu = QMenu(self)
+
+        action_fuzzel = menu.addAction("󰣇  Wyszukiwarka programów (fuzzel)")
+        action_fuzzel.triggered.connect(lambda: subprocess.Popen(["fuzzel"]))
+        menu.addSeparator()
+
+        action_term = menu.addAction("  Terminal (foot)")
+        action_term.triggered.connect(lambda: subprocess.Popen(["foot"]))
+
+        action_files = menu.addAction("󰉋  Menedżer plików (pcmanfm)")
+        action_files.triggered.connect(lambda: subprocess.Popen(["pcmanfm"]))
+
+        action_settings = menu.addAction("󰒓  Ustawienia OKay")
+        action_settings.triggered.connect(lambda: subprocess.Popen(["okay-settings"]))
+
+        menu.addSeparator()
+
+        action_add_pin = menu.addAction("📌  Przypnij aplikację do docka...")
+        action_add_pin.triggered.connect(self._prompt_add_pin)
+
+        action_desktop = menu.addAction("🖥️  Otwórz Pulpit")
+        action_desktop.triggered.connect(lambda: subprocess.Popen(["pcmanfm", os.path.expanduser("~/Desktop")]))
+
+        menu.addSeparator()
+
+        action_lock = menu.addAction("🔒  Zablokuj ekran")
+        action_lock.triggered.connect(lambda: subprocess.Popen(["okay-lock"]))
+
+        action_power = menu.addAction("  Wyłącz / Uruchom ponownie...")
+        action_power.triggered.connect(lambda: subprocess.Popen(["okay-powermenu"]))
+
+        # Pozycjonowanie menu nad przyciskiem launchera
+        pos = self.btn_launcher.mapToGlobal(QPoint(0, 0))
+        menu_height = menu.sizeHint().height()
+        menu.exec(QPoint(pos.x(), pos.y() - menu_height - 6))
+
+    def _prompt_add_pin(self):
+        name, ok1 = QInputDialog.getText(self, "Przypnij aplikację", "Nazwa aplikacji:")
+        if not ok1 or not name.strip():
+            return
+        cmd, ok2 = QInputDialog.getText(self, "Przypnij aplikację", f"Polecenie dla '{name}':")
+        if not ok2 or not cmd.strip():
+            return
+        icon, ok3 = QInputDialog.getText(self, "Przypnij aplikację", "Ikona (symbol, np. 󰈹, 󰅩, ):", text="󰣇")
+        if not ok3 or not icon.strip():
+            icon = "󰣇"
+
+        apps = self._get_pinned_apps()
+        app_id = f"custom_{len(apps) + 1}"
+        apps[app_id] = {
+            "name": name.strip(),
+            "cmd": cmd.strip(),
+            "icon": icon.strip(),
+            "enabled": True
+        }
+
+        try:
+            with open(self.CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(apps, f, indent=2, ensure_ascii=False)
+            self._reload_pinned_buttons()
+            self.reposition()
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać aplikacji: {e}")
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        action_pin = menu.addAction("📌  Przypnij nową aplikację...")
+        action_pin.triggered.connect(self._prompt_add_pin)
+
+        action_settings = menu.addAction("🎨  Ustawienia OKay DE...")
+        action_settings.triggered.connect(lambda: subprocess.Popen(["okay-settings"]))
+
+        menu.addSeparator()
+        action_reload = menu.addAction("🔄  Przeładuj dock")
+        action_reload.triggered.connect(self._on_config_changed)
+
+        menu.exec(event.globalPos())
+
+    def reposition(self):
+        self.adjustSize()
+        screen = QApplication.primaryScreen()
+        if not screen:
+            return
+        geom = screen.availableGeometry()
+        style = self._get_dock_style()
+
+        if style == "full":
+            w = geom.width()
+            h = max(38, self.sizeHint().height())
+            x = geom.x()
+            y = geom.y() + geom.height() - h
+            self.container.setStyleSheet("""
+                QFrame#dockContainer {
+                    background-color: #11111b;
+                    border: none;
+                    border-top: 2px solid #313244;
+                    border-radius: 0px;
+                }
+            """)
+        else:
+            w = self.sizeHint().width()
+            h = self.sizeHint().height()
+            x = geom.x() + (geom.width() - w) // 2
+            y = geom.y() + geom.height() - h - 8
+            self.container.setStyleSheet("""
+                QFrame#dockContainer {
+                    background-color: rgba(30, 30, 46, 0.94);
+                    border: 1px solid rgba(137, 180, 250, 0.35);
+                    border-radius: 18px;
+                }
+            """)
+
+        self.setGeometry(x, y, w, h)
+
+
+def main():
+    os.environ.setdefault("QT_QPA_PLATFORM", "wayland;xcb")
+    app = QApplication(sys.argv)
+    app.setApplicationName("OKay Dock")
+    app.setStyleSheet(DOCK_QSS)
+
+    dock = OkayDock()
+    dock.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

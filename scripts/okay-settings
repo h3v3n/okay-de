@@ -22,10 +22,10 @@ import urllib.error
 try:
     from PyQt6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-        QStackedWidget, QListWidget, QListWidgetItem, QLabel, QPushButton,
+        QStackedWidget, QLabel, QPushButton,
         QComboBox, QFileDialog, QColorDialog, QCheckBox, QFrame,
         QScrollArea, QMessageBox, QProgressBar, QSizePolicy, QSpacerItem,
-        QInputDialog
+        QInputDialog, QButtonGroup
     )
     from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
     from PyQt6.QtGui import QColor, QFont, QIcon, QPalette, QPixmap
@@ -343,10 +343,11 @@ class InstallUpdateWorker(QThread):
             except Exception:
                 pass
 
-            # Przeładowanie kompozytora i Waybara
-            self.progress.emit("Przeładowywanie kompozytora labwc i paska Waybar...")
+            # Przeładowanie kompozytora i paska docka
+            self.progress.emit("Przeładowywanie kompozytora labwc i paska OKay Dock...")
             subprocess.run(["labwc", "--reconfigure"], check=False)
-            subprocess.run(["pkill", "-SIGUSR2", "waybar"], check=False)
+            subprocess.run(["pkill", "-x", "okay-dock"], check=False)
+            subprocess.Popen(["okay-dock"])
 
             if shutil.which("notify-send"):
                 subprocess.Popen([
@@ -369,14 +370,11 @@ class ConfigManager:
     """Zarządza konfiguracją wyglądu, tapetą i stylami okien."""
 
     CONFIG_DIR = os.path.expanduser("~/.config/okay-de")
-    WAYBAR_DIR = os.path.expanduser("~/.config/waybar")
     LABWC_DIR = os.path.expanduser("~/.config/labwc")
     THEMERC_OVERRIDE = os.path.join(LABWC_DIR, "themerc-override")
     WALLPAPER_TARGET = os.path.join(CONFIG_DIR, "wallpaper.png")
     DOCK_STYLE_FILE = os.path.join(CONFIG_DIR, "dock_style")
-    DOCK_CSS_TARGET = os.path.join(WAYBAR_DIR, "dock-style.css")
     PINNED_APPS_FILE = os.path.join(CONFIG_DIR, "pinned_apps.json")
-    WAYBAR_CONFIG_FILE = os.path.join(WAYBAR_DIR, "config.jsonc")
 
     DEFAULT_BUTTON_COLORS = {
         "close": "#f38ba8",
@@ -408,83 +406,20 @@ class ConfigManager:
 
     @classmethod
     def set_pinned_apps(cls, apps: dict) -> bool:
-        """Zapisuje przypięte aplikacje i aktualizuje pasek Waybar."""
+        """Zapisuje przypięte aplikacje do konfiguracji docka."""
         cls.ensure_dirs()
         try:
             with open(cls.PINNED_APPS_FILE, "w", encoding="utf-8") as f:
                 json.dump(apps, f, indent=2, ensure_ascii=False)
-
-            cls.sync_waybar_pinned(apps)
             return True
         except Exception as e:
             print(f"Błąd zapisu przypiętych aplikacji: {e}", file=sys.stderr)
             return False
 
     @classmethod
-    def sync_waybar_pinned(cls, apps: dict):
-        """Aktualizuje moduły przypiętych aplikacji w pliku config.jsonc Waybara."""
-        cls.ensure_dirs()
-        config_path = cls.WAYBAR_CONFIG_FILE
-
-        if not os.path.exists(config_path):
-            candidates = [
-                "/etc/xdg/waybar/config.jsonc",
-                os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "waybar", "config.jsonc"))
-            ]
-            for cand in candidates:
-                if os.path.exists(cand):
-                    try:
-                        shutil.copyfile(cand, config_path)
-                        break
-                    except Exception:
-                        pass
-
-        if not os.path.exists(config_path):
-            return
-
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                config_data = json.load(f)
-        except Exception:
-            return
-
-        modules_center = config_data.get("modules-center", [])
-
-        # Usunięcie starych custom/pin-*
-        new_modules_center = [m for m in modules_center if not m.startswith("custom/pin-")]
-
-        # Pozycja za custom/launcher
-        insert_idx = 1
-        if "custom/launcher" in new_modules_center:
-            insert_idx = new_modules_center.index("custom/launcher") + 1
-
-        for app_id, app_info in apps.items():
-            mod_name = f"custom/pin-{app_id}"
-            if app_info.get("enabled", False):
-                new_modules_center.insert(insert_idx, mod_name)
-                insert_idx += 1
-
-            config_data[mod_name] = {
-                "format": app_info.get("icon", "󰣇"),
-                "on-click": app_info.get("cmd", "true"),
-                "tooltip-format": app_info.get("name", "Aplikacja")
-            }
-
-        config_data["modules-center"] = new_modules_center
-
-        try:
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(config_data, f, indent=2, ensure_ascii=False)
-
-            subprocess.run(["pkill", "-SIGUSR2", "waybar"], check=False)
-        except Exception as e:
-            print(f"Błąd aktualizacji waybar config.jsonc: {e}", file=sys.stderr)
-
-    @classmethod
     def ensure_dirs(cls):
         """Upewnia się, że katalogi konfiguracji istnieją."""
         os.makedirs(cls.CONFIG_DIR, exist_ok=True)
-        os.makedirs(cls.WAYBAR_DIR, exist_ok=True)
         os.makedirs(cls.LABWC_DIR, exist_ok=True)
 
     @classmethod
@@ -529,51 +464,11 @@ class ConfigManager:
 
     @classmethod
     def set_dock_style(cls, style: str) -> bool:
-        """Zapisuje styl docka i natychmiast wysyła SIGUSR2 do waybar."""
+        """Zapisuje styl docka i natychmiast aktualizuje dock."""
         cls.ensure_dirs()
         try:
             with open(cls.DOCK_STYLE_FILE, "w", encoding="utf-8") as f:
                 f.write(style)
-
-            if style == "full":
-                css_content = (
-                    "/* OKay DE - Styl docka: Pełna belka */\n"
-                    "window#waybar {\n"
-                    "    background-color: #11111b;\n"
-                    "    border-top: 2px solid #313244;\n"
-                    "    box-shadow: none;\n"
-                    "}\n\n"
-                    ".modules-center {\n"
-                    "    background-color: transparent;\n"
-                    "    border: none;\n"
-                    "    border-radius: 0;\n"
-                    "    padding: 0 8px;\n"
-                    "    margin-bottom: 0;\n"
-                    "    box-shadow: none;\n"
-                    "}\n"
-                )
-            else:
-                css_content = (
-                    "/* OKay DE - Styl docka: Pływająca wyspa */\n"
-                    "window#waybar {\n"
-                    "    background-color: transparent;\n"
-                    "    border: none;\n"
-                    "    box-shadow: none;\n"
-                    "}\n\n"
-                    ".modules-center {\n"
-                    "    background-color: rgba(30, 30, 46, 0.90);\n"
-                    "    border: 1px solid rgba(137, 180, 250, 0.35);\n"
-                    "    border-radius: 18px;\n"
-                    "    padding: 2px 14px;\n"
-                    "    margin-bottom: 8px;\n"
-                    "    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);\n"
-                    "}\n"
-                )
-
-            with open(cls.DOCK_CSS_TARGET, "w", encoding="utf-8") as f:
-                f.write(css_content)
-
-            subprocess.run(["pkill", "-SIGUSR2", "waybar"], check=False)
             return True
         except Exception as e:
             print(f"Błąd zmiany stylu docka: {e}", file=sys.stderr)
@@ -593,11 +488,11 @@ class ConfigManager:
                         if ":" in line:
                             k, v = line.split(":", 1)
                             k, v = k.strip(), v.strip()
-                            if k == "window.active.button.unhover.close.color":
+                            if "button.close.unpressed.image.color" in k or "unhover.close.color" in k:
                                 colors["close"] = v
-                            elif k == "window.active.button.unhover.max.color":
+                            elif "button.max.unpressed.image.color" in k or "unhover.max.color" in k:
                                 colors["max"] = v
-                            elif k == "window.active.button.unhover.iconify.color":
+                            elif "button.iconify.unpressed.image.color" in k or "unhover.iconify.color" in k:
                                 colors["iconify"] = v
             except Exception:
                 pass
@@ -615,23 +510,37 @@ class ConfigManager:
         c_min = current.get("iconify", cls.DEFAULT_BUTTON_COLORS["iconify"])
 
         key_map = {
-            "window.active.button.unhover.close.color": c_close,
-            "window.active.button.hover.close.color": c_close,
-            "window.active.button.pressed.close.color": c_close,
-            "window.inactive.button.unhover.close.color": "#45475a",
-            "window.inactive.button.hover.close.color": c_close,
+            # Oficjalne klucze labwc image.color
+            "window.active.button.close.unpressed.image.color": c_close,
+            "window.active.button.close.hover.image.color": c_close,
+            "window.inactive.button.close.unpressed.image.color": "#45475a",
+            "window.inactive.button.close.hover.image.color": c_close,
 
-            "window.active.button.unhover.max.color": c_max,
-            "window.active.button.hover.max.color": c_max,
-            "window.active.button.pressed.max.color": c_max,
-            "window.inactive.button.unhover.max.color": "#45475a",
-            "window.inactive.button.hover.max.color": c_max,
+            "window.active.button.max.unpressed.image.color": c_max,
+            "window.active.button.max.hover.image.color": c_max,
+            "window.inactive.button.max.unpressed.image.color": "#45475a",
+            "window.inactive.button.max.hover.image.color": c_max,
 
-            "window.active.button.unhover.iconify.color": c_min,
-            "window.active.button.hover.iconify.color": c_min,
-            "window.active.button.pressed.iconify.color": c_min,
-            "window.inactive.button.unhover.iconify.color": "#45475a",
-            "window.inactive.button.hover.iconify.color": c_min,
+            "window.active.button.iconify.unpressed.image.color": c_min,
+            "window.active.button.iconify.hover.image.color": c_min,
+            "window.inactive.button.iconify.unpressed.image.color": "#313244",
+            "window.inactive.button.iconify.hover.image.color": c_min,
+
+            # Wymiary - spłaszczone 48x10
+            "window.button.width": "48",
+            "window.button.height": "10",
+            "window.button.spacing": "8",
+            "titlebar.height": "30",
+            "window.titlebar.layout": ":iconify,max,close",
+            "window.titlebar.padding": "4",
+            "window.titlebar.padding.width": "10",
+            "window.titlebar.padding.height": "10",
+            "window.active.label.text.color": "transparent",
+            "window.inactive.label.text.color": "transparent",
+            "window.cornerRadius": "8",
+            "border.width": "2",
+            "window.active.border.color": "#89b4fa",
+            "window.inactive.border.color": "#313244",
         }
 
         lines = []
@@ -648,13 +557,13 @@ class ConfigManager:
                 "window.theme: OKay\n",
                 "window.cornerRadius: 8\n",
                 "window.titlebar.layout: :iconify,max,close\n",
-                "titlebar.height: 36\n",
-                "window.button.width: 44\n",
-                "window.button.height: 22\n",
-                "window.button.spacing: 6\n",
+                "titlebar.height: 30\n",
+                "window.button.width: 48\n",
+                "window.button.height: 10\n",
+                "window.button.spacing: 8\n",
                 "window.titlebar.padding: 4\n",
-                "window.titlebar.padding.width: 8\n",
-                "window.titlebar.padding.height: 6\n",
+                "window.titlebar.padding.width: 10\n",
+                "window.titlebar.padding.height: 10\n",
                 "window.active.label.text.color: transparent\n",
                 "window.inactive.label.text.color: transparent\n",
                 "border.width: 2\n",
@@ -681,6 +590,31 @@ class ConfigManager:
         try:
             with open(cls.THEMERC_OVERRIDE, "w", encoding="utf-8") as f:
                 f.writelines(new_lines)
+
+            # Aktualizacja plików SVG z nowym kolorem w ~/.config/labwc i motywach
+            svg_targets = [
+                cls.LABWC_DIR,
+                os.path.expanduser("~/.local/share/themes/OKay/labwc"),
+                os.path.expanduser("~/.local/share/themes/OKay/openbox-3")
+            ]
+            svg_colors = {
+                "close.svg": c_close,
+                "close_hover.svg": c_close,
+                "max.svg": c_max,
+                "max_hover.svg": c_max,
+                "max_toggled.svg": c_max,
+                "iconify.svg": c_min,
+                "iconify_hover.svg": c_min
+            }
+            for target_dir in svg_targets:
+                if os.path.exists(target_dir):
+                    for svg_name, svg_col in svg_colors.items():
+                        svg_path = os.path.join(target_dir, svg_name)
+                        try:
+                            with open(svg_path, "w", encoding="utf-8") as sf:
+                                sf.write(f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10">\n  <rect width="48" height="10" rx="2" fill="{svg_col}" />\n</svg>\n')
+                        except Exception:
+                            pass
 
             subprocess.run(["labwc", "--reconfigure"], check=False)
             return True
@@ -843,7 +777,7 @@ class AppearancePage(QWidget):
         layout.setSpacing(16)
 
         # 1. Karta Pulpit i Dock
-        card_desktop = PreferenceCard("Wygląd i Pulpit", "Dostosuj tło pulpitu oraz styl paska zadań Waybar.")
+        card_desktop = PreferenceCard("Wygląd i Pulpit", "Dostosuj tło pulpitu oraz styl paska zadań OKay Dock.")
 
         # Tapeta
         btn_wallpaper = QPushButton("Zmień tapetę...")
@@ -978,7 +912,7 @@ class AppearancePage(QWidget):
         QMessageBox.information(
             self,
             "OKay DE",
-            f"Aplikacja '{name}' została przypięta do paska zadań!\nPasek Waybar został odświeżony."
+            f"Aplikacja '{name}' została przypięta do paska zadań!\nPasek zadań OKay Dock został zaktualizowany."
         )
 
     def _change_wallpaper(self):
@@ -1321,7 +1255,7 @@ class UpdatesPage(QWidget):
                 self,
                 "Aktualizacja zakończona",
                 "OKay DE zostało pomyślnie zaktualizowane!\n"
-                "Konfiguracja kompozytora labwc oraz pasek Waybar zostały odświeżone."
+                "Konfiguracja kompozytora labwc oraz pasek zadań OKay Dock zostały odświeżone."
             )
         else:
             QMessageBox.critical(self, "Błąd aktualizacji", f"Instalacja aktualizacji nie powiodła się:\n\n{msg}")
@@ -1363,24 +1297,33 @@ QMainWindow, QWidget#centralWidget {
 }
 
 /* Pasek boczny nawigacji */
-QListWidget#sidebar {
+QWidget#sidebarWidget {
     background-color: #181825;
-    border: none;
     border-right: 1px solid #313244;
-    padding: 12px 10px;
-    outline: none;
 }
-QListWidget#sidebar::item {
+
+QPushButton[class="sidebar-btn"] {
+    background-color: transparent;
     color: #cdd6f4;
+    border: none;
     border-radius: 8px;
     font-size: 13px;
     font-weight: 500;
-    padding-left: 14px;
+    text-align: left;
+    padding-left: 16px;
+    padding-right: 16px;
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
+    margin: 0px;
 }
-QListWidget#sidebar::item:hover {
+
+QPushButton[class="sidebar-btn"]:hover {
     background-color: #313244;
+    color: #ffffff;
 }
-QListWidget#sidebar::item:selected {
+
+QPushButton[class="sidebar-btn"]:checked {
     background-color: #89b4fa;
     color: #11111b;
     font-weight: bold;
@@ -1562,23 +1505,39 @@ class OkaySettingsWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 1. Pasek boczny (Sidebar)
-        self.sidebar = QListWidget()
-        self.sidebar.setObjectName("sidebar")
-        self.sidebar.setFixedWidth(220)
-        self.sidebar.setSpacing(6)
-        self.sidebar.setUniformItemSizes(True)
-        self.sidebar.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # 1. Pasek boczny nawigacji (Sidebar oparty na przyciskach w QVBoxLayout - 100% odporny na błędy nakładania)
+        self.sidebar_widget = QWidget()
+        self.sidebar_widget.setObjectName("sidebarWidget")
+        self.sidebar_widget.setFixedWidth(220)
 
-        self._add_sidebar_item("Wygląd", "🎨")
-        self._add_sidebar_item("System i Ekran", "🖥️")
-        self._add_sidebar_item("Wydajność", "⚡")
-        self._add_sidebar_item("Skróty", "⌨️")
-        self._add_sidebar_item("Aktualizacje", "🔄")
-        self._add_sidebar_item("Informacje", "ℹ️")
+        sidebar_layout = QVBoxLayout(self.sidebar_widget)
+        sidebar_layout.setContentsMargins(12, 16, 12, 16)
+        sidebar_layout.setSpacing(6)
 
-        main_layout.addWidget(self.sidebar)
+        self.btn_group = QButtonGroup(self)
+        self.btn_group.setExclusive(True)
+
+        categories = [
+            ("Wygląd", "🎨"),
+            ("System i Ekran", "🖥️"),
+            ("Wydajność", "⚡"),
+            ("Skróty", "⌨️"),
+            ("Aktualizacje", "🔄"),
+            ("Informacje", "ℹ️")
+        ]
+
+        self.sidebar_buttons = []
+        for idx, (label, icon_text) in enumerate(categories):
+            btn = QPushButton(f"{icon_text}  {label}")
+            btn.setProperty("class", "sidebar-btn")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_group.addButton(btn, idx)
+            sidebar_layout.addWidget(btn)
+            self.sidebar_buttons.append(btn)
+
+        sidebar_layout.addStretch()
+        main_layout.addWidget(self.sidebar_widget)
 
         # 2. Stosy stron (StackedWidget z przewijaniem)
         self.stacked = QStackedWidget()
@@ -1600,13 +1559,10 @@ class OkaySettingsWindow(QMainWindow):
         main_layout.addWidget(self.stacked, stretch=1)
 
         # Synchronizacja paska bocznego
-        self.sidebar.currentRowChanged.connect(self.stacked.setCurrentIndex)
-        self.sidebar.setCurrentRow(0)
-
-    def _add_sidebar_item(self, label: str, icon_text: str):
-        item = QListWidgetItem(f"{icon_text}  {label}")
-        item.setSizeHint(QSize(200, 48))
-        self.sidebar.addItem(item)
+        self.btn_group.idClicked.connect(self.stacked.setCurrentIndex)
+        if self.sidebar_buttons:
+            self.sidebar_buttons[0].setChecked(True)
+        self.stacked.setCurrentIndex(0)
 
     def _wrap_in_scroll(self, page_widget: QWidget) -> QScrollArea:
         scroll = QScrollArea()

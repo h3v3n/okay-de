@@ -18,12 +18,11 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
   - Szybki dostęp do konfiguracji ekranów (`wdisplays`) i miksera (`pavucontrol`).
   - Sprawdzanie i instalację aktualizacji bezpośrednio z repozytorium GitHub (`h3v3n/okay-de`).
   - Szczegółowe informacje o systemie (CPU, RAM, kernel, dystrybucja, wersja commita).
-- **Architektura Server-Side Decorations (SSD):** Belka kompozytora `labwc` o wysokości 36px (`titlebar.height: 36`) stanowi nadrzędną ramkę na zewnątrz każdego okna. Dzięki zmiennym sesyjnym `GTK_CSD=0` oraz `QT_WAYLAND_DISABLE_WINDOWDECORATION=0` aplikacje GTK3/GTK4 i Qt nie wstrzykują przycisków sterowania do pasków zakładek i nagłówków.
-- **Dekoracje okien:** Trzy duże geometryczne prostokąty (44x22px) w układzie `:iconify,max,close` z zaokrągleniem narożników `8px` (`cornerRadius: 8`) bez wyświetlania nazwy okna (`showTitle: no`). Lewy przycisk minimalizuje okno, środkowy maksymalizuje, a prawy zamyka program.
+- **Architektura Server-Side Decorations (SSD):** Belka kompozytora `labwc` o wysokości 30px (`titlebar.height: 30`) stanowi nadrzędną ramkę na zewnątrz każdego okna. Dzięki zmiennym sesyjnym `GTK_CSD=0` oraz `QT_WAYLAND_DISABLE_WINDOWDECORATION=0` aplikacje GTK3/GTK4 i Qt nie wstrzykują przycisków sterowania do pasków zakładek i nagłówków.
+- **Dekoracje okien:** Trzy spłaszczone, panoramiczne prostokąty (48x10px) w układzie `:iconify,max,close` z zaokrągleniem narożników `8px` (`cornerRadius: 8`) bez wyświetlania nazwy okna (`showTitle: no`). Lewy przycisk minimalizuje okno, środkowy maksymalizuje, a prawy zamyka program.
 - **Tapeta i tło pulpitu (`swaybg`):** Demon tapety Wayland z bezpieczną kaskadą: tapeta użytkownika (`~/.config/okay-de/wallpaper.png`) -> tapeta systemowa (`/usr/share/backgrounds/okay-de/default.png`) -> awaryjny kolor bazowy Catppuccin Mocha (`#1e1e2e`).
-- **Dock Waybar (pływająca wyspa):** Umieszczony na dole ekranu, wyśrodkowany dock o zaokrąglonych krawędziach (`border-radius: 18px`), efekcie matowego szkła oraz płynnych mikrointerakcjach.
+- **Natywny Dock OKay (`okay-dock` w PyQt6):** Pływający, wyśrodkowany dock (`border-radius: 18px`) z menu aplikacji (`󰣇`), dynamicznym systemem przypinania/odpinania aplikacji (terminal `foot`, menedżer plików `pcmanfm`, `okay-settings`, `firefox`), apletem schowka, regulacją głośności (kółko myszy/wyciszanie), zegarem z kalendarzem i menu zasilania.
 - **Kafelkowanie (Snapping / Tiling):** Wbudowane przeciąganie okien myszą do krawędzi ekranu oraz skróty `Super + Strzałki`.
-- **Zadania (wlr/taskbar):** Wyświetlanie wyłącznie ikon (`icon-size: 24`), lewy klik podnosi/minimalizuje okno (`minimize-raise`), środkowy zamyka okno (`close`), wskaźnik aktywnego programu.
 - **Motyw i ikony:** Catppuccin Mocha z akcentem Sapphire/Blue (`#89b4fa`), zestaw ikon `Papirus-Dark` oraz kursor `Adwaita (24px)`.
 
 ---
@@ -35,7 +34,7 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 | **Kompozytor Wayland** | `labwc` | Stacking compositor zgodny z protokołem wlroots i Openbox XML |
 | **Pulpit z ikonami** | `pcmanfm --desktop` | Interaktywny pulpit z obsługą ikon plików i tła |
 | **Centrum Sterowania** | `okay-settings` | Natywna aplikacja Pythona 3 (PyQt6) |
-| **Dock / Pasek statusu** | `waybar` | Pływający dock dolny z zadaniami, dźwiękiem, siecią i zegarem |
+| **Dock / Pasek zadań** | `okay-dock` | Natywny pływający dock PyQt6 z menu aplikacji i przypiętymi programami |
 | **Launcher aplikacji** | `fuzzel` | Błyskawiczny launcher aplikacji z akceleracją Wayland |
 | **Emulator terminala** | `foot` | Ultra-lekki terminal Wayland z przezroczystością tła `0.95` |
 | **Menedżer plików** | `pcmanfm` | Szybki menedżer plików z ciemnym motywem GTK |
@@ -80,7 +79,7 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 
 ### Pakiety bazowe (OKsavi / Arch Linux):
 ```bash
-sudo pacman -S labwc waybar pcmanfm fuzzel foot mako swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber papirus-icon-theme xdg-user-dirs
+sudo pacman -S labwc pcmanfm fuzzel foot mako swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber papirus-icon-theme xdg-user-dirs python python-pyqt6 qt6-wayland
 ```
 
 ### Pakiety dla OKay Settings:
@@ -124,5 +123,5 @@ Kopiuje konfiguracje do `~/.config/`, skrypty do `~/.local/bin/`, ikony na `$HOM
   git pull origin main
   ./install.sh --user   # lub: sudo ./install.sh --system
   labwc --reconfigure
-  pkill -SIGUSR2 waybar
+  pkill -x okay-dock; okay-dock &
   ```

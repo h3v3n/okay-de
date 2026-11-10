@@ -8,7 +8,6 @@ url="https://github.com/oksavi/okay-de"
 license=('GPL-3.0-or-later')
 depends=(
     'labwc'
-    'waybar'
     'swaybg'
     'pcmanfm'
     'fuzzel'

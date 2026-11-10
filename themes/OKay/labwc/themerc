@@ -3,13 +3,13 @@
 # Geometryczne zaokrąglenie okien
 window.cornerRadius: 8
 
-# Układ przycisków paska tytułowego (brak tytułu, 3 duże prostokąty: min, max, close)
+# Układ przycisków paska tytułowego (brak tytułu, 3 spłaszczone prostokąty: min, max, close)
 window.titlebar.layout: :iconify,max,close
 
-# Wymiary i odstępy przycisków (duże prostokąty 44x22)
-window.button.width: 44
-window.button.height: 22
-window.button.spacing: 6
+# Wymiary i odstępy przycisków (spłaszczone prostokąty 48x10)
+window.button.width: 48
+window.button.height: 10
+window.button.spacing: 8
 
 # Obramowania okien
 border.width: 2
@@ -17,39 +17,33 @@ window.active.border.color: #89b4fa
 window.inactive.border.color: #313244
 
 # Pasek tytułowy (dla okien z SSD)
-titlebar.height: 36
+titlebar.height: 30
 window.titlebar.padding: 4
-window.titlebar.padding.width: 8
-window.titlebar.padding.height: 6
+window.titlebar.padding.width: 10
+window.titlebar.padding.height: 10
 window.active.title.bg.color: #1e1e2e
 window.inactive.title.bg.color: #181825
 window.active.label.text.color: transparent
 window.inactive.label.text.color: transparent
 
-# Przyciski sterowania oknami (prostokątne klocki)
+# Przyciski sterowania oknami (oficjalne klucze labwc image.color)
 # Przycisk zamykania (Close)
-window.active.button.unhover.close.color: #f38ba8
-window.active.button.hover.close.color: #eba0ac
-window.inactive.button.unhover.close.color: #45475a
-window.inactive.button.hover.close.color: #f38ba8
 window.active.button.close.unpressed.image.color: #f38ba8
+window.active.button.close.hover.image.color: #eba0ac
 window.inactive.button.close.unpressed.image.color: #45475a
+window.inactive.button.close.hover.image.color: #f38ba8
 
 # Przycisk maksymalizowania (Maximize)
-window.active.button.unhover.max.color: #89b4fa
-window.active.button.hover.max.color: #b4befe
-window.inactive.button.unhover.max.color: #45475a
-window.inactive.button.hover.max.color: #89b4fa
 window.active.button.max.unpressed.image.color: #89b4fa
+window.active.button.max.hover.image.color: #b4befe
 window.inactive.button.max.unpressed.image.color: #45475a
+window.inactive.button.max.hover.image.color: #89b4fa
 
 # Przycisk minimalizowania (Iconify)
-window.active.button.unhover.iconify.color: #585b70
-window.active.button.hover.iconify.color: #6c7086
-window.inactive.button.unhover.iconify.color: #313244
-window.inactive.button.hover.iconify.color: #585b70
 window.active.button.iconify.unpressed.image.color: #585b70
+window.active.button.iconify.hover.image.color: #6c7086
 window.inactive.button.iconify.unpressed.image.color: #313244
+window.inactive.button.iconify.hover.image.color: #585b70
 
 # Menu kontekstowe (menu.xml)
 menu.border.width: 1
@@ -58,7 +52,3 @@ menu.items.bg.color: #1e1e2e
 menu.items.text.color: #cdd6f4
 menu.items.active.bg.color: #89b4fa
 menu.items.active.text.color: #11111b
-menu.separator.color: #313244
-menu.separator.width: 1
-menu.separator.padding.width: 6
-menu.separator.padding.height: 3
