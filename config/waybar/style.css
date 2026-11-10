@@ -30,6 +30,7 @@ window#waybar {
 
 /* Wspólny styl dla wszystkich przycisków i apletów w docku */
 #custom-launcher,
+[id^="custom-pin-"],
 #taskbar button,
 #custom-clipboard,
 #pulseaudio,
@@ -47,6 +48,7 @@ window#waybar {
 
 /* Mikrointerakcje po najechaniu myszą (efekt podświetlenia macOS) */
 #custom-launcher:hover,
+[id^="custom-pin-"]:hover,
 #taskbar button:hover,
 #custom-clipboard:hover,
 #pulseaudio:hover,
@@ -55,6 +57,13 @@ window#waybar {
 #clock:hover {
     background-color: rgba(137, 180, 250, 0.2);
     color: #89b4fa;
+}
+
+/* Styl ikon przypiętych aplikacji */
+[id^="custom-pin-"] {
+    font-size: 15px;
+    color: #89b4fa;
+    padding: 4px 10px;
 }
 
 /* Ikona launchera aplikacji */

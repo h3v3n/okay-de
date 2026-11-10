@@ -24,7 +24,8 @@ try:
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QStackedWidget, QListWidget, QListWidgetItem, QLabel, QPushButton,
         QComboBox, QFileDialog, QColorDialog, QCheckBox, QFrame,
-        QScrollArea, QMessageBox, QProgressBar, QSizePolicy, QSpacerItem
+        QScrollArea, QMessageBox, QProgressBar, QSizePolicy, QSpacerItem,
+        QInputDialog
     )
     from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
     from PyQt6.QtGui import QColor, QFont, QIcon, QPalette, QPixmap
@@ -168,7 +169,7 @@ class UpdateManager:
         except Exception:
             pass
 
-        return "963cf2c"
+        return "9eede97"
 
     @classmethod
     def get_remote_commit_sync(cls) -> str:
@@ -374,12 +375,110 @@ class ConfigManager:
     WALLPAPER_TARGET = os.path.join(CONFIG_DIR, "wallpaper.png")
     DOCK_STYLE_FILE = os.path.join(CONFIG_DIR, "dock_style")
     DOCK_CSS_TARGET = os.path.join(WAYBAR_DIR, "dock-style.css")
+    PINNED_APPS_FILE = os.path.join(CONFIG_DIR, "pinned_apps.json")
+    WAYBAR_CONFIG_FILE = os.path.join(WAYBAR_DIR, "config.jsonc")
 
     DEFAULT_BUTTON_COLORS = {
         "close": "#f38ba8",
         "max": "#89b4fa",
         "iconify": "#585b70"
     }
+
+    DEFAULT_PINNED_APPS = {
+        "foot": {"name": "Terminal (foot)", "icon": "", "cmd": "foot", "enabled": True},
+        "pcmanfm": {"name": "Menedżer plików (pcmanfm)", "icon": "󰉋", "cmd": "pcmanfm", "enabled": True},
+        "settings": {"name": "Ustawienia OKay", "icon": "󰒓", "cmd": "okay-settings", "enabled": True},
+        "firefox": {"name": "Przeglądarka internetowa (firefox)", "icon": "󰈹", "cmd": "firefox", "enabled": False}
+    }
+
+    @classmethod
+    def get_pinned_apps(cls) -> dict:
+        """Pobiera listę przypiętych aplikacji."""
+        cls.ensure_dirs()
+        apps = dict(cls.DEFAULT_PINNED_APPS)
+        if os.path.exists(cls.PINNED_APPS_FILE):
+            try:
+                with open(cls.PINNED_APPS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    for k, v in data.items():
+                        apps[k] = v
+            except Exception:
+                pass
+        return apps
+
+    @classmethod
+    def set_pinned_apps(cls, apps: dict) -> bool:
+        """Zapisuje przypięte aplikacje i aktualizuje pasek Waybar."""
+        cls.ensure_dirs()
+        try:
+            with open(cls.PINNED_APPS_FILE, "w", encoding="utf-8") as f:
+                json.dump(apps, f, indent=2, ensure_ascii=False)
+
+            cls.sync_waybar_pinned(apps)
+            return True
+        except Exception as e:
+            print(f"Błąd zapisu przypiętych aplikacji: {e}", file=sys.stderr)
+            return False
+
+    @classmethod
+    def sync_waybar_pinned(cls, apps: dict):
+        """Aktualizuje moduły przypiętych aplikacji w pliku config.jsonc Waybara."""
+        cls.ensure_dirs()
+        config_path = cls.WAYBAR_CONFIG_FILE
+
+        if not os.path.exists(config_path):
+            candidates = [
+                "/etc/xdg/waybar/config.jsonc",
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config", "waybar", "config.jsonc"))
+            ]
+            for cand in candidates:
+                if os.path.exists(cand):
+                    try:
+                        shutil.copyfile(cand, config_path)
+                        break
+                    except Exception:
+                        pass
+
+        if not os.path.exists(config_path):
+            return
+
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+        except Exception:
+            return
+
+        modules_center = config_data.get("modules-center", [])
+
+        # Usunięcie starych custom/pin-*
+        new_modules_center = [m for m in modules_center if not m.startswith("custom/pin-")]
+
+        # Pozycja za custom/launcher
+        insert_idx = 1
+        if "custom/launcher" in new_modules_center:
+            insert_idx = new_modules_center.index("custom/launcher") + 1
+
+        for app_id, app_info in apps.items():
+            mod_name = f"custom/pin-{app_id}"
+            if app_info.get("enabled", False):
+                new_modules_center.insert(insert_idx, mod_name)
+                insert_idx += 1
+
+            config_data[mod_name] = {
+                "format": app_info.get("icon", "󰣇"),
+                "on-click": app_info.get("cmd", "true"),
+                "tooltip-format": app_info.get("name", "Aplikacja")
+            }
+
+        config_data["modules-center"] = new_modules_center
+
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, indent=2, ensure_ascii=False)
+
+            subprocess.run(["pkill", "-SIGUSR2", "waybar"], check=False)
+        except Exception as e:
+            print(f"Błąd aktualizacji waybar config.jsonc: {e}", file=sys.stderr)
 
     @classmethod
     def ensure_dirs(cls):
@@ -548,11 +647,16 @@ class ConfigManager:
                 "# OKay DE - Nakładka motywu kompozytora labwc (Catppuccin Mocha)\n",
                 "window.theme: OKay\n",
                 "window.cornerRadius: 8\n",
-                "window.titlebar.layout: icon:iconify,max,close\n",
-                "titlebar.height: 30\n",
-                "window.button.width: 14\n",
-                "window.button.height: 14\n",
-                "window.button.spacing: 4\n",
+                "window.titlebar.layout: :iconify,max,close\n",
+                "titlebar.height: 36\n",
+                "window.button.width: 44\n",
+                "window.button.height: 22\n",
+                "window.button.spacing: 6\n",
+                "window.titlebar.padding: 4\n",
+                "window.titlebar.padding.width: 8\n",
+                "window.titlebar.padding.height: 6\n",
+                "window.active.label.text.color: transparent\n",
+                "window.inactive.label.text.color: transparent\n",
                 "border.width: 2\n",
                 "window.active.border.color: #89b4fa\n",
                 "window.inactive.border.color: #313244\n"
@@ -809,7 +913,73 @@ class AppearancePage(QWidget):
         ))
 
         layout.addWidget(card_buttons)
+
+        # 3. Karta Przypięte aplikacje w docku (Taskbar)
+        card_pinned = PreferenceCard(
+            "Przypięte aplikacje w docku (Taskbar)",
+            "Zarządzaj skrótami do aplikacji stale widocznymi na dolnym pasku zadań."
+        )
+
+        self.pinned_apps = ConfigManager.get_pinned_apps()
+        self.pin_checkboxes = {}
+
+        for app_id, app_info in self.pinned_apps.items():
+            chk = QCheckBox("Przypięta")
+            chk.setChecked(app_info.get("enabled", False))
+            chk.toggled.connect(self._create_pin_toggle_handler(app_id))
+            self.pin_checkboxes[app_id] = chk
+
+            row = PreferenceRow(
+                f"{app_info.get('icon', '󰣇')}  {app_info.get('name', app_id)}",
+                f"Polecenie: {app_info.get('cmd', '')}",
+                chk
+            )
+            card_pinned.add_row(row)
+
+        btn_add_pin = QPushButton("+ Przypnij inną aplikację...")
+        btn_add_pin.setProperty("class", "suggested-btn")
+        btn_add_pin.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_add_pin.clicked.connect(self._add_custom_pinned_app)
+        card_pinned.add_row(PreferenceRow(
+            "Dodaj własny skrót",
+            "Zdefiniuj nowy program do przypięcia na docku",
+            btn_add_pin
+        ))
+
+        layout.addWidget(card_pinned)
         layout.addStretch()
+
+    def _create_pin_toggle_handler(self, app_id: str):
+        def handler(checked: bool):
+            if app_id in self.pinned_apps:
+                self.pinned_apps[app_id]["enabled"] = checked
+                ConfigManager.set_pinned_apps(self.pinned_apps)
+        return handler
+
+    def _add_custom_pinned_app(self):
+        name, ok1 = QInputDialog.getText(self, "Przypnij aplikację", "Nazwa aplikacji:")
+        if not ok1 or not name.strip():
+            return
+        cmd, ok2 = QInputDialog.getText(self, "Przypnij aplikację", f"Polecenie uruchomienia dla '{name}':")
+        if not ok2 or not cmd.strip():
+            return
+        icon, ok3 = QInputDialog.getText(self, "Przypnij aplikację", "Symbol ikony (np. 󰅩, , 󰈹):", text="󰣇")
+        if not ok3 or not icon.strip():
+            icon = "󰣇"
+
+        app_id = f"custom_{len(self.pinned_apps) + 1}"
+        self.pinned_apps[app_id] = {
+            "name": name.strip(),
+            "cmd": cmd.strip(),
+            "icon": icon.strip(),
+            "enabled": True
+        }
+        ConfigManager.set_pinned_apps(self.pinned_apps)
+        QMessageBox.information(
+            self,
+            "OKay DE",
+            f"Aplikacja '{name}' została przypięta do paska zadań!\nPasek Waybar został odświeżony."
+        )
 
     def _change_wallpaper(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1197,16 +1367,15 @@ QListWidget#sidebar {
     background-color: #181825;
     border: none;
     border-right: 1px solid #313244;
-    padding: 12px 8px;
+    padding: 12px 10px;
     outline: none;
 }
 QListWidget#sidebar::item {
     color: #cdd6f4;
-    padding: 10px 14px;
     border-radius: 8px;
     font-size: 13px;
     font-weight: 500;
-    margin-bottom: 4px;
+    padding-left: 14px;
 }
 QListWidget#sidebar::item:hover {
     background-color: #313244;
@@ -1396,7 +1565,11 @@ class OkaySettingsWindow(QMainWindow):
         # 1. Pasek boczny (Sidebar)
         self.sidebar = QListWidget()
         self.sidebar.setObjectName("sidebar")
-        self.sidebar.setFixedWidth(200)
+        self.sidebar.setFixedWidth(220)
+        self.sidebar.setSpacing(6)
+        self.sidebar.setUniformItemSizes(True)
+        self.sidebar.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self._add_sidebar_item("Wygląd", "🎨")
         self._add_sidebar_item("System i Ekran", "🖥️")
@@ -1432,6 +1605,7 @@ class OkaySettingsWindow(QMainWindow):
 
     def _add_sidebar_item(self, label: str, icon_text: str):
         item = QListWidgetItem(f"{icon_text}  {label}")
+        item.setSizeHint(QSize(200, 48))
         self.sidebar.addItem(item)
 
     def _wrap_in_scroll(self, page_widget: QWidget) -> QScrollArea:

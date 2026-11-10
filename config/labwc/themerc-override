@@ -3,13 +3,13 @@
 # Geometryczne zaokrąglenie okien
 window.cornerRadius: 8
 
-# Układ przycisków paska tytułowego
-window.titlebar.layout: Title:Iconify,Maximize,Close
+# Układ przycisków paska tytułowego (brak tytułu, 3 duże prostokąty: min, max, close)
+window.titlebar.layout: :iconify,max,close
 
-# Wymiary i odstępy przycisków
-window.button.width: 14
-window.button.height: 14
-window.button.spacing: 4
+# Wymiary i odstępy przycisków (duże prostokąty 44x22)
+window.button.width: 44
+window.button.height: 22
+window.button.spacing: 6
 
 # Obramowania okien
 border.width: 2
@@ -17,14 +17,14 @@ window.active.border.color: #89b4fa
 window.inactive.border.color: #313244
 
 # Pasek tytułowy (dla okien z SSD)
-titlebar.height: 30
+titlebar.height: 36
 window.titlebar.padding: 4
-window.titlebar.padding.width: 4
-window.titlebar.padding.height: 4
+window.titlebar.padding.width: 8
+window.titlebar.padding.height: 6
 window.active.title.bg.color: #1e1e2e
 window.inactive.title.bg.color: #181825
-window.active.label.text.color: #cdd6f4
-window.inactive.label.text.color: #6c7086
+window.active.label.text.color: transparent
+window.inactive.label.text.color: transparent
 
 # Przyciski sterowania oknami (prostokątne klocki)
 # Przycisk zamykania (Close)

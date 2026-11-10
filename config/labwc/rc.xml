@@ -16,9 +16,9 @@
   <theme>
     <name>OKay</name>
     <cornerRadius>8</cornerRadius>
-    <titlebar layout="icon:iconify,max,close">
-      <layout>icon:iconify,max,close</layout>
-      <showTitle>yes</showTitle>
+    <titlebar>
+      <layout>:iconify,max,close</layout>
+      <showTitle>no</showTitle>
     </titlebar>
     <font place="MenuItem">
       <name>JetBrains Mono</name>

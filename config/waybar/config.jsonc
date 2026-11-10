@@ -7,6 +7,9 @@
   "modules-left": [],
   "modules-center": [
     "custom/launcher",
+    "custom/pin-foot",
+    "custom/pin-pcmanfm",
+    "custom/pin-settings",
     "wlr/taskbar",
     "custom/separator",
     "custom/clipboard",
@@ -22,6 +25,24 @@
     "format": "󰣇",
     "on-click": "fuzzel",
     "tooltip-format": "Wyszukiwarka aplikacji"
+  },
+
+  "custom/pin-foot": {
+    "format": "",
+    "on-click": "foot",
+    "tooltip-format": "Terminal (foot)"
+  },
+
+  "custom/pin-pcmanfm": {
+    "format": "󰉋",
+    "on-click": "pcmanfm",
+    "tooltip-format": "Menedżer plików (pcmanfm)"
+  },
+
+  "custom/pin-settings": {
+    "format": "󰒓",
+    "on-click": "okay-settings",
+    "tooltip-format": "Ustawienia OKay"
   },
 
   "wlr/taskbar": {

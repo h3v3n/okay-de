@@ -38,9 +38,9 @@ if [ "$MODE" = "--system" ]; then
     # Zapis wersji commita dla środowiska
     install -d /etc/okay-de
     if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        git rev-parse --short HEAD > /etc/okay-de/version 2>/dev/null || echo "963cf2c" > /etc/okay-de/version
+        git rev-parse --short HEAD > /etc/okay-de/version 2>/dev/null || echo "9eede97" > /etc/okay-de/version
     else
-        echo "963cf2c" > /etc/okay-de/version
+        echo "9eede97" > /etc/okay-de/version
     fi
 
     echo "Instalacja systemowa zakończona sukcesem."
@@ -97,9 +97,9 @@ elif [ "$MODE" = "--user" ]; then
 
     # Zapis wersji commita dla profilu użytkownika
     if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        git rev-parse --short HEAD > "$HOME/.config/okay-de/version" 2>/dev/null || echo "963cf2c" > "$HOME/.config/okay-de/version"
+        git rev-parse --short HEAD > "$HOME/.config/okay-de/version" 2>/dev/null || echo "9eede97" > "$HOME/.config/okay-de/version"
     else
-        echo "963cf2c" > "$HOME/.config/okay-de/version"
+        echo "9eede97" > "$HOME/.config/okay-de/version"
     fi
 
     echo "Konfiguracja użytkownika zainstalowana pomyślnie."

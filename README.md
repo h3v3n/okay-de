@@ -13,12 +13,13 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
   - Centrum sterowania (`okay-settings`)
 - **Centrum Sterowania (OKay Settings):** Nowoczesna aplikacja w Pythonie 3 oparta o PyQt6 (Qt 6), umożliwiająca:
   - Zmianę tapety pulpitu i stylu paska zadań (pływająca wyspa vs pełna belka).
+  - Zarządzanie przypiętymi aplikacjami w docku (Taskbar).
   - Dynamiczną zmianę kolorów prostokątnych przycisków okien (zamknij, maksymalizuj, minimalizuj) z natychmiastowym przeładowaniem kompozytora `labwc`.
   - Szybki dostęp do konfiguracji ekranów (`wdisplays`) i miksera (`pavucontrol`).
   - Sprawdzanie i instalację aktualizacji bezpośrednio z repozytorium GitHub (`h3v3n/okay-de`).
   - Szczegółowe informacje o systemie (CPU, RAM, kernel, dystrybucja, wersja commita).
-- **Architektura Server-Side Decorations (SSD):** Belka kompozytora `labwc` o wysokości 30px (`titlebar.height: 30`) stanowi nadrzędną ramkę na zewnątrz każdego okna. Dzięki zmiennym sesyjnym `GTK_CSD=0` oraz `QT_WAYLAND_DISABLE_WINDOWDECORATION=0` aplikacje GTK3/GTK4 i Qt nie wstrzykują przycisków sterowania do pasków zakładek i nagłówków.
-- **Dekoracje okien:** Geometryczne prostokąty w układzie `Title:Iconify,Maximize,Close` z zaokrągleniem narożników `8px` (`cornerRadius: 8`) i maskami XBM 10x8.
+- **Architektura Server-Side Decorations (SSD):** Belka kompozytora `labwc` o wysokości 36px (`titlebar.height: 36`) stanowi nadrzędną ramkę na zewnątrz każdego okna. Dzięki zmiennym sesyjnym `GTK_CSD=0` oraz `QT_WAYLAND_DISABLE_WINDOWDECORATION=0` aplikacje GTK3/GTK4 i Qt nie wstrzykują przycisków sterowania do pasków zakładek i nagłówków.
+- **Dekoracje okien:** Trzy duże geometryczne prostokąty (44x22px) w układzie `:iconify,max,close` z zaokrągleniem narożników `8px` (`cornerRadius: 8`) bez wyświetlania nazwy okna (`showTitle: no`). Lewy przycisk minimalizuje okno, środkowy maksymalizuje, a prawy zamyka program.
 - **Tapeta i tło pulpitu (`swaybg`):** Demon tapety Wayland z bezpieczną kaskadą: tapeta użytkownika (`~/.config/okay-de/wallpaper.png`) -> tapeta systemowa (`/usr/share/backgrounds/okay-de/default.png`) -> awaryjny kolor bazowy Catppuccin Mocha (`#1e1e2e`).
 - **Dock Waybar (pływająca wyspa):** Umieszczony na dole ekranu, wyśrodkowany dock o zaokrąglonych krawędziach (`border-radius: 18px`), efekcie matowego szkła oraz płynnych mikrointerakcjach.
 - **Kafelkowanie (Snapping / Tiling):** Wbudowane przeciąganie okien myszą do krawędzi ekranu oraz skróty `Super + Strzałki`.
