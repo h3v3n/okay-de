@@ -115,6 +115,15 @@ elif [ "$MODE" = "--user" ]; then
     echo "Wymagane pakiety dla OKay Settings i OKay Dock: python-pyqt6, qt6-wayland."
     echo "Sugerowane pakiety narzędzi: swaybg, wdisplays, pavucontrol, papirus-icon-theme."
     echo "Upewnij się, że \$HOME/.local/bin znajduje się w Twojej zmiennej PATH."
+
+    if [ -f /usr/bin/okay-settings ] || [ -f /usr/local/bin/okay-settings ]; then
+        echo ""
+        echo "======================================================================"
+        echo "UWAGA: Wykryto starszą instalację systemową (/usr/bin/okay-settings)."
+        echo "Aby upewnić się, że całe środowisko korzysta z najnowszej wersji:"
+        echo "uruchom: sudo ./install.sh --system"
+        echo "======================================================================"
+    fi
 else
     echo "Użycie: $0 [--user | --system]"
     exit 1

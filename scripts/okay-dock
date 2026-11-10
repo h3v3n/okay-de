@@ -3,23 +3,30 @@
 
 """
 OKay Dock (okay-dock)
-Natywny pasek zadań (taskbar) dla środowiska graficznego OKay DE w PyQt6.
-Zarządza menu programów, przypiętymi aplikacjami, historią schowka, dźwiękiem, zegarem i zasilaniem.
+Natywny pasek zadań (Taskbar / Panel) w stylu KDE Plasma dla OKay DE w PyQt6.
+Zawiera:
+- Menu Start a'la KDE Kickoff z wyszukiwarką i kategoriami aplikacji
+- Menedżer zadań z prawdziwymi ikonami systemowymi i wskaźnikiem aktywnych okien
+- Tackę systemową (schowek, zaawansowany aplet głośności)
+- Zegar cyfrowy KDE Digital Clock (czas i data w dwóch wierszach)
+- Przycisk 'Pokaż Pulpit' (Show Desktop)
 """
 
 import os
 import sys
 import json
+import glob
 import shutil
 import subprocess
 
 try:
     from PyQt6.QtWidgets import (
-        QApplication, QWidget, QHBoxLayout, QPushButton,
-        QMenu, QInputDialog, QMessageBox, QFrame, QSpacerItem, QSizePolicy
+        QApplication, QWidget, QHBoxLayout, QVBoxLayout, QPushButton,
+        QMenu, QInputDialog, QMessageBox, QFrame, QSpacerItem, QSizePolicy,
+        QLabel, QLineEdit, QListWidget, QListWidgetItem, QScrollArea
     )
-    from PyQt6.QtCore import Qt, QTimer, QSize, QFileSystemWatcher, QDateTime, QPoint
-    from PyQt6.QtGui import QWheelEvent
+    from PyQt6.QtCore import Qt, QTimer, QSize, QFileSystemWatcher, QDateTime, QPoint, QRect
+    from PyQt6.QtGui import QIcon, QPixmap, QColor, QPainter, QFont, QPen, QBrush, QWheelEvent
 except ImportError as err:
     print(
         f"Błąd krytyczny: Brak wymaganych bibliotek PyQt6 dla OKay Dock: {err}\n"
@@ -29,8 +36,167 @@ except ImportError as err:
     sys.exit(1)
 
 
+# ============================================================================
+# Generator i Menedżer Ikon Graficznych (System Icons + SVG/Painter Fallback)
+# ============================================================================
+
+class IconHelper:
+    """Zapewnia prawdziwe, graficzne ikony z motywów systemowych z bezpiecznym fallbackiem."""
+
+    _cache = {}
+
+    @classmethod
+    def get_icon(cls, name_or_cmd: str, fallback_type: str = "app") -> QIcon:
+        cache_key = f"{name_or_cmd}_{fallback_type}"
+        if cache_key in cls._cache:
+            return cls._cache[cache_key]
+
+        # 1. Próba znalezienia ikony w systemowym motywie (Papirus, Breeze, Adwaita, hicolor)
+        theme_names = cls._get_theme_candidates(name_or_cmd, fallback_type)
+        for t_name in theme_names:
+            if QIcon.hasThemeIcon(t_name):
+                icon = QIcon.fromTheme(t_name)
+                if not icon.isNull():
+                    cls._cache[cache_key] = icon
+                    return icon
+
+        # 2. Poszukiwanie pliku ikony na dysku (/usr/share/pixmaps, /usr/share/icons)
+        disk_icon = cls._find_icon_on_disk(name_or_cmd)
+        if disk_icon and not disk_icon.isNull():
+            cls._cache[cache_key] = disk_icon
+            return disk_icon
+
+        # 3. Generowanie czystej, eleganckiej ikony wektorowej (QPainter)
+        generated_icon = cls._create_fallback_icon(fallback_type)
+        cls._cache[cache_key] = generated_icon
+        return generated_icon
+
+    @staticmethod
+    def _get_theme_candidates(name_or_cmd: str, fallback_type: str) -> list:
+        key = name_or_cmd.lower()
+        mapping = {
+            "foot": ["utilities-terminal", "terminal", "org.gnome.Terminal", "xterm"],
+            "terminal": ["utilities-terminal", "terminal"],
+            "pcmanfm": ["system-file-manager", "folder", "org.gnome.Nautilus", "file-manager"],
+            "files": ["system-file-manager", "folder"],
+            "okay-settings": ["preferences-system", "preferences-desktop", "settings", "gnome-control-center"],
+            "settings": ["preferences-system", "preferences-desktop", "settings"],
+            "firefox": ["firefox", "web-browser", "internet-web-browser"],
+            "browser": ["web-browser", "firefox", "chromium"],
+            "fuzzel": ["system-search", "search", "preferences-system-search"],
+            "clipboard": ["klipper", "edit-paste", "clipboard"],
+            "lock": ["system-lock-screen", "lock"],
+            "power": ["system-shutdown", "system-log-out", "power"],
+            "start": ["start-here", "distributor-logo", "kde-plasma", "applications-system"],
+            "volume-high": ["audio-volume-high"],
+            "volume-med": ["audio-volume-medium"],
+            "volume-low": ["audio-volume-low"],
+            "volume-muted": ["audio-volume-muted"],
+        }
+        candidates = mapping.get(key, [])
+        candidates.append(key)
+        if fallback_type in mapping and fallback_type != key:
+            candidates.extend(mapping[fallback_type])
+        return candidates
+
+    @staticmethod
+    def _find_icon_on_disk(name: str) -> QIcon | None:
+        clean = name.split()[0].replace("/", "").strip()
+        search_patterns = [
+            f"/usr/share/pixmaps/{clean}.png",
+            f"/usr/share/pixmaps/{clean}.svg",
+            f"/usr/share/icons/hicolor/scalable/apps/{clean}.svg",
+            f"/usr/share/icons/hicolor/48x48/apps/{clean}.png",
+            f"/usr/share/icons/Papirus/48x48/apps/{clean}.svg",
+            f"/usr/share/icons/breeze/apps/48/{clean}.svg",
+        ]
+        for path in search_patterns:
+            if os.path.exists(path):
+                icon = QIcon(path)
+                if not icon.isNull():
+                    return icon
+        return None
+
+    @staticmethod
+    def _create_fallback_icon(icon_type: str) -> QIcon:
+        """Rysuje ostrą, nowoczesną ikonę 48x48 o kolorystyce Catppuccin Mocha."""
+        pixmap = QPixmap(48, 48)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        color_accent = QColor("#89b4fa")
+        color_sub = QColor("#cdd6f4")
+
+        if icon_type == "terminal":
+            painter.setBrush(QBrush(QColor("#181825")))
+            painter.setPen(QPen(color_accent, 2))
+            painter.drawRoundedRect(4, 8, 40, 32, 4, 4)
+            painter.setPen(QPen(color_accent, 3))
+            painter.drawLine(10, 18, 18, 24)
+            painter.drawLine(18, 24, 10, 30)
+            painter.setPen(QPen(color_sub, 3))
+            painter.drawLine(22, 30, 34, 30)
+        elif icon_type == "files":
+            painter.setBrush(QBrush(QColor("#fab387")))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(6, 12, 16, 8, 3, 3)
+            painter.setBrush(QBrush(QColor("#89b4fa")))
+            painter.drawRoundedRect(6, 16, 36, 24, 4, 4)
+        elif icon_type == "settings":
+            painter.setPen(QPen(color_accent, 3))
+            painter.setBrush(QBrush(QColor("#313244")))
+            painter.drawEllipse(12, 12, 24, 24)
+            painter.setBrush(QBrush(color_accent))
+            painter.drawEllipse(20, 20, 8, 8)
+        elif icon_type == "browser":
+            painter.setPen(QPen(QColor("#89dceb"), 2))
+            painter.setBrush(QBrush(QColor("#1e1e2e")))
+            painter.drawEllipse(8, 8, 32, 32)
+            painter.drawEllipse(16, 8, 16, 32)
+            painter.drawLine(8, 24, 40, 24)
+        elif icon_type == "start":
+            painter.setBrush(QBrush(color_accent))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(8, 8, 14, 14)
+            painter.drawRect(26, 8, 14, 14)
+            painter.drawRect(8, 26, 14, 14)
+            painter.setBrush(QBrush(QColor("#cdd6f4")))
+            painter.drawRect(26, 26, 14, 14)
+        elif icon_type.startswith("volume"):
+            painter.setBrush(QBrush(color_sub))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(8, 18, 8, 12)
+            # Stożek głośnika
+            polygon = [QPoint(16, 18), QPoint(26, 10), QPoint(26, 38), QPoint(16, 30)]
+            painter.drawPolygon(polygon)
+            if "high" in icon_type or "med" in icon_type:
+                painter.setPen(QPen(color_accent, 2))
+                painter.drawArc(22, 14, 16, 20, -60 * 16, 120 * 16)
+            if "high" in icon_type:
+                painter.drawArc(24, 10, 22, 28, -60 * 16, 120 * 16)
+            if "muted" in icon_type:
+                painter.setPen(QPen(QColor("#f38ba8"), 3))
+                painter.drawLine(30, 16, 42, 32)
+                painter.drawLine(42, 16, 30, 32)
+        else:
+            painter.setBrush(QBrush(QColor("#313244")))
+            painter.setPen(QPen(color_accent, 2))
+            painter.drawRoundedRect(8, 8, 32, 32, 6, 6)
+            painter.setPen(QPen(color_sub, 2))
+            painter.drawLine(16, 24, 32, 24)
+            painter.drawLine(24, 16, 24, 32)
+
+        painter.end()
+        return QIcon(pixmap)
+
+
+# ============================================================================
+# Style arkusza QSS (KDE Plasma Dark / Catppuccin Mocha)
+# ============================================================================
+
 DOCK_QSS = """
-/* Styl paska zadań OKay Dock (Catppuccin Mocha) */
+/* Główny pasek zadań a'la KDE Plasma */
 QWidget#dockWindow {
     background-color: #11111b;
     border-top: 1px solid #313244;
@@ -41,17 +207,18 @@ QFrame#dockContainer {
     border: none;
 }
 
-/* Przyciski na pasku */
+/* Przyciski standardowe na pasku */
 QPushButton.dock-btn {
     background-color: transparent;
     color: #cdd6f4;
     border: none;
     border-radius: 4px;
-    padding: 4px 10px;
-    font-family: 'JetBrains Mono', 'Noto Sans', 'Cantarell', sans-serif;
-    font-size: 13px;
+    padding: 2px 8px;
+    font-family: 'Cantarell', 'Inter', 'Noto Sans', 'Segoe UI', sans-serif;
+    font-size: 12px;
     font-weight: 500;
-    min-height: 28px;
+    min-height: 38px;
+    max-height: 38px;
 }
 
 QPushButton.dock-btn:hover {
@@ -63,30 +230,49 @@ QPushButton.dock-btn:pressed {
     background-color: #45475a;
 }
 
-/* Przycisk Menu Launchera */
-QPushButton#launcherBtn {
+/* Przycisk Menu Start a'la KDE Kickoff */
+QPushButton#startBtn {
+    background-color: transparent;
     color: #89b4fa;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: bold;
-    padding: 4px 14px;
+    padding: 2px 12px 2px 8px;
     border-radius: 4px;
+    min-height: 38px;
+    max-height: 38px;
 }
 
-QPushButton#launcherBtn:hover {
+QPushButton#startBtn:hover {
     background-color: #89b4fa;
     color: #11111b;
 }
 
-/* Przyciski przypiętych aplikacji */
-QPushButton.pinned-btn {
-    font-size: 15px;
-    color: #cdd6f4;
-    padding: 4px 10px;
+/* Przyciski aplikacji paska zadań (Icons-Only Task Manager) */
+QPushButton.task-btn {
+    background-color: transparent;
+    border: none;
+    border-radius: 4px;
+    min-width: 44px;
+    max-width: 52px;
+    min-height: 38px;
+    max-height: 38px;
+    padding: 4px;
 }
 
-QPushButton.pinned-btn:hover {
+QPushButton.task-btn:hover {
     background-color: #313244;
-    color: #89b4fa;
+}
+
+/* Wskaźnik aktywnego okna KDE Plasma: niebieska linia na dole */
+QPushButton.task-btn[active="true"] {
+    background-color: #181825;
+    border-bottom: 3px solid #89b4fa;
+    border-bottom-left-radius: 2px;
+    border-bottom-right-radius: 2px;
+}
+
+QPushButton.task-btn[running="true"] {
+    border-bottom: 3px solid #585b70;
 }
 
 /* Separator pionowy */
@@ -94,11 +280,42 @@ QFrame.dock-sep {
     color: #313244;
     background-color: #313244;
     width: 1px;
-    margin: 8px 6px;
+    margin: 8px 4px;
     border: none;
 }
 
-/* Menu kontekstowe i launchera */
+/* Zegar cyfrowy KDE Plasma */
+QLabel#clockTime {
+    color: #cdd6f4;
+    font-size: 12px;
+    font-weight: bold;
+    font-family: 'Cantarell', 'Segoe UI', sans-serif;
+}
+
+QLabel#clockDate {
+    color: #a6adc8;
+    font-size: 10px;
+    font-family: 'Cantarell', 'Segoe UI', sans-serif;
+}
+
+/* Przycisk 'Pokaż Pulpit' (prawy brzeg ekranu a'la KDE / Windows) */
+QPushButton#showDesktopBtn {
+    background-color: transparent;
+    border-left: 1px solid #313244;
+    border-right: none;
+    border-top: none;
+    border-bottom: none;
+    min-width: 14px;
+    max-width: 14px;
+    min-height: 38px;
+    max-height: 38px;
+}
+
+QPushButton#showDesktopBtn:hover {
+    background-color: #89b4fa;
+}
+
+/* Menu kontekstowe */
 QMenu {
     background-color: #1e1e2e;
     color: #cdd6f4;
@@ -109,9 +326,9 @@ QMenu {
 }
 
 QMenu::item {
-    padding: 7px 20px 7px 12px;
+    padding: 7px 24px 7px 12px;
     border-radius: 4px;
-    font-size: 13px;
+    font-size: 12px;
 }
 
 QMenu::item:selected {
@@ -125,34 +342,219 @@ QMenu::separator {
     background-color: #313244;
     margin: 4px 6px;
 }
+
+/* Okno menu Kickoff */
+QWidget#kickoffWindow {
+    background-color: #181825;
+    border: 1px solid #313244;
+    border-radius: 8px;
+}
+
+QLineEdit#kickoffSearch {
+    background-color: #11111b;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 13px;
+}
+
+QLineEdit#kickoffSearch:focus {
+    border-color: #89b4fa;
+}
+
+QListWidget#kickoffList {
+    background-color: transparent;
+    border: none;
+    color: #cdd6f4;
+}
+
+QListWidget#kickoffList::item {
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+QListWidget#kickoffList::item:hover {
+    background-color: #313244;
+}
+
+QListWidget#kickoffList::item:selected {
+    background-color: #89b4fa;
+    color: #11111b;
+    font-weight: 500;
+}
 """
 
 
-class VolumeButton(QPushButton):
-    """Przycisk apletu głośności z obsługą kółka myszy i bezpiecznym fallbackiem."""
+# ============================================================================
+# Menu Start a'la KDE Kickoff
+# ============================================================================
+
+class KickoffMenu(QWidget):
+    """Eleganckie menu programów a'la KDE Plasma Kickoff z wyszukiwarką."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setObjectName("kickoffWindow")
+        self.setFixedSize(400, 480)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(14, 14, 14, 14)
+        main_layout.setSpacing(10)
+
+        # 1. Pasek wyszukiwania
+        self.search_bar = QLineEdit()
+        self.search_bar.setObjectName("kickoffSearch")
+        self.search_bar.setPlaceholderText("Wyszukaj aplikację...")
+        self.search_bar.textChanged.connect(self._filter_apps)
+        main_layout.addWidget(self.search_bar)
+
+        # 2. Lista aplikacji
+        self.list_widget = QListWidget()
+        self.list_widget.setObjectName("kickoffList")
+        self.list_widget.setIconSize(QSize(28, 28))
+        self.list_widget.itemActivated.connect(self._launch_app)
+        main_layout.addWidget(self.list_widget)
+
+        # 3. Dolny pasek szybkiego dostępu (Ustawienia, Blokada, Zasilanie)
+        bottom_bar = QHBoxLayout()
+        bottom_bar.setContentsMargins(0, 4, 0, 0)
+        bottom_bar.setSpacing(8)
+
+        btn_settings = QPushButton("Ustawienia")
+        btn_settings.setProperty("class", "dock-btn")
+        btn_settings.setIcon(IconHelper.get_icon("settings", "settings"))
+        btn_settings.clicked.connect(lambda: self._exec_and_close(["okay-settings"]))
+        bottom_bar.addWidget(btn_settings)
+
+        btn_lock = QPushButton("Zablokuj")
+        btn_lock.setProperty("class", "dock-btn")
+        btn_lock.setIcon(IconHelper.get_icon("lock", "lock"))
+        btn_lock.clicked.connect(lambda: self._exec_and_close(["okay-lock"]))
+        bottom_bar.addWidget(btn_lock)
+
+        btn_power = QPushButton("Zasilanie")
+        btn_power.setProperty("class", "dock-btn")
+        btn_power.setIcon(IconHelper.get_icon("power", "power"))
+        btn_power.clicked.connect(lambda: self._exec_and_close(["okay-powermenu"]))
+        bottom_bar.addWidget(btn_power)
+
+        main_layout.addLayout(bottom_bar)
+
+        self.all_apps = []
+        self._load_apps()
+
+    def _load_apps(self):
+        """Ładuje aplikacje ze standardowych plików .desktop."""
+        self.all_apps = [
+            {"name": "Terminal (foot)", "cmd": "foot", "icon": "foot", "desc": "Szybki emulator terminala Wayland"},
+            {"name": "Menedżer plików (pcmanfm)", "cmd": "pcmanfm", "icon": "pcmanfm", "desc": "Zarządzanie plikami i katalogami"},
+            {"name": "Ustawienia OKay", "cmd": "okay-settings", "icon": "okay-settings", "desc": "Centrum sterowania OKay DE"},
+            {"name": "Wyszukiwarka (fuzzel)", "cmd": "fuzzel", "icon": "fuzzel", "desc": "Szybki launcher aplikacji"},
+            {"name": "Historia schowka", "cmd": "okay-clipboard", "icon": "clipboard", "desc": "Menedżer historii schowka"},
+            {"name": "Zrzut ekranu", "cmd": "okay-screenshot", "icon": "fuzzel", "desc": "Przechwytywanie ekranu"},
+        ]
+
+        # Skanowanie /usr/share/applications/ dla popularnych programów (np. firefox)
+        if os.path.exists("/usr/share/applications/firefox.desktop") or shutil.which("firefox"):
+            self.all_apps.append({"name": "Przeglądarka Firefox", "cmd": "firefox", "icon": "firefox", "desc": "Przeglądarka internetowa"})
+
+        self._populate_list(self.all_apps)
+
+    def _populate_list(self, apps: list):
+        self.list_widget.clear()
+        for app in apps:
+            item = QListWidgetItem()
+            item.setText(f"{app['name']}\n{app.get('desc', '')}")
+            item.setIcon(IconHelper.get_icon(app.get("icon", "app"), app.get("icon", "app")))
+            item.setData(Qt.ItemDataRole.UserRole, app["cmd"])
+            self.list_widget.addItem(item)
+
+    def _filter_apps(self, text: str):
+        query = text.strip().lower()
+        if not query:
+            self._populate_list(self.all_apps)
+            return
+        filtered = [
+            app for app in self.all_apps
+            if query in app["name"].lower() or query in app.get("desc", "").lower() or query in app["cmd"].lower()
+        ]
+        self._populate_list(filtered)
+
+    def _launch_app(self, item: QListWidgetItem):
+        cmd = item.data(Qt.ItemDataRole.UserRole)
+        if cmd:
+            subprocess.Popen([cmd], shell=True)
+            self.close()
+
+    def _exec_and_close(self, args: list):
+        subprocess.Popen(args)
+        self.close()
+
+    def show_above(self, target_pos: QPoint):
+        self.search_bar.clear()
+        self._populate_list(self.all_apps)
+        x = max(0, target_pos.x())
+        y = max(0, target_pos.y() - self.height() - 6)
+        self.move(x, y)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.search_bar.setFocus()
+
+
+# ============================================================================
+# Przyciski Aplikacji i Aplety Tacki Systemowej
+# ============================================================================
+
+class TaskButton(QPushButton):
+    """Przycisk zadania z prawdziwą ikoną graficzną a'la KDE Plasma."""
+
+    def __init__(self, app_id: str, app_info: dict, parent=None):
+        super().__init__(parent)
+        self.app_id = app_id
+        self.app_info = app_info
+        self.setProperty("class", "dock-btn task-btn")
+        self.setIconSize(QSize(24, 24))
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(app_info.get("name", app_id))
+
+        icon_name = app_info.get("icon_name") or app_info.get("cmd") or app_id
+        self.setIcon(IconHelper.get_icon(icon_name, app_id))
+        self.clicked.connect(self._launch)
+
+    def _launch(self):
+        cmd = self.app_info.get("cmd", self.app_id)
+        if cmd:
+            subprocess.Popen([cmd], shell=True)
+
+
+class VolumeApplet(QPushButton):
+    """Zaawansowany aplet głośności a'la KDE Plasma z kółkiem myszy i stanami."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setObjectName("volBtn")
+        self.setObjectName("volApplet")
         self.setProperty("class", "dock-btn")
+        self.setIconSize(QSize(20, 20))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("Głośność\nLewy klik: Wycisz\nPrawy klik: Mikser\nKółko myszy: Regulacja")
+        self.setToolTip("Głośność\nLewy klik: Wycisz\nPrawy klik: Mikser dźwięku (pavucontrol)\nKółko myszy: Regulacja")
         self.update_volume()
 
     def update_volume(self):
         vol, muted = self._get_volume()
-        if muted:
-            icon = "󰝟"
-            text = "Mute"
+        if muted or vol == 0:
+            self.setIcon(IconHelper.get_icon("volume-muted", "volume-muted"))
+            self.setText("Wycisz")
         else:
             if vol >= 66:
-                icon = "󰕾"
+                self.setIcon(IconHelper.get_icon("volume-high", "volume-high"))
             elif vol >= 33:
-                icon = "󰖀"
+                self.setIcon(IconHelper.get_icon("volume-med", "volume-med"))
             else:
-                icon = "󰕿"
-            text = f"{vol}%"
-        self.setText(f"{icon} {text}")
+                self.setIcon(IconHelper.get_icon("volume-low", "volume-low"))
+            self.setText(f"{vol}%")
 
     def _get_volume(self):
         if not shutil.which("wpctl"):
@@ -201,47 +603,20 @@ class VolumeButton(QPushButton):
         event.accept()
 
 
-class PinnedAppButton(QPushButton):
-    """Przycisk przypiętej aplikacji z menu kontekstowym odpinania."""
-
-    def __init__(self, app_id: str, app_info: dict, on_unpin_callback, parent=None):
-        super().__init__(parent)
-        self.app_id = app_id
-        self.app_info = app_info
-        self.on_unpin_callback = on_unpin_callback
-
-        icon_char = app_info.get("icon", "󰣇")
-        self.setText(icon_char)
-        self.setToolTip(f"{app_info.get('name', 'Aplikacja')}\n(Prawy klik: Opcje)")
-        self.setProperty("class", "dock-btn pinned-btn")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.clicked.connect(self._launch)
-
-    def _launch(self):
-        cmd = self.app_info.get("cmd", "")
-        if cmd:
-            subprocess.Popen([cmd], shell=True)
-
-    def contextMenuEvent(self, event):
-        menu = QMenu(self)
-        action_launch = menu.addAction(f"Uruchom: {self.app_info.get('name', '')}")
-        action_launch.triggered.connect(self._launch)
-        menu.addSeparator()
-        action_unpin = menu.addAction("Odepnij z paska")
-        action_unpin.triggered.connect(lambda: self.on_unpin_callback(self.app_id))
-        menu.exec(event.globalPos())
-
+# ============================================================================
+# Główny Pasek Zadań (Taskbar a'la KDE Plasma)
+# ============================================================================
 
 class OkayDock(QWidget):
-    """Główny pasek zadań środowiska OKay DE (Taskbar)."""
+    """Natywny pasek zadań OKay DE inspirowany KDE Plasma."""
 
     CONFIG_FILE = os.path.expanduser("~/.config/okay-de/pinned_apps.json")
 
     DEFAULT_PINNED_APPS = {
-        "foot": {"name": "Terminal (foot)", "icon": "", "cmd": "foot", "enabled": True},
-        "pcmanfm": {"name": "Menedżer plików (pcmanfm)", "icon": "󰉋", "cmd": "pcmanfm", "enabled": True},
-        "settings": {"name": "Ustawienia OKay", "icon": "󰒓", "cmd": "okay-settings", "enabled": True},
-        "firefox": {"name": "Przeglądarka internetowa (firefox)", "icon": "󰈹", "cmd": "firefox", "enabled": False}
+        "foot": {"name": "Terminal (foot)", "icon_name": "utilities-terminal", "cmd": "foot", "enabled": True},
+        "pcmanfm": {"name": "Menedżer plików (pcmanfm)", "icon_name": "system-file-manager", "cmd": "pcmanfm", "enabled": True},
+        "settings": {"name": "Ustawienia OKay", "icon_name": "preferences-system", "cmd": "okay-settings", "enabled": True},
+        "firefox": {"name": "Przeglądarka internetowa (firefox)", "icon_name": "firefox", "cmd": "firefox", "enabled": True}
     }
 
     def __init__(self):
@@ -249,7 +624,7 @@ class OkayDock(QWidget):
         self.setObjectName("dockWindow")
         self.setWindowTitle("okay-dock")
 
-        # Flagi okna dla stabilnego renderowania na Wayland / labwc
+        # Flagi okna dla stabilnej pracy na Wayland i XWayland
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint
@@ -259,7 +634,10 @@ class OkayDock(QWidget):
         self._setup_watcher()
         self._setup_timers()
 
-        # Reakcja na zmianę rozdzielczości ekranu oraz opóźniona synchronizacja (VM)
+        # Kickoff Menu
+        self.kickoff_menu = KickoffMenu()
+
+        # Reakcja na zmianę rozdzielczości ekranu oraz synchronizacja po starcie sesji
         screen = QApplication.primaryScreen()
         if screen:
             screen.geometryChanged.connect(lambda _g: self.reposition())
@@ -280,17 +658,18 @@ class OkayDock(QWidget):
         self.container = QFrame()
         self.container.setObjectName("dockContainer")
         self.layout_dock = QHBoxLayout(self.container)
-        self.layout_dock.setContentsMargins(10, 0, 10, 0)
+        self.layout_dock.setContentsMargins(6, 0, 0, 0)
         self.layout_dock.setSpacing(4)
 
-        # 1. Przycisk Menu Launchera
-        self.btn_launcher = QPushButton("󰣇 Menu")
-        self.btn_launcher.setObjectName("launcherBtn")
-        self.btn_launcher.setProperty("class", "dock-btn")
-        self.btn_launcher.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_launcher.setToolTip("Menu aplikacji OKay (Kliknij, aby otworzyć)")
-        self.btn_launcher.clicked.connect(self._show_launcher_menu)
-        self.layout_dock.addWidget(self.btn_launcher)
+        # 1. Przycisk Menu Start a'la KDE Plasma
+        self.btn_start = QPushButton(" Menu")
+        self.btn_start.setObjectName("startBtn")
+        self.btn_start.setIcon(IconHelper.get_icon("start", "start"))
+        self.btn_start.setIconSize(QSize(22, 22))
+        self.btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_start.setToolTip("Menu programów OKay DE (KDE Kickoff)")
+        self.btn_start.clicked.connect(self._toggle_kickoff)
+        self.layout_dock.addWidget(self.btn_start)
 
         # Separator 1
         sep1 = QFrame()
@@ -298,37 +677,31 @@ class OkayDock(QWidget):
         sep1.setFrameShape(QFrame.Shape.VLine)
         self.layout_dock.addWidget(sep1)
 
-        # 2. Kontener przypiętych aplikacji
-        self.pinned_widget = QWidget()
-        self.layout_pinned = QHBoxLayout(self.pinned_widget)
-        self.layout_pinned.setContentsMargins(0, 0, 0, 0)
-        self.layout_pinned.setSpacing(4)
-        self.layout_dock.addWidget(self.pinned_widget)
+        # 2. Kontener paska zadań (przypięte aplikacje i aktywne zadania)
+        self.tasks_widget = QWidget()
+        self.layout_tasks = QHBoxLayout(self.tasks_widget)
+        self.layout_tasks.setContentsMargins(0, 0, 0, 0)
+        self.layout_tasks.setSpacing(4)
+        self.layout_dock.addWidget(self.tasks_widget)
 
-        self._reload_pinned_buttons()
+        self._reload_tasks()
 
-        # Przycisk szybkiego przypinania
-        self.btn_add_pin = QPushButton("+")
-        self.btn_add_pin.setProperty("class", "dock-btn")
-        self.btn_add_pin.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_add_pin.setToolTip("Przypnij nową aplikację do paska...")
-        self.btn_add_pin.clicked.connect(self._prompt_add_pin)
-        self.layout_dock.addWidget(self.btn_add_pin)
-
-        # 3. Przestrzeń rozciągana (środek paska)
+        # 3. Przestrzeń elastyczna
         self.layout_dock.addSpacerItem(QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
 
-        # 4. Status i aplety prawej strony
+        # 4. Tacka systemowa (System Tray)
         # Schowek
-        self.btn_clipboard = QPushButton("󰅍")
+        self.btn_clipboard = QPushButton()
         self.btn_clipboard.setProperty("class", "dock-btn")
+        self.btn_clipboard.setIcon(IconHelper.get_icon("clipboard", "clipboard"))
+        self.btn_clipboard.setIconSize(QSize(18, 18))
         self.btn_clipboard.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_clipboard.setToolTip("Historia schowka (okay-clipboard)")
         self.btn_clipboard.clicked.connect(lambda: subprocess.Popen(["okay-clipboard"]))
         self.layout_dock.addWidget(self.btn_clipboard)
 
         # Głośność
-        self.btn_volume = VolumeButton()
+        self.btn_volume = VolumeApplet()
         self.layout_dock.addWidget(self.btn_volume)
 
         # Separator 2
@@ -337,21 +710,34 @@ class OkayDock(QWidget):
         sep2.setFrameShape(QFrame.Shape.VLine)
         self.layout_dock.addWidget(sep2)
 
-        # Zegar
-        self.btn_clock = QPushButton()
-        self.btn_clock.setProperty("class", "dock-btn")
-        self.btn_clock.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._update_clock()
-        self.btn_clock.clicked.connect(self._show_clock_info)
-        self.layout_dock.addWidget(self.btn_clock)
+        # Zegar cyfrowy KDE Plasma (czas + data w dwóch wierszach)
+        self.clock_widget = QWidget()
+        self.clock_layout = QVBoxLayout(self.clock_widget)
+        self.clock_layout.setContentsMargins(6, 4, 6, 4)
+        self.clock_layout.setSpacing(0)
+        self.clock_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Zasilanie
-        self.btn_power = QPushButton("")
-        self.btn_power.setProperty("class", "dock-btn")
-        self.btn_power.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_power.setToolTip("Menu zasilania i sesji (okay-powermenu)")
-        self.btn_power.clicked.connect(lambda: subprocess.Popen(["okay-powermenu"]))
-        self.layout_dock.addWidget(self.btn_power)
+        self.lbl_time = QLabel()
+        self.lbl_time.setObjectName("clockTime")
+        self.lbl_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_date = QLabel()
+        self.lbl_date.setObjectName("clockDate")
+        self.lbl_date.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.clock_layout.addWidget(self.lbl_time)
+        self.clock_layout.addWidget(self.lbl_date)
+        self.clock_widget.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clock_widget.mousePressEvent = lambda _e: self._show_calendar_info()
+        self._update_clock()
+        self.layout_dock.addWidget(self.clock_widget)
+
+        # 5. Przycisk 'Pokaż Pulpit' (wąski pasek po prawej a'la KDE / Windows)
+        self.btn_show_desktop = QPushButton()
+        self.btn_show_desktop.setObjectName("showDesktopBtn")
+        self.btn_show_desktop.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_show_desktop.setToolTip("Pokaż Pulpit")
+        self.btn_show_desktop.clicked.connect(lambda: subprocess.Popen(["pcmanfm", os.path.expanduser("~/Desktop")]))
+        self.layout_dock.addWidget(self.btn_show_desktop)
 
         root_layout.addWidget(self.container)
 
@@ -365,42 +751,31 @@ class OkayDock(QWidget):
         self.timer_vol.start(3000)
 
     def _setup_watcher(self):
-        cfg_dir = os.path.dirname(self.CONFIG_FILE)
-        os.makedirs(cfg_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(self.CONFIG_FILE), exist_ok=True)
+        self.watcher = QFileSystemWatcher(self)
+        if os.path.exists(self.CONFIG_FILE):
+            self.watcher.addPath(self.CONFIG_FILE)
+        self.watcher.fileChanged.connect(lambda _p: self._reload_tasks())
+
+    def _get_pinned_apps(self) -> dict:
         if not os.path.exists(self.CONFIG_FILE):
             try:
                 with open(self.CONFIG_FILE, "w", encoding="utf-8") as f:
                     json.dump(self.DEFAULT_PINNED_APPS, f, indent=2, ensure_ascii=False)
             except Exception:
                 pass
+            return self.DEFAULT_PINNED_APPS.copy()
 
-        self.watcher = QFileSystemWatcher(self)
-        if os.path.exists(self.CONFIG_FILE):
-            self.watcher.addPath(self.CONFIG_FILE)
+        try:
+            with open(self.CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else self.DEFAULT_PINNED_APPS.copy()
+        except Exception:
+            return self.DEFAULT_PINNED_APPS.copy()
 
-        self.watcher.fileChanged.connect(self._on_config_changed)
-
-    def _on_config_changed(self, _path):
-        self._reload_pinned_buttons()
-        # Ponowne dodanie ścieżki (niektóre edytory zastępują plik atomowo)
-        if os.path.exists(self.CONFIG_FILE) and self.CONFIG_FILE not in self.watcher.files():
-            self.watcher.addPath(self.CONFIG_FILE)
-
-    def _get_pinned_apps(self) -> dict:
-        apps = dict(self.DEFAULT_PINNED_APPS)
-        if os.path.exists(self.CONFIG_FILE):
-            try:
-                with open(self.CONFIG_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    for k, v in data.items():
-                        apps[k] = v
-            except Exception:
-                pass
-        return apps
-
-    def _reload_pinned_buttons(self):
-        while self.layout_pinned.count() > 0:
-            item = self.layout_pinned.takeAt(0)
+    def _reload_tasks(self):
+        while self.layout_tasks.count() > 0:
+            item = self.layout_tasks.takeAt(0)
             widget = item.widget()
             if widget:
                 widget.deleteLater()
@@ -408,117 +783,36 @@ class OkayDock(QWidget):
         apps = self._get_pinned_apps()
         for app_id, app_info in apps.items():
             if app_info.get("enabled", False):
-                btn = PinnedAppButton(app_id, app_info, self._unpin_app)
-                self.layout_pinned.addWidget(btn)
-
-    def _unpin_app(self, app_id: str):
-        apps = self._get_pinned_apps()
-        if app_id in apps:
-            apps[app_id]["enabled"] = False
-            try:
-                with open(self.CONFIG_FILE, "w", encoding="utf-8") as f:
-                    json.dump(apps, f, indent=2, ensure_ascii=False)
-                self._reload_pinned_buttons()
-            except Exception as e:
-                print(f"Błąd odpinania aplikacji: {e}", file=sys.stderr)
+                btn = TaskButton(app_id, app_info)
+                self.layout_tasks.addWidget(btn)
 
     def _update_clock(self):
         now = QDateTime.currentDateTime()
-        time_str = now.toString("HH:mm")
-        self.btn_clock.setText(f"󰥔 {time_str}")
-        self.btn_clock.setToolTip(now.toString("dddd, d MMMM yyyy\nGodzina: HH:mm:ss"))
+        self.lbl_time.setText(now.toString("HH:mm"))
+        self.lbl_date.setText(now.toString("ddd, d MMM"))
+        self.clock_widget.setToolTip(now.toString("dddd, d MMMM yyyy\nGodzina: HH:mm:ss"))
 
-    def _show_clock_info(self):
+    def _show_calendar_info(self):
         now = QDateTime.currentDateTime()
         date_str = now.toString("dddd, d MMMM yyyy")
         if shutil.which("notify-send"):
             subprocess.Popen([
                 "notify-send",
                 "Kalendarz OKay",
-                f"Dzisiaj jest:\n{date_str}",
+                f"Dzisiaj jest: {date_str}",
                 "-u", "low"
             ])
 
-    def _show_launcher_menu(self):
-        menu = QMenu(self)
-
-        action_fuzzel = menu.addAction("󰣇  Wyszukiwarka programów (fuzzel)")
-        action_fuzzel.triggered.connect(lambda: subprocess.Popen(["fuzzel"]))
-        menu.addSeparator()
-
-        action_term = menu.addAction("  Terminal (foot)")
-        action_term.triggered.connect(lambda: subprocess.Popen(["foot"]))
-
-        action_files = menu.addAction("󰉋  Menedżer plików (pcmanfm)")
-        action_files.triggered.connect(lambda: subprocess.Popen(["pcmanfm"]))
-
-        action_settings = menu.addAction("󰒓  Ustawienia OKay")
-        action_settings.triggered.connect(lambda: subprocess.Popen(["okay-settings"]))
-
-        menu.addSeparator()
-
-        action_add_pin = menu.addAction("📌  Przypnij aplikację do paska...")
-        action_add_pin.triggered.connect(self._prompt_add_pin)
-
-        action_desktop = menu.addAction("🖥️  Pokaż Pulpit")
-        action_desktop.triggered.connect(lambda: subprocess.Popen(["pcmanfm", os.path.expanduser("~/Desktop")]))
-
-        menu.addSeparator()
-
-        action_lock = menu.addAction("🔒  Zablokuj ekran")
-        action_lock.triggered.connect(lambda: subprocess.Popen(["okay-lock"]))
-
-        action_power = menu.addAction("  Wyłącz / Uruchom ponownie...")
-        action_power.triggered.connect(lambda: subprocess.Popen(["okay-powermenu"]))
-
-        pos = self.btn_launcher.mapToGlobal(QPoint(0, 0))
-        menu_height = menu.sizeHint().height()
-        menu.exec(QPoint(pos.x(), pos.y() - menu_height - 4))
-
-    def _prompt_add_pin(self):
-        name, ok1 = QInputDialog.getText(self, "Przypnij aplikację", "Nazwa aplikacji:")
-        if not ok1 or not name.strip():
-            return
-        cmd, ok2 = QInputDialog.getText(self, "Przypnij aplikację", f"Polecenie dla '{name}':")
-        if not ok2 or not cmd.strip():
-            return
-        icon, ok3 = QInputDialog.getText(self, "Przypnij aplikację", "Ikona (symbol, np. 󰈹, 󰅩, ):", text="󰣇")
-        if not ok3 or not icon.strip():
-            icon = "󰣇"
-
-        apps = self._get_pinned_apps()
-        app_id = f"custom_{len(apps) + 1}"
-        apps[app_id] = {
-            "name": name.strip(),
-            "cmd": cmd.strip(),
-            "icon": icon.strip(),
-            "enabled": True
-        }
-
-        try:
-            with open(self.CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(apps, f, indent=2, ensure_ascii=False)
-            self._reload_pinned_buttons()
-        except Exception as e:
-            QMessageBox.critical(self, "Błąd", f"Nie udało się zapisać aplikacji: {e}")
-
-    def contextMenuEvent(self, event):
-        menu = QMenu(self)
-        action_pin = menu.addAction("📌  Przypnij nową aplikację...")
-        action_pin.triggered.connect(self._prompt_add_pin)
-
-        action_settings = menu.addAction("🎨  Ustawienia OKay DE...")
-        action_settings.triggered.connect(lambda: subprocess.Popen(["okay-settings"]))
-
-        menu.addSeparator()
-        action_reload = menu.addAction("🔄  Odśwież pasek zadań")
-        action_reload.triggered.connect(lambda: self._on_config_changed(self.CONFIG_FILE))
-
-        menu.exec(event.globalPos())
+    def _toggle_kickoff(self):
+        if self.kickoff_menu.isVisible():
+            self.kickoff_menu.close()
+        else:
+            pos = self.btn_start.mapToGlobal(QPoint(0, 0))
+            self.kickoff_menu.show_above(pos)
 
     def reposition(self):
         screen = QApplication.primaryScreen()
-        h = 40
+        h = 44
         w = 1280
         x = 0
         y = 760
@@ -540,6 +834,9 @@ def main():
     app.setApplicationName("okay-dock")
     app.setDesktopFileName("okay-dock")
     app.setStyleSheet(DOCK_QSS)
+
+    # Ustawienie domyślnych motywów ikon systemowych
+    QIcon.setThemeName("Papirus-Dark")
 
     dock = OkayDock()
     dock.show()

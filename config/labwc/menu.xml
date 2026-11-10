@@ -14,7 +14,7 @@
       <action name="Execute" command="fuzzel" />
     </item>
     <item label="Ustawienia OKay">
-      <action name="Execute" command="okay-settings" />
+      <action name="Execute" command="sh -c 'if [ -x &quot;$HOME/.local/bin/okay-settings&quot; ]; then exec &quot;$HOME/.local/bin/okay-settings&quot;; else exec okay-settings; fi'" />
     </item>
 
     <separator />

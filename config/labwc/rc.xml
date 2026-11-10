@@ -2,7 +2,7 @@
 <labwc_config>
   <core>
     <gap>6</gap>
-    <margin bottom="40" />
+    <margin bottom="44" />
   </core>
 
   <!-- Kafelkowanie okien przy przeciąganiu myszą do krawędzi ekranu -->
@@ -76,7 +76,7 @@
 
     <!-- Centrum sterowania / Ustawienia: Super + I -->
     <keybind key="W-i">
-      <action name="Execute" command="okay-settings" />
+      <action name="Execute" command="sh -c 'if [ -x &quot;$HOME/.local/bin/okay-settings&quot; ]; then exec &quot;$HOME/.local/bin/okay-settings&quot;; else exec okay-settings; fi'" />
     </keybind>
 
     <!-- Menedżer plików: Super + E -->
