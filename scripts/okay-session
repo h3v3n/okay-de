@@ -1,0 +1,17 @@
+#!/bin/sh
+
+# OKay DE - Główny skrypt startowy sesji środowiska graficznego
+export XDG_CURRENT_DESKTOP=OKay:labwc
+export XDG_SESSION_DESKTOP=OKay
+export XDG_SESSION_TYPE=wayland
+
+# Integracja zestawów narzędzi (toolkitów) z Wayland
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM="wayland;xcb"
+export GDK_BACKEND="wayland,x11,*"
+export SDL_VIDEODRIVER=wayland
+export CLUTTER_BACKEND=wayland
+export _JAVA_AWT_WM_NONREPARENTING=1
+
+# Uruchomienie kompozytora labwc
+exec labwc

@@ -1,0 +1,160 @@
+* {
+    border: none;
+    border-radius: 0;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+    min-height: 0;
+}
+
+window#waybar {
+    background-color: #11111b;
+    color: #cdd6f4;
+    border-bottom: 2px solid #313244;
+}
+
+#custom-launcher {
+    padding: 0 14px;
+    background-color: #89b4fa;
+    color: #11111b;
+    font-weight: bold;
+}
+
+#taskbar button {
+    padding: 0 10px;
+    color: #a6adc8;
+    background: transparent;
+    border-bottom: 2px solid transparent;
+}
+
+#taskbar button:hover {
+    background: #1e1e2e;
+    color: #cdd6f4;
+}
+
+#taskbar button.active {
+    color: #89b4fa;
+    border-bottom: 2px solid #89b4fa;
+    background: #1e1e2e;
+}
+
+#clock {
+    padding: 0 12px;
+    font-weight: bold;
+    color: #cdd6f4;
+}
+
+#pulseaudio,
+#network,
+#memory,
+#battery,
+#tray {
+    padding: 0 10px;
+    color: #cdd6f4;
+}
+
+#memory {
+    color: #a6e3a1;
+}
+
+#network {
+    color: #89dceb;
+}
+
+#pulseaudio {
+    color: #f9e2af;
+}
+
+#battery {
+    color: #cdd6f4;
+}
+
+#battery.charging,
+#battery.plugged {
+    color: #a6e3a1;
+}
+
+#battery.warning:not(.charging) {
+    color: #fab387;
+}
+
+#battery.critical:not(.charging) {
+    color: #f38ba8;
+}
+
+#tray {
+    padding: 0 8px;
+}
+
+#custom-power {
+    padding: 0 12px;
+    color: #f38ba8;
+    font-size: 14px;
+}
+
+#custom-power:hover {
+    background-color: #f38ba8;
+    color: #11111b;
+}
+
+tooltip {
+    background: #1e1e2e;
+    border: 1px solid #89b4fa;
+    border-radius: 8px;
+}
+
+tooltip label {
+    color: #cdd6f4;
+    padding: 4px 8px;
+}
+
+
+#network {
+    color: #89dceb;
+}
+
+#pulseaudio {
+    color: #f9e2af;
+}
+
+#battery {
+    color: #cdd6f4;
+}
+
+#battery.charging,
+#battery.plugged {
+    color: #a6e3a1;
+}
+
+#battery.warning:not(.charging) {
+    color: #fab387;
+}
+
+#battery.critical:not(.charging) {
+    color: #f38ba8;
+}
+
+#tray {
+    padding: 0 8px;
+}
+
+#custom-power {
+    padding: 0 12px;
+    color: #f38ba8;
+    font-size: 14px;
+}
+
+#custom-power:hover {
+    background-color: #f38ba8;
+    color: #11111b;
+}
+
+tooltip {
+    background: #1e1e2e;
+    border: 1px solid #89b4fa;
+    border-radius: 8px;
+}
+
+tooltip label {
+    color: #cdd6f4;
+    padding: 4px 8px;
+}

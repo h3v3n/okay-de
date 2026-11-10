@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+# OKay DE - Menedżer historii schowka oparty o cliphist i fuzzel
+set -euo pipefail
+
+if ! command -v cliphist >/dev/null 2>&1; then
+    exit 1
+fi
+
+chosen=$(cliphist list | fuzzel --dmenu -p "Schowek: " --lines 10 --width 45 || true)
+
+if [ -n "$chosen" ]; then
+    printf "%s" "$chosen" | cliphist decode | wl-copy
+fi

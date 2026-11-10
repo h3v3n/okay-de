@@ -1,0 +1,28 @@
+#!/bin/sh
+
+# OKay DE - Skrypt autostartu sesji kompozytora labwc
+
+# 1. Agent uwierzytelniania Polkit (gnome)
+if [ -x /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 ]; then
+    /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 &
+elif [ -x /usr/libexec/polkit-gnome-authentication-agent-1 ]; then
+    /usr/libexec/polkit-gnome-authentication-agent-1 &
+fi
+
+# 2. Demon powiadomień
+mako &
+
+# 3. Pasek statusu Waybar
+waybar &
+
+# 4. Tło pulpitu (jednolite ciemne tło #181825)
+swaybg -c "#181825" &
+
+# 5. Menedżer schowka (wl-clipboard + cliphist: obsługa tekstu oraz obrazów)
+wl-paste --watch cliphist store &
+wl-paste --type image --watch cliphist store &
+
+# 6. Zarządca zasobów OKsavi (cgroups v2 + zRAM)
+if command -v oksavi-ghost-runner >/dev/null 2>&1; then
+    oksavi-ghost-runner --start &
+fi

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+  <menu id="root-menu" label="OKay DE">
+    <item label="Terminal">
+      <action name="Execute" command="foot" />
+    </item>
+    <item label="Menedżer plików">
+      <action name="Execute" command="pcmanfm" />
+    </item>
+    <item label="Wyszukiwarka">
+      <action name="Execute" command="fuzzel" />
+    </item>
+
+    <separator />
+
+    <menu id="tools-menu" label="Narzędzia">
+      <item label="Zrzut ekranu">
+        <action name="Execute" command="okay-screenshot" />
+      </item>
+      <item label="Monitor procesów">
+        <action name="Execute" command="foot -e htop" />
+      </item>
+    </menu>
+
+    <separator />
+
+    <item label="Przeładuj konfigurację">
+      <action name="Reconfigure" />
+    </item>
+    <item label="Wyjście / Zasilanie">
+      <action name="Execute" command="okay-powermenu" />
+    </item>
+  </menu>
+</openbox_menu>

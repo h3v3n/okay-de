@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<labwc_config>
+  <core>
+    <gap>6</gap>
+  </core>
+
+  <theme>
+    <font place="MenuItem">
+      <name>JetBrains Mono</name>
+      <size>10</size>
+    </font>
+  </theme>
+
+  <windowRules>
+    <windowRule identifier="fuzzel" serverDecoration="no" />
+    <windowRule identifier="pcmanfm" serverDecoration="no" />
+  </windowRules>
+
+  <mouse>
+    <default />
+    <!-- Menu kontekstowe pod prawym przyciskiem myszy na pulpicie -->
+    <context name="Root">
+      <mousebind button="Right" action="Press">
+        <action name="ShowMenu" menu="root-menu" />
+      </mousebind>
+    </context>
+  </mouse>
+
+  <keyboard>
+    <default />
+
+    <!-- Terminal: Super + Return -->
+    <keybind key="W-Return">
+      <action name="Execute" command="foot" />
+    </keybind>
+
+    <!-- Launcher aplikacji: Super + Spacja -->
+    <keybind key="W-space">
+      <action name="Execute" command="fuzzel" />
+    </keybind>
+
+    <!-- Menedżer plików: Super + E -->
+    <keybind key="W-e">
+      <action name="Execute" command="pcmanfm" />
+    </keybind>
+
+    <!-- Historia schowka: Super + V -->
+    <keybind key="W-v">
+      <action name="Execute" command="okay-clipboard" />
+    </keybind>
+
+    <!-- Zamknięcie aktywnego okna: Super + Q -->
+    <keybind key="W-q">
+      <action name="Close" />
+    </keybind>
+
+    <!-- Menu zasilania / Powermenu: Super + Shift + E -->
+    <keybind key="W-S-e">
+      <action name="Execute" command="okay-powermenu" />
+    </keybind>
+
+    <!-- Zrzut ekranu zaznaczonego obszaru: PrintScreen -->
+    <keybind key="Print">
+      <action name="Execute" command="okay-screenshot" />
+    </keybind>
+
+    <!-- Klawisze multimedialne: Regulacja głośności przez wpctl (PipeWire) -->
+    <keybind key="XF86AudioRaiseVolume">
+      <action name="Execute" command="wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+" />
+    </keybind>
+    <keybind key="XF86AudioLowerVolume">
+      <action name="Execute" command="wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-" />
+    </keybind>
+    <keybind key="XF86AudioMute">
+      <action name="Execute" command="wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" />
+    </keybind>
+
+    <!-- Klawisze jasności ekranu: brightnessctl -->
+    <keybind key="XF86MonBrightnessUp">
+      <action name="Execute" command="brightnessctl set +5%" />
+    </keybind>
+    <keybind key="XF86MonBrightnessDown">
+      <action name="Execute" command="brightnessctl set 5%-" />
+    </keybind>
+  </keyboard>
+</labwc_config>

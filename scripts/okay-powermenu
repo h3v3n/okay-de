@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+# OKay DE - Skrypt menu zasilania (Powermenu) oparty o fuzzel
+# Wyświetla minimalistyczne menu zarządzania sesją i zasilaniem.
+
+set -euo pipefail
+
+LOCK="  Zablokuj"
+LOGOUT="󰗽  Wyloguj"
+REBOOT="󰑓  Uruchom ponownie"
+SHUTDOWN="  Wyłącz"
+
+# Wywołanie fuzzel dmenu (anulowanie klawiszem ESC nie przerywa skryptu błędem)
+CHOICE=$(printf "%s\n%s\n%s\n%s\n" "$LOCK" "$LOGOUT" "$REBOOT" "$SHUTDOWN" | fuzzel --dmenu -p "Zasilanie: " --lines 4 --width 20 || true)
+
+case "$CHOICE" in
+    *"Zablokuj"*)
+        if command -v swaylock >/dev/null 2>&1; then
+            swaylock -f -c 11111b
+        else
+            loginctl lock-session
+        fi
+        ;;
+    *"Wyloguj"*)
+        # Bezpieczne zakończenie procesu kompozytora labwc
+        pkill -TERM -u "$USER" -x labwc || killall labwc
+        ;;
+    *"Uruchom ponownie"*)
+        systemctl reboot
+        ;;
+    *"Wyłącz"*)
+        systemctl poweroff
+        ;;
+    *)
+        exit 0
+        ;;
+esac
