@@ -15,11 +15,17 @@ mako &
 # 3. Pływający dock Waybar
 waybar &
 
-# 4. Interaktywny pulpit z ikonami i tapetą (PCManFM)
-if command -v pcmanfm >/dev/null 2>&1; then
-    pcmanfm --desktop &
-elif command -v swaybg >/dev/null 2>&1; then
-    swaybg -c "#181825" &
+# 4. Tapeta i tło pulpitu (swaybg z kolorem bazowym i tapetą)
+# Sprawdzenie w kolejności: tapeta użytkownika -> tapeta systemowa -> kolor awaryjny
+WALLPAPER_USER="$HOME/.config/okay-de/wallpaper.png"
+WALLPAPER_SYSTEM="/usr/share/backgrounds/okay-de/default.png"
+
+if [ -f "$WALLPAPER_USER" ]; then
+    swaybg -c "#1e1e2e" -i "$WALLPAPER_USER" -m fill &
+elif [ -f "$WALLPAPER_SYSTEM" ]; then
+    swaybg -c "#1e1e2e" -i "$WALLPAPER_SYSTEM" -m fill &
+else
+    swaybg -c "#1e1e2e" &
 fi
 
 # 5. Menedżer schowka (wl-clipboard + cliphist: obsługa tekstu oraz obrazów)

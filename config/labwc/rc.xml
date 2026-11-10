@@ -15,16 +15,17 @@
 
   <theme>
     <cornerRadius>8</cornerRadius>
-    <titlebar>
-      <layout>Title:Iconify,Maximize,Close</layout>
-    </titlebar>
+    <titlebar layout="Title:Iconify,Maximize,Close" />
     <font place="MenuItem">
       <name>JetBrains Mono</name>
       <size>10</size>
     </font>
   </theme>
 
+  <!-- Reguły okien: wymuszenie Server-Side Decorations (SSD) dla wszystkich aplikacji XDG-Shell -->
   <windowRules>
+    <windowRule identifier="*" serverDecoration="yes" />
+    <windowRule identifier="waybar" serverDecoration="no" />
     <windowRule identifier="fuzzel" serverDecoration="no" />
     <windowRule identifier="pcmanfm" type="desktop" serverDecoration="no" />
   </windowRules>
@@ -32,7 +33,9 @@
   <mouse>
     <default />
     <!-- Menu kontekstowe pod prawym przyciskiem myszy na pulpicie -->
+    <!-- Nadpisanie domyślnego zachowania labwc: lewy przycisk na pulpicie NIE otwiera menu -->
     <context name="Root">
+      <mousebind button="Left" action="Press" />
       <mousebind button="Right" action="Press">
         <action name="ShowMenu" menu="root-menu" />
       </mousebind>

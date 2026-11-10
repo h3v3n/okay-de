@@ -33,12 +33,17 @@ install:
 	install -m 644 sessions/pcmanfm.desktop $(DESTDIR)/etc/skel/Desktop/pcmanfm.desktop
 	install -m 644 sessions/okay-settings.desktop $(DESTDIR)/etc/skel/Desktop/okay-settings.desktop
 
-	# Domyślne konfiguracje systemowe XDG
+	# Domyślna tapeta Catppuccin Mocha
+	install -d $(DESTDIR)$(PREFIX)/share/backgrounds/okay-de
+	install -m 644 backgrounds/default.png $(DESTDIR)$(PREFIX)/share/backgrounds/okay-de/default.png
+
+	# Domyślne konfiguracje systemowe XDG i maski przycisków XBM
 	install -d $(DESTDIR)/etc/xdg/labwc
 	install -m 644 config/labwc/rc.xml $(DESTDIR)/etc/xdg/labwc/rc.xml
 	install -m 644 config/labwc/menu.xml $(DESTDIR)/etc/xdg/labwc/menu.xml
 	install -m 644 config/labwc/themerc $(DESTDIR)/etc/xdg/labwc/themerc
 	install -m 644 config/labwc/themerc-override $(DESTDIR)/etc/xdg/labwc/themerc-override
+	install -m 644 config/labwc/*.xbm $(DESTDIR)/etc/xdg/labwc/
 	install -m 755 config/labwc/autostart $(DESTDIR)/etc/xdg/labwc/autostart
 
 	install -d $(DESTDIR)/etc/xdg/waybar
@@ -61,6 +66,10 @@ install:
 	install -d $(DESTDIR)/etc/xdg/gtk-4.0
 	install -m 644 config/gtk-4.0/settings.ini $(DESTDIR)/etc/xdg/gtk-4.0/settings.ini
 
+	install -d $(DESTDIR)/etc/xdg/pcmanfm/default
+	install -m 644 config/pcmanfm/default/desktop-items-0.conf $(DESTDIR)/etc/xdg/pcmanfm/default/desktop-items-0.conf
+	install -m 644 config/pcmanfm/default/pcmanfm.conf $(DESTDIR)/etc/xdg/pcmanfm/default/pcmanfm.conf
+
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-session
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-settings
@@ -75,6 +84,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/okay-settings.desktop
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/foot.desktop
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/pcmanfm.desktop
+	rm -rf $(DESTDIR)$(PREFIX)/share/backgrounds/okay-de
 	rm -rf $(DESTDIR)/etc/skel/Desktop
 	rm -rf $(DESTDIR)/etc/xdg/labwc
 	rm -rf $(DESTDIR)/etc/xdg/waybar
@@ -83,5 +93,6 @@ uninstall:
 	rm -rf $(DESTDIR)/etc/xdg/mako
 	rm -f $(DESTDIR)/etc/xdg/gtk-3.0/settings.ini
 	rm -f $(DESTDIR)/etc/xdg/gtk-4.0/settings.ini
+	rm -rf $(DESTDIR)/etc/xdg/pcmanfm
 
 .PHONY: all install uninstall

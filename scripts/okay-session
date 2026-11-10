@@ -17,6 +17,11 @@ export SDL_VIDEODRIVER=wayland
 export CLUTTER_BACKEND=wayland
 export _JAVA_AWT_WM_NONREPARENTING=1
 
+# Wymuszenie architektury Server-Side Decorations (SSD) - wyłączenie CSD w aplikacjach
+export GTK_CSD=0
+export QT_WAYLAND_DISABLE_WINDOWDECORATION=0
+export QT_QPA_PLATFORMTHEME="qt6ct"
+
 # Inicjalizacja standardowych katalogów użytkownika XDG oraz pulpitu
 command -v xdg-user-dirs-update >/dev/null 2>&1 && xdg-user-dirs-update
 mkdir -p "$HOME/Desktop"

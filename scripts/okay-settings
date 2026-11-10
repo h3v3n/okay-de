@@ -151,15 +151,14 @@ class ConfigManager:
                     "--wallpaper-mode=crop"
                 ], check=False)
 
-            # 2. Obsługa fallbacku dla instalacji używających swaybg
-            pgrep_swaybg = subprocess.run(["pgrep", "-x", "swaybg"], capture_output=True, text=True, check=False)
-            if pgrep_swaybg.returncode == 0:
-                subprocess.run(["pkill", "-x", "swaybg"], check=False)
-                subprocess.Popen([
-                    "swaybg",
-                    "-i", cls.WALLPAPER_TARGET,
-                    "-m", "fill"
-                ])
+            # 2. Przeładowanie tapety w swaybg
+            subprocess.run(["pkill", "-x", "swaybg"], check=False)
+            subprocess.Popen([
+                "swaybg",
+                "-c", "#1e1e2e",
+                "-i", cls.WALLPAPER_TARGET,
+                "-m", "fill"
+            ])
             return True
         except Exception as e:
             print(f"Błąd zmiany tapety: {e}", file=sys.stderr)
@@ -255,11 +254,11 @@ class ConfigManager:
                         if line.startswith("#") or ":" not in line:
                             continue
                         k, v = [part.strip() for part in line.split(":", 1)]
-                        if k == "window.active.button.unhover.close.color":
+                        if k in ("window.active.button.unhover.close.color", "window.active.button.close.unpressed.image.color"):
                             colors["close"] = v
-                        elif k == "window.active.button.unhover.max.color":
+                        elif k in ("window.active.button.unhover.max.color", "window.active.button.max.unpressed.image.color"):
                             colors["max"] = v
-                        elif k == "window.active.button.unhover.iconify.color":
+                        elif k in ("window.active.button.unhover.iconify.color", "window.active.button.iconify.unpressed.image.color"):
                             colors["iconify"] = v
             except Exception as e:
                 print(f"Błąd odczytu kolorów przycisków: {e}", file=sys.stderr)
@@ -278,7 +277,8 @@ class ConfigManager:
                 "window.active.button.hover.close.color": hex_color,
                 "window.inactive.button.unhover.close.color": "#45475a",
                 "window.inactive.button.hover.close.color": hex_color,
-                "window.active.button.close.unpressed.image.color": hex_color
+                "window.active.button.close.unpressed.image.color": hex_color,
+                "window.inactive.button.close.unpressed.image.color": "#45475a"
             }
         elif btn_type == "max":
             key_map = {
@@ -286,7 +286,8 @@ class ConfigManager:
                 "window.active.button.hover.max.color": hex_color,
                 "window.inactive.button.unhover.max.color": "#45475a",
                 "window.inactive.button.hover.max.color": hex_color,
-                "window.active.button.max.unpressed.image.color": hex_color
+                "window.active.button.max.unpressed.image.color": hex_color,
+                "window.inactive.button.max.unpressed.image.color": "#45475a"
             }
         elif btn_type == "iconify":
             key_map = {
@@ -294,7 +295,8 @@ class ConfigManager:
                 "window.active.button.hover.iconify.color": hex_color,
                 "window.inactive.button.unhover.iconify.color": "#313244",
                 "window.inactive.button.hover.iconify.color": hex_color,
-                "window.active.button.iconify.unpressed.image.color": hex_color
+                "window.active.button.iconify.unpressed.image.color": hex_color,
+                "window.inactive.button.iconify.unpressed.image.color": "#313244"
             }
         else:
             return False
@@ -311,6 +313,10 @@ class ConfigManager:
                 "# OKay DE - Labwc Theme Override\n",
                 "window.cornerRadius: 8\n",
                 "window.titlebar.layout: Title:Iconify,Maximize,Close\n",
+                "titlebar.height: 30\n",
+                "window.button.width: 14\n",
+                "window.button.height: 14\n",
+                "window.button.spacing: 4\n",
                 "border.width: 2\n",
                 "window.active.border.color: #89b4fa\n",
                 "window.inactive.border.color: #313244\n"

@@ -10,7 +10,7 @@ if [ "$MODE" = "--system" ]; then
         echo "Błąd: Instalacja systemowa wymaga uprawnień roota (sudo)." >&2
         exit 1
     fi
-    echo "Instalowanie OKay DE w całym systemie (/etc/xdg, /usr/bin, /usr/local/bin)..."
+    echo "Instalowanie OKay DE w całym systemie (/etc/xdg, /usr/bin, /usr/local/bin, /usr/share)..."
     make install PREFIX=/usr
 
     # Dodatkowa instalacja okay-settings w /usr/local/bin zgodnie ze specyfikacją
@@ -30,6 +30,11 @@ if [ "$MODE" = "--system" ]; then
     install -m 644 sessions/pcmanfm.desktop /etc/skel/Desktop/pcmanfm.desktop
     install -m 644 sessions/okay-settings.desktop /etc/skel/Desktop/okay-settings.desktop
 
+    # Instalacja domyślnej tapety systemowej
+    echo "Instalowanie domyślnej tapety w /usr/share/backgrounds/okay-de/..."
+    install -d /usr/share/backgrounds/okay-de
+    install -m 644 backgrounds/default.png /usr/share/backgrounds/okay-de/default.png
+
     echo "Instalacja systemowa zakończona sukcesem."
 elif [ "$MODE" = "--user" ]; then
     echo "Instalowanie konfiguracji OKay DE dla bieżącego użytkownika ($HOME/.config)..."
@@ -42,12 +47,13 @@ elif [ "$MODE" = "--user" ]; then
     mkdir -p "$HOME/.config/mako"
     mkdir -p "$HOME/.config/gtk-3.0"
     mkdir -p "$HOME/.config/gtk-4.0"
+    mkdir -p "$HOME/.config/pcmanfm"
     mkdir -p "$HOME/.config/okay-de"
     mkdir -p "$HOME/.local/bin"
     mkdir -p "$HOME/.local/share/applications"
     mkdir -p "$HOME/Desktop"
 
-    # Kopiowanie konfiguracji
+    # Kopiowanie konfiguracji (w tym masek przycisków XBM do labwc)
     cp -r config/labwc/* "$HOME/.config/labwc/"
     cp -r config/waybar/* "$HOME/.config/waybar/"
     cp -r config/foot/* "$HOME/.config/foot/"
@@ -55,6 +61,12 @@ elif [ "$MODE" = "--user" ]; then
     cp -r config/mako/* "$HOME/.config/mako/"
     cp -r config/gtk-3.0/* "$HOME/.config/gtk-3.0/"
     cp -r config/gtk-4.0/* "$HOME/.config/gtk-4.0/"
+
+    # Kopiowanie domyślnej tapety użytkownika jeśli jeszcze nie istnieje
+    if [ ! -f "$HOME/.config/okay-de/wallpaper.png" ]; then
+        echo "Kopiowanie domyślnej tapety do $HOME/.config/okay-de/wallpaper.png..."
+        cp backgrounds/default.png "$HOME/.config/okay-de/wallpaper.png"
+    fi
 
     # Kopiowanie skryptów i aplikacji do ~/.local/bin
     cp scripts/* "$HOME/.local/bin/"
@@ -75,7 +87,7 @@ elif [ "$MODE" = "--user" ]; then
 
     echo "Konfiguracja użytkownika zainstalowana pomyślnie."
     echo "Wymagane pakiety dla OKay Settings: python-gobject, libadwaita, gtk4."
-    echo "Sugerowane pakiety narzędzi: wdisplays, pavucontrol, papirus-icon-theme."
+    echo "Sugerowane pakiety narzędzi: swaybg, waybar, wdisplays, pavucontrol, papirus-icon-theme."
     echo "Upewnij się, że \$HOME/.local/bin znajduje się w Twojej zmiennej PATH."
 else
     echo "Użycie: $0 [--user | --system]"
