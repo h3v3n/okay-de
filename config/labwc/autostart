@@ -2,6 +2,9 @@
 
 # OKay DE - Skrypt autostartu sesji kompozytora labwc
 
+# 0. Zapewnienie pełnej ścieżki PATH dla skryptów środowiska
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+
 # 1. Agent uwierzytelniania Polkit (gnome)
 if [ -x /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 ]; then
     /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 &
@@ -12,8 +15,19 @@ fi
 # 2. Demon powiadomień
 mako &
 
-# 3. Pływający dock OKay Dock (PyQt6)
-(sleep 0.5 && okay-dock) &
+# 3. Pasek zadań OKay Dock (PyQt6)
+(
+    sleep 0.5
+    if command -v okay-dock >/dev/null 2>&1; then
+        okay-dock
+    elif [ -x "$HOME/.local/bin/okay-dock" ]; then
+        "$HOME/.local/bin/okay-dock"
+    elif [ -x /usr/bin/okay-dock ]; then
+        /usr/bin/okay-dock
+    elif [ -x /usr/local/bin/okay-dock ]; then
+        /usr/local/bin/okay-dock
+    fi
+) &
 
 # 4. Tapeta i tło pulpitu (swaybg z kolorem bazowym i tapetą)
 # Sprawdzenie w kolejności: tapeta użytkownika -> tapeta systemowa -> kolor awaryjny

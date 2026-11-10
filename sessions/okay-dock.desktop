@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=OKay Dock
+GenericName=Pasek Zadań
+Comment=Natywny pasek zadań i dock dla OKay DE
+Exec=okay-dock
+Icon=user-desktop
+Terminal=false
+Type=Application
+Categories=System;Utility;
+StartupNotify=false
+NoDisplay=true

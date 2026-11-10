@@ -13,13 +13,19 @@ if [ "$MODE" = "--system" ]; then
     echo "Instalowanie OKay DE w całym systemie (/etc/xdg, /usr/bin, /usr/local/bin, /usr/share)..."
     make install PREFIX=/usr
 
-    # Dodatkowa instalacja okay-settings w /usr/local/bin zgodnie ze specyfikacją
+    # Dodatkowa instalacja okay-settings i okay-dock w /usr/local/bin
     install -d /usr/local/bin
     install -m 755 scripts/okay-settings /usr/local/bin/okay-settings
+    install -m 755 scripts/okay-dock /usr/local/bin/okay-dock
+
+    # Usunięcie pozostałości starego Waybara i wyczyszczenie procesów
+    rm -rf /etc/xdg/waybar 2>/dev/null || true
+    pkill -x waybar 2>/dev/null || true
 
     # Rejestracja plików .desktop w /usr/share/applications
     install -d /usr/share/applications
     install -m 644 sessions/okay-settings.desktop /usr/share/applications/okay-settings.desktop
+    install -m 644 sessions/okay-dock.desktop /usr/share/applications/okay-dock.desktop
     install -m 644 sessions/foot.desktop /usr/share/applications/foot.desktop
     install -m 644 sessions/pcmanfm.desktop /usr/share/applications/pcmanfm.desktop
 
@@ -83,8 +89,13 @@ elif [ "$MODE" = "--user" ]; then
 
     # Kopiowanie wpisów .desktop
     cp sessions/okay-settings.desktop "$HOME/.local/share/applications/"
+    cp sessions/okay-dock.desktop "$HOME/.local/share/applications/"
     cp sessions/foot.desktop "$HOME/.local/share/applications/"
     cp sessions/pcmanfm.desktop "$HOME/.local/share/applications/"
+
+    # Usunięcie starej konfiguracji waybar i wyczyszczenie procesu
+    rm -rf "$HOME/.config/waybar" 2>/dev/null || true
+    pkill -x waybar 2>/dev/null || true
 
     # Inicjalizacja domyślnych ikon na pulpicie użytkownika
     echo "Kopiowanie domyślnych ikon na pulpit ($HOME/Desktop)..."

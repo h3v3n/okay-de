@@ -15,7 +15,7 @@
 
   <theme>
     <name>OKay</name>
-    <cornerRadius>8</cornerRadius>
+    <cornerRadius>0</cornerRadius>
     <titlebar>
       <layout>:iconify,max,close</layout>
       <showTitle>no</showTitle>
@@ -29,7 +29,14 @@
   <!-- Reguły okien: wymuszenie Server-Side Decorations (SSD) dla wszystkich aplikacji XDG-Shell -->
   <windowRules>
     <windowRule identifier="*" serverDecoration="yes" />
-    <windowRule identifier="okay-dock" serverDecoration="no" skipTaskbar="yes" />
+    <windowRule identifier="okay-dock" serverDecoration="no" skipTaskbar="yes" skipWindowSwitcher="yes">
+      <action name="MoveToEdge" direction="down" />
+      <fixedPosition>yes</fixedPosition>
+    </windowRule>
+    <windowRule title="okay-dock*" serverDecoration="no" skipTaskbar="yes" skipWindowSwitcher="yes">
+      <action name="MoveToEdge" direction="down" />
+      <fixedPosition>yes</fixedPosition>
+    </windowRule>
     <windowRule identifier="fuzzel" serverDecoration="no" />
     <windowRule identifier="pcmanfm" type="desktop" serverDecoration="no" />
   </windowRules>

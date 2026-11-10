@@ -25,6 +25,7 @@ install:
 	# Rejestracja plików .desktop aplikacji
 	install -d $(DESTDIR)$(PREFIX)/share/applications
 	install -m 644 sessions/okay-settings.desktop $(DESTDIR)$(PREFIX)/share/applications/okay-settings.desktop
+	install -m 644 sessions/okay-dock.desktop $(DESTDIR)$(PREFIX)/share/applications/okay-dock.desktop
 	install -m 644 sessions/foot.desktop $(DESTDIR)$(PREFIX)/share/applications/foot.desktop
 	install -m 644 sessions/pcmanfm.desktop $(DESTDIR)$(PREFIX)/share/applications/pcmanfm.desktop
 
@@ -87,6 +88,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/oksavi-ghost-runner
 	rm -f $(DESTDIR)$(PREFIX)/share/wayland-sessions/okay-de.desktop
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/okay-settings.desktop
+	rm -f $(DESTDIR)$(PREFIX)/share/applications/okay-dock.desktop
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/foot.desktop
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/pcmanfm.desktop
 	rm -rf $(DESTDIR)$(PREFIX)/share/backgrounds/okay-de

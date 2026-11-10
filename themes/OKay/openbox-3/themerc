@@ -1,7 +1,7 @@
 # OKay DE - Labwc Theme (Catppuccin Mocha)
 
-# Geometryczne zaokrąglenie okien
-window.cornerRadius: 8
+# Geometryczne zaokrąglenie okien (idealnie ostre narożniki 90 stopni)
+window.cornerRadius: 0
 
 # Układ przycisków paska tytułowego (brak tytułu, 3 spłaszczone prostokąty: min, max, close)
 window.titlebar.layout: :iconify,max,close

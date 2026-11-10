@@ -23,7 +23,7 @@ try:
     from PyQt6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QStackedWidget, QLabel, QPushButton,
-        QComboBox, QFileDialog, QColorDialog, QCheckBox, QFrame,
+        QComboBox, QFileDialog, QCheckBox, QFrame,
         QScrollArea, QMessageBox, QProgressBar, QSizePolicy, QSpacerItem,
         QInputDialog, QButtonGroup
     )
@@ -32,7 +32,7 @@ try:
 except ImportError as err:
     print(
         f"Błąd krytyczny: Brak wymaganych bibliotek PyQt6: {err}\n"
-        "Zainstaluj wymagane pakiety: python-pyqt6 (lub qt6-base i python-pyqt6).",
+        "Zainstaluj wymagany pakiet: python-pyqt6.",
         file=sys.stderr
     )
     if shutil.which("notify-send"):
@@ -193,7 +193,6 @@ class CheckUpdateWorker(QThread):
     def run(self):
         local_sha = UpdateManager.get_local_commit().lower()
         try:
-            # 1. Sprawdzenie przez GitHub API
             req = urllib.request.Request(
                 UpdateManager.API_COMMITS_URL,
                 headers={
@@ -221,7 +220,6 @@ class CheckUpdateWorker(QThread):
                 })
                 return
         except Exception as e:
-            # 2. Fallback przez git ls-remote
             try:
                 res = subprocess.run(
                     ["git", "ls-remote", f"{UpdateManager.GITHUB_URL}.git", "HEAD"],
@@ -317,7 +315,6 @@ class InstallUpdateWorker(QThread):
             if not work_dir or not os.path.exists(work_dir):
                 raise RuntimeError("Nie udało się przygotować katalogu źródłowego aktualizacji.")
 
-            # Instalacja
             self.progress.emit(f"Instalowanie aktualizacji ({self.target_mode})...")
             install_script = os.path.join(work_dir, "install.sh")
             if os.path.exists(install_script):
@@ -334,7 +331,6 @@ class InstallUpdateWorker(QThread):
                 if res.returncode != 0:
                     raise RuntimeError(f"Błąd instalacji profilu: {res.stderr or res.stdout}")
 
-            # Zapis nowego hasha commita
             try:
                 latest_sha = UpdateManager.get_remote_commit_sync()
                 os.makedirs(os.path.dirname(UpdateManager.LOCAL_VERSION_FILE), exist_ok=True)
@@ -344,9 +340,10 @@ class InstallUpdateWorker(QThread):
                 pass
 
             # Przeładowanie kompozytora i paska docka
-            self.progress.emit("Przeładowywanie kompozytora labwc i paska OKay Dock...")
-            subprocess.run(["labwc", "--reconfigure"], check=False)
+            self.progress.emit("Przeładowywanie kompozytora labwc i paska zadań...")
+            subprocess.run(["pkill", "-x", "waybar"], check=False)
             subprocess.run(["pkill", "-x", "okay-dock"], check=False)
+            subprocess.run(["labwc", "--reconfigure"], check=False)
             subprocess.Popen(["okay-dock"])
 
             if shutil.which("notify-send"):
@@ -367,20 +364,12 @@ class InstallUpdateWorker(QThread):
 # ============================================================================
 
 class ConfigManager:
-    """Zarządza konfiguracją wyglądu, tapetą i stylami okien."""
+    """Zarządza konfiguracją wyglądu, tapetą i przypiętymi aplikacjami."""
 
     CONFIG_DIR = os.path.expanduser("~/.config/okay-de")
     LABWC_DIR = os.path.expanduser("~/.config/labwc")
-    THEMERC_OVERRIDE = os.path.join(LABWC_DIR, "themerc-override")
     WALLPAPER_TARGET = os.path.join(CONFIG_DIR, "wallpaper.png")
-    DOCK_STYLE_FILE = os.path.join(CONFIG_DIR, "dock_style")
     PINNED_APPS_FILE = os.path.join(CONFIG_DIR, "pinned_apps.json")
-
-    DEFAULT_BUTTON_COLORS = {
-        "close": "#f38ba8",
-        "max": "#89b4fa",
-        "iconify": "#585b70"
-    }
 
     DEFAULT_PINNED_APPS = {
         "foot": {"name": "Terminal (foot)", "icon": "", "cmd": "foot", "enabled": True},
@@ -406,7 +395,7 @@ class ConfigManager:
 
     @classmethod
     def set_pinned_apps(cls, apps: dict) -> bool:
-        """Zapisuje przypięte aplikacje do konfiguracji docka."""
+        """Zapisuje przypięte aplikacje do pliku konfiguracyjnego docka."""
         cls.ensure_dirs()
         try:
             with open(cls.PINNED_APPS_FILE, "w", encoding="utf-8") as f:
@@ -450,178 +439,6 @@ class ConfigManager:
             print(f"Błąd zmiany tapety: {e}", file=sys.stderr)
             return False
 
-    @classmethod
-    def get_dock_style(cls) -> str:
-        """Zwraca aktualny styl docka ('floating' lub 'full')."""
-        cls.ensure_dirs()
-        if os.path.exists(cls.DOCK_STYLE_FILE):
-            try:
-                with open(cls.DOCK_STYLE_FILE, "r", encoding="utf-8") as f:
-                    return f.read().strip()
-            except Exception:
-                pass
-        return "floating"
-
-    @classmethod
-    def set_dock_style(cls, style: str) -> bool:
-        """Zapisuje styl docka i natychmiast aktualizuje dock."""
-        cls.ensure_dirs()
-        try:
-            with open(cls.DOCK_STYLE_FILE, "w", encoding="utf-8") as f:
-                f.write(style)
-            return True
-        except Exception as e:
-            print(f"Błąd zmiany stylu docka: {e}", file=sys.stderr)
-            return False
-
-    @classmethod
-    def get_button_colors(cls) -> dict:
-        """Odczytuje aktualne kolory przycisków okien z themerc-override."""
-        colors = dict(cls.DEFAULT_BUTTON_COLORS)
-        if os.path.exists(cls.THEMERC_OVERRIDE):
-            try:
-                with open(cls.THEMERC_OVERRIDE, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith("#") or not line:
-                            continue
-                        if ":" in line:
-                            k, v = line.split(":", 1)
-                            k, v = k.strip(), v.strip()
-                            if "button.close.unpressed.image.color" in k or "unhover.close.color" in k:
-                                colors["close"] = v
-                            elif "button.max.unpressed.image.color" in k or "unhover.max.color" in k:
-                                colors["max"] = v
-                            elif "button.iconify.unpressed.image.color" in k or "unhover.iconify.color" in k:
-                                colors["iconify"] = v
-            except Exception:
-                pass
-        return colors
-
-    @classmethod
-    def set_button_color(cls, button_type: str, hex_color: str) -> bool:
-        """Zapisuje nowy kolor przycisku okna i wykonuje labwc --reconfigure."""
-        cls.ensure_dirs()
-        current = cls.get_button_colors()
-        current[button_type] = hex_color
-
-        c_close = current.get("close", cls.DEFAULT_BUTTON_COLORS["close"])
-        c_max = current.get("max", cls.DEFAULT_BUTTON_COLORS["max"])
-        c_min = current.get("iconify", cls.DEFAULT_BUTTON_COLORS["iconify"])
-
-        key_map = {
-            # Oficjalne klucze labwc image.color
-            "window.active.button.close.unpressed.image.color": c_close,
-            "window.active.button.close.hover.image.color": c_close,
-            "window.inactive.button.close.unpressed.image.color": "#45475a",
-            "window.inactive.button.close.hover.image.color": c_close,
-
-            "window.active.button.max.unpressed.image.color": c_max,
-            "window.active.button.max.hover.image.color": c_max,
-            "window.inactive.button.max.unpressed.image.color": "#45475a",
-            "window.inactive.button.max.hover.image.color": c_max,
-
-            "window.active.button.iconify.unpressed.image.color": c_min,
-            "window.active.button.iconify.hover.image.color": c_min,
-            "window.inactive.button.iconify.unpressed.image.color": "#313244",
-            "window.inactive.button.iconify.hover.image.color": c_min,
-
-            # Wymiary - spłaszczone 48x10
-            "window.button.width": "48",
-            "window.button.height": "10",
-            "window.button.spacing": "8",
-            "titlebar.height": "30",
-            "window.titlebar.layout": ":iconify,max,close",
-            "window.titlebar.padding": "4",
-            "window.titlebar.padding.width": "10",
-            "window.titlebar.padding.height": "10",
-            "window.active.label.text.color": "transparent",
-            "window.inactive.label.text.color": "transparent",
-            "window.cornerRadius": "8",
-            "border.width": "2",
-            "window.active.border.color": "#89b4fa",
-            "window.inactive.border.color": "#313244",
-        }
-
-        lines = []
-        if os.path.exists(cls.THEMERC_OVERRIDE):
-            try:
-                with open(cls.THEMERC_OVERRIDE, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-            except Exception:
-                pass
-
-        if not lines:
-            lines = [
-                "# OKay DE - Nakładka motywu kompozytora labwc (Catppuccin Mocha)\n",
-                "window.theme: OKay\n",
-                "window.cornerRadius: 8\n",
-                "window.titlebar.layout: :iconify,max,close\n",
-                "titlebar.height: 30\n",
-                "window.button.width: 48\n",
-                "window.button.height: 10\n",
-                "window.button.spacing: 8\n",
-                "window.titlebar.padding: 4\n",
-                "window.titlebar.padding.width: 10\n",
-                "window.titlebar.padding.height: 10\n",
-                "window.active.label.text.color: transparent\n",
-                "window.inactive.label.text.color: transparent\n",
-                "border.width: 2\n",
-                "window.active.border.color: #89b4fa\n",
-                "window.inactive.border.color: #313244\n"
-            ]
-
-        updated_keys = set()
-        new_lines = []
-        for line in lines:
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#") and ":" in line:
-                key = line.split(":", 1)[0].strip()
-                if key in key_map:
-                    new_lines.append(f"{key}: {key_map[key]}\n")
-                    updated_keys.add(key)
-                    continue
-            new_lines.append(line)
-
-        for k, v in key_map.items():
-            if k not in updated_keys:
-                new_lines.append(f"{k}: {v}\n")
-
-        try:
-            with open(cls.THEMERC_OVERRIDE, "w", encoding="utf-8") as f:
-                f.writelines(new_lines)
-
-            # Aktualizacja plików SVG z nowym kolorem w ~/.config/labwc i motywach
-            svg_targets = [
-                cls.LABWC_DIR,
-                os.path.expanduser("~/.local/share/themes/OKay/labwc"),
-                os.path.expanduser("~/.local/share/themes/OKay/openbox-3")
-            ]
-            svg_colors = {
-                "close.svg": c_close,
-                "close_hover.svg": c_close,
-                "max.svg": c_max,
-                "max_hover.svg": c_max,
-                "max_toggled.svg": c_max,
-                "iconify.svg": c_min,
-                "iconify_hover.svg": c_min
-            }
-            for target_dir in svg_targets:
-                if os.path.exists(target_dir):
-                    for svg_name, svg_col in svg_colors.items():
-                        svg_path = os.path.join(target_dir, svg_name)
-                        try:
-                            with open(svg_path, "w", encoding="utf-8") as sf:
-                                sf.write(f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10">\n  <rect width="48" height="10" rx="2" fill="{svg_col}" />\n</svg>\n')
-                        except Exception:
-                            pass
-
-            subprocess.run(["labwc", "--reconfigure"], check=False)
-            return True
-        except Exception as e:
-            print(f"Błąd zapisu themerc-override: {e}", file=sys.stderr)
-            return False
-
 
 # ============================================================================
 # Komponenty UI PyQt6
@@ -633,11 +450,11 @@ class PreferenceRow(QWidget):
     def __init__(self, title: str, subtitle: str = "", suffix_widget: QWidget = None):
         super().__init__()
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(12)
 
         vbox = QVBoxLayout()
-        vbox.setSpacing(2)
+        vbox.setSpacing(3)
 
         lbl_title = QLabel(title)
         lbl_title.setObjectName("rowTitle")
@@ -677,8 +494,8 @@ class PreferenceCard(QFrame):
         if title or description:
             header_widget = QWidget()
             header_layout = QVBoxLayout(header_widget)
-            header_layout.setContentsMargins(14, 12, 14, 8)
-            header_layout.setSpacing(2)
+            header_layout.setContentsMargins(16, 14, 16, 10)
+            header_layout.setSpacing(3)
 
             if title:
                 lbl_t = QLabel(title)
@@ -693,7 +510,6 @@ class PreferenceCard(QFrame):
 
             self.main_layout.addWidget(header_widget)
 
-            # Linia oddzielająca nagłówek
             sep = QFrame()
             sep.setFrameShape(QFrame.Shape.HLine)
             sep.setObjectName("cardSeparator")
@@ -713,47 +529,6 @@ class PreferenceCard(QFrame):
         self.rows_container.addWidget(row_widget)
 
 
-class ColorPickerButton(QPushButton):
-    """Przycisk z próbnikiem koloru wyświetlający aktualną barwę hex."""
-
-    color_changed = pyqtSignal(str)
-
-    def __init__(self, initial_hex: str, parent=None):
-        super().__init__(parent)
-        self.current_hex = initial_hex
-        self.setFixedSize(72, 30)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._update_style()
-        self.clicked.connect(self._choose_color)
-
-    def _update_style(self):
-        self.setText(self.current_hex.upper())
-        # Kontrast tekstu
-        c = QColor(self.current_hex)
-        luminance = (0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()) / 255
-        text_color = "#11111b" if luminance > 0.5 else "#ffffff"
-        self.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {self.current_hex};
-                color: {text_color};
-                border: 1px solid rgba(255, 255, 255, 0.25);
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 11px;
-            }}
-            QPushButton:hover {{
-                border: 2px solid #ffffff;
-            }}
-        """)
-
-    def _choose_color(self):
-        color = QColorDialog.getColor(QColor(self.current_hex), self, "Wybierz kolor przycisku")
-        if color.isValid():
-            self.current_hex = color.name()
-            self._update_style()
-            self.color_changed.emit(self.current_hex)
-
-
 class ShortcutBadge(QLabel):
     """Odznaka wizualna dla kombinacji skrótów klawiszowych."""
 
@@ -761,6 +536,18 @@ class ShortcutBadge(QLabel):
         super().__init__(key_combo)
         self.setObjectName("shortcutBadge")
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+
+class SidebarButton(QPushButton):
+    """Przycisk nawigacyjny paska bocznego ze stabilnymi wymiarami."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setObjectName("sidebarBtn")
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(44)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
 
 # ============================================================================
@@ -773,13 +560,12 @@ class AppearancePage(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
 
-        # 1. Karta Pulpit i Dock
-        card_desktop = PreferenceCard("Wygląd i Pulpit", "Dostosuj tło pulpitu oraz styl paska zadań OKay Dock.")
+        # 1. Karta Tapeta i Pulpit
+        card_desktop = PreferenceCard("Tapeta i Pulpit", "Dostosuj tło pulpitu oraz grafikę tła dla sesji Wayland.")
 
-        # Tapeta
         btn_wallpaper = QPushButton("Zmień tapetę...")
         btn_wallpaper.setProperty("class", "suggested-btn")
         btn_wallpaper.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -790,68 +576,12 @@ class AppearancePage(QWidget):
             btn_wallpaper
         )
         card_desktop.add_row(self.row_wallpaper)
-
-        # Styl docka
-        self.combo_dock = QComboBox()
-        self.combo_dock.addItems(["Pływająca wyspa", "Pełna belka"])
-        current_style = ConfigManager.get_dock_style()
-        self.combo_dock.setCurrentIndex(1 if current_style == "full" else 0)
-        self.combo_dock.currentIndexChanged.connect(self._dock_style_changed)
-        card_desktop.add_row(PreferenceRow(
-            "Styl Docka",
-            "Wybierz formę wyświetlania dolnego paska zadań",
-            self.combo_dock
-        ))
-
         layout.addWidget(card_desktop)
 
-        # 2. Karta Przyciski okien
-        card_buttons = PreferenceCard(
-            "Przyciski okien (Dekoracje SSD)",
-            "Dostosuj barwy prostokątnych przycisków sterowania oknami labwc."
-        )
-
-        current_colors = ConfigManager.get_button_colors()
-
-        # Przycisk zamykania
-        self.btn_close_color = ColorPickerButton(current_colors.get("close", "#f38ba8"))
-        self.btn_close_color.color_changed.connect(
-            lambda h: ConfigManager.set_button_color("close", h)
-        )
-        card_buttons.add_row(PreferenceRow(
-            "Przycisk zamykania (Close)",
-            "Kolor aktywnego przycisku zamykania okna",
-            self.btn_close_color
-        ))
-
-        # Przycisk maksymalizowania
-        self.btn_max_color = ColorPickerButton(current_colors.get("max", "#89b4fa"))
-        self.btn_max_color.color_changed.connect(
-            lambda h: ConfigManager.set_button_color("max", h)
-        )
-        card_buttons.add_row(PreferenceRow(
-            "Przycisk maksymalizowania (Maximize)",
-            "Kolor aktywnego przycisku powiększania okna",
-            self.btn_max_color
-        ))
-
-        # Przycisk minimalizowania
-        self.btn_min_color = ColorPickerButton(current_colors.get("iconify", "#585b70"))
-        self.btn_min_color.color_changed.connect(
-            lambda h: ConfigManager.set_button_color("iconify", h)
-        )
-        card_buttons.add_row(PreferenceRow(
-            "Przycisk minimalizowania (Iconify)",
-            "Kolor aktywnego przycisku minimalizacji do docka",
-            self.btn_min_color
-        ))
-
-        layout.addWidget(card_buttons)
-
-        # 3. Karta Przypięte aplikacje w docku (Taskbar)
+        # 2. Karta Przypięte aplikacje w pasku zadań (Taskbar)
         card_pinned = PreferenceCard(
-            "Przypięte aplikacje w docku (Taskbar)",
-            "Zarządzaj skrótami do aplikacji stale widocznymi na dolnym pasku zadań."
+            "Przypięte aplikacje w pasku zadań (Taskbar)",
+            "Zarządzaj skrótami do programów stale widocznymi na dolnym pasku zadań OKay Dock."
         )
 
         self.pinned_apps = ConfigManager.get_pinned_apps()
@@ -870,13 +600,13 @@ class AppearancePage(QWidget):
             )
             card_pinned.add_row(row)
 
-        btn_add_pin = QPushButton("+ Przypnij inną aplikację...")
+        btn_add_pin = QPushButton("+ Przypnij nową aplikację...")
         btn_add_pin.setProperty("class", "suggested-btn")
         btn_add_pin.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_add_pin.clicked.connect(self._add_custom_pinned_app)
         card_pinned.add_row(PreferenceRow(
             "Dodaj własny skrót",
-            "Zdefiniuj nowy program do przypięcia na docku",
+            "Zdefiniuj nowy program do przypięcia na pasku zadań",
             btn_add_pin
         ))
 
@@ -894,7 +624,7 @@ class AppearancePage(QWidget):
         name, ok1 = QInputDialog.getText(self, "Przypnij aplikację", "Nazwa aplikacji:")
         if not ok1 or not name.strip():
             return
-        cmd, ok2 = QInputDialog.getText(self, "Przypnij aplikację", f"Polecenie uruchomienia dla '{name}':")
+        cmd, ok2 = QInputDialog.getText(self, "Przypnij aplikację", f"Polecenie dla '{name}':")
         if not ok2 or not cmd.strip():
             return
         icon, ok3 = QInputDialog.getText(self, "Przypnij aplikację", "Symbol ikony (np. 󰅩, , 󰈹):", text="󰣇")
@@ -912,7 +642,7 @@ class AppearancePage(QWidget):
         QMessageBox.information(
             self,
             "OKay DE",
-            f"Aplikacja '{name}' została przypięta do paska zadań!\nPasek zadań OKay Dock został zaktualizowany."
+            f"Aplikacja '{name}' została pomyślnie przypięta do paska zadań!"
         )
 
     def _change_wallpaper(self):
@@ -933,10 +663,6 @@ class AppearancePage(QWidget):
                         f"Ustawiono nową tapetę:\n{os.path.basename(file_path)}"
                     ])
 
-    def _dock_style_changed(self, idx):
-        style = "full" if idx == 1 else "floating"
-        ConfigManager.set_dock_style(style)
-
 
 class SystemPage(QWidget):
     """Moduł: System i Ekran."""
@@ -944,8 +670,8 @@ class SystemPage(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
 
         card = PreferenceCard("Szybkie narzędzia", "Zarządzaj monitorami, rozdzielczością i urządzeniami audio.")
 
@@ -991,7 +717,7 @@ class SystemPage(QWidget):
             QMessageBox.warning(
                 self,
                 "Brak miksera pavucontrol",
-                "Graficzny mikser dźwięku 'pavucontrol' nie jest zainstalowane.\n\n"
+                "Graficzny mikser dźwięku 'pavucontrol' nie jest zainstalowany.\n\n"
                 "Możesz go zainstalować poleceniem:\n"
                 "sudo pacman -S pavucontrol"
             )
@@ -1003,10 +729,9 @@ class PerformancePage(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
 
-        # 1. Ghost Runner
         card_ghost = PreferenceCard(
             "Zarządca zasobów OKsavi (Ghost Runner)",
             "Optymalizacja cgroups v2, priorytetów zadań oraz pamięci kompresowanej zRAM."
@@ -1028,10 +753,9 @@ class PerformancePage(QWidget):
         card_ghost.add_row(self.row_zram)
         layout.addWidget(card_ghost)
 
-        # 2. Konserwacja pamięci
         card_maint = PreferenceCard(
             "Konserwacja pamięci operacyjnej",
-            "Zwalnianie buforów dyskowych i stron stronnicowania."
+            "Zwalnianie buforów dyskowych i stron stronicowania jądra."
         )
 
         btn_flush = QPushButton("Oczyść RAM")
@@ -1039,7 +763,7 @@ class PerformancePage(QWidget):
         btn_flush.clicked.connect(self._flush_ram)
         card_maint.add_row(PreferenceRow(
             "Zwolnij pamięć podręczną (Drop Caches)",
-            "Wymusza zrzut nieużywanych buforów jądra",
+            "Wymusza zrzut nieużywanych buforów systemowych",
             btn_flush
         ))
 
@@ -1077,20 +801,18 @@ class ShortcutsPage(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
 
-        # Okna
         card_wm = PreferenceCard("Zarządzanie oknami i kafelkowanie")
         card_wm.add_row(PreferenceRow("Kafelkowanie do lewej połowy", "", ShortcutBadge("Super + Left")))
         card_wm.add_row(PreferenceRow("Kafelkowanie do prawej połowy", "", ShortcutBadge("Super + Right")))
         card_wm.add_row(PreferenceRow("Maksymalizacja okna", "", ShortcutBadge("Super + Up")))
-        card_wm.add_row(PreferenceRow("Minimalizacja do docka", "", ShortcutBadge("Super + Down")))
+        card_wm.add_row(PreferenceRow("Minimalizacja do paska zadań", "", ShortcutBadge("Super + Down")))
         card_wm.add_row(PreferenceRow("Zamknięcie aktywnego okna", "", ShortcutBadge("Super + Q")))
         card_wm.add_row(PreferenceRow("Przełączanie okien", "", ShortcutBadge("Alt + Tab")))
         layout.addWidget(card_wm)
 
-        # Aplikacje
         card_apps = PreferenceCard("Aplikacje i pulpit")
         card_apps.add_row(PreferenceRow("Emulator terminala (foot)", "", ShortcutBadge("Super + Return")))
         card_apps.add_row(PreferenceRow("Launcher aplikacji (fuzzel)", "", ShortcutBadge("Super + Spacja")))
@@ -1115,10 +837,9 @@ class UpdatesPage(QWidget):
         self.install_worker = None
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
 
-        # 1. Stan aktualizacji
         card_status = PreferenceCard(
             "Stan aktualizacji",
             "Sprawdź dostępność nowszej wersji OKay DE w oficjalnym repozytorium GitHub."
@@ -1132,7 +853,6 @@ class UpdatesPage(QWidget):
             self.lbl_local_ver
         ))
 
-        # Kontrolka sprawdzania
         check_widget = QWidget()
         check_layout = QHBoxLayout(check_widget)
         check_layout.setContentsMargins(0, 0, 0, 0)
@@ -1150,10 +870,8 @@ class UpdatesPage(QWidget):
             check_widget
         )
         card_status.add_row(self.row_check_status)
-
         layout.addWidget(card_status)
 
-        # 2. Dostępne uaktualnienie (ukryte do czasu wykrycia)
         self.card_update = PreferenceCard(
             "Dostępne uaktualnienie",
             "W repozytorium GitHub opublikowano nowsze wydanie środowiska."
@@ -1166,7 +884,6 @@ class UpdatesPage(QWidget):
         self.row_commit_msg = PreferenceRow("Opis zmian", "-")
         self.card_update.add_row(self.row_commit_msg)
 
-        # Tryb instalacji
         self.combo_mode = QComboBox()
         self.combo_mode.addItems([
             "Katalog użytkownika (~/.config, ~/.local)",
@@ -1178,7 +895,6 @@ class UpdatesPage(QWidget):
             self.combo_mode
         ))
 
-        # Przycisk instalacji
         self.btn_install = QPushButton("Zainstaluj teraz")
         self.btn_install.setProperty("class", "suggested-btn")
         self.btn_install.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1267,8 +983,8 @@ class AboutPage(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
 
         card = PreferenceCard("O systemie", "Podstawowe dane o sprzęcie i zainstalowanym oprogramowaniu.")
 
@@ -1278,7 +994,7 @@ class AboutPage(QWidget):
         card.add_row(PreferenceRow("Wersja jądra Linux", SystemHelper.get_kernel_release()))
         card.add_row(PreferenceRow("Procesor (CPU)", SystemHelper.get_cpu_info()))
         card.add_row(PreferenceRow("Pamięć operacyjna", SystemHelper.get_memory_info()))
-        card.add_row(PreferenceRow("Technologia UI", "PyQt6 (Qt 6.x)"))
+        card.add_row(PreferenceRow("Pasek zadań", "OKay Dock (PyQt6)"))
 
         layout.addWidget(card)
         layout.addStretch()
@@ -1302,28 +1018,50 @@ QWidget#sidebarWidget {
     border-right: 1px solid #313244;
 }
 
-QPushButton[class="sidebar-btn"] {
-    background-color: transparent;
-    color: #cdd6f4;
-    border: none;
-    border-radius: 8px;
-    font-size: 13px;
+QLabel#sidebarLogo {
+    color: #89b4fa;
+    font-size: 16px;
+    font-weight: bold;
+    font-family: 'JetBrains Mono', 'Cantarell', sans-serif;
+}
+
+QLabel#sidebarSubtitle {
+    color: #6c7086;
+    font-size: 11px;
     font-weight: 500;
+}
+
+QFrame#sidebarSep {
+    background-color: #313244;
+    color: #313244;
+    height: 1px;
+    border: none;
+    margin: 4px 6px;
+}
+
+QPushButton#sidebarBtn {
+    background-color: transparent;
+    color: #a6adc8;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
     text-align: left;
-    padding-left: 16px;
-    padding-right: 16px;
+    padding-left: 14px;
+    padding-right: 14px;
     height: 44px;
     min-height: 44px;
     max-height: 44px;
-    margin: 0px;
+    margin: 1px 4px;
+    font-family: 'JetBrains Mono', 'Cantarell', 'Noto Sans', sans-serif;
 }
 
-QPushButton[class="sidebar-btn"]:hover {
+QPushButton#sidebarBtn:hover {
     background-color: #313244;
-    color: #ffffff;
+    color: #cdd6f4;
 }
 
-QPushButton[class="sidebar-btn"]:checked {
+QPushButton#sidebarBtn:checked {
     background-color: #89b4fa;
     color: #11111b;
     font-weight: bold;
@@ -1331,10 +1069,11 @@ QPushButton[class="sidebar-btn"]:checked {
 
 /* Karty ustawień */
 QFrame#prefCard {
-    background-color: #1e1e2e;
+    background-color: #181825;
     border: 1px solid #313244;
-    border-radius: 12px;
+    border-radius: 8px;
 }
+
 QFrame#cardSeparator {
     color: #313244;
     background-color: #313244;
@@ -1350,45 +1089,53 @@ QLabel#groupTitle {
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
+
 QLabel#groupDescription {
     color: #a6adc8;
     font-size: 12px;
 }
+
 QLabel#rowTitle {
     color: #cdd6f4;
     font-size: 13px;
     font-weight: 500;
 }
+
 QLabel#rowSubtitle {
     color: #a6adc8;
     font-size: 12px;
 }
+
 QLabel#shortcutBadge, QLabel#versionBadge {
     background-color: #313244;
     color: #89b4fa;
     padding: 4px 10px;
-    border-radius: 6px;
+    border-radius: 4px;
     font-size: 11px;
     font-weight: bold;
+    font-family: 'JetBrains Mono', monospace;
 }
 
-/* Przyciski */
+/* Przyciski standardowe */
 QPushButton {
     background-color: #313244;
     color: #cdd6f4;
     border: 1px solid #45475a;
     border-radius: 6px;
-    padding: 6px 14px;
+    padding: 7px 16px;
     font-size: 12px;
     font-weight: 500;
 }
+
 QPushButton:hover {
     background-color: #45475a;
     border-color: #585b70;
 }
+
 QPushButton:pressed {
     background-color: #585b70;
 }
+
 QPushButton:disabled {
     background-color: #181825;
     color: #585b70;
@@ -1402,12 +1149,15 @@ QPushButton[class="suggested-btn"] {
     border: none;
     font-weight: bold;
 }
+
 QPushButton[class="suggested-btn"]:hover {
     background-color: #b4befe;
 }
+
 QPushButton[class="suggested-btn"]:pressed {
     background-color: #74c7ec;
 }
+
 QPushButton[class="suggested-btn"]:disabled {
     background-color: #45475a;
     color: #a6adc8;
@@ -1419,17 +1169,20 @@ QComboBox {
     color: #cdd6f4;
     border: 1px solid #45475a;
     border-radius: 6px;
-    padding: 5px 12px;
+    padding: 6px 14px;
     font-size: 12px;
     min-width: 140px;
 }
+
 QComboBox:hover {
     border-color: #89b4fa;
 }
+
 QComboBox::drop-down {
     border: none;
-    width: 20px;
+    width: 22px;
 }
+
 QComboBox QAbstractItemView {
     background-color: #1e1e2e;
     color: #cdd6f4;
@@ -1445,6 +1198,7 @@ QScrollArea {
     background-color: transparent;
     border: none;
 }
+
 QScrollBar:vertical {
     border: none;
     background: #181825;
@@ -1452,14 +1206,17 @@ QScrollBar:vertical {
     margin: 0;
     border-radius: 4px;
 }
+
 QScrollBar::handle:vertical {
     background: #45475a;
     min-height: 20px;
     border-radius: 4px;
 }
+
 QScrollBar::handle:vertical:hover {
     background: #585b70;
 }
+
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
 }
@@ -1470,6 +1227,7 @@ QCheckBox {
     font-size: 12px;
     spacing: 8px;
 }
+
 QCheckBox::indicator {
     width: 18px;
     height: 18px;
@@ -1477,9 +1235,11 @@ QCheckBox::indicator {
     border: 1px solid #45475a;
     background-color: #313244;
 }
+
 QCheckBox::indicator:hover {
     border-color: #89b4fa;
 }
+
 QCheckBox::indicator:checked {
     background-color: #89b4fa;
     border-color: #89b4fa;
@@ -1493,10 +1253,9 @@ class OkaySettingsWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Ustawienia OKay DE")
-        self.resize(880, 620)
-        self.setMinimumSize(780, 520)
+        self.resize(900, 620)
+        self.setMinimumSize(800, 520)
 
-        # Widget centralny
         central = QWidget()
         central.setObjectName("centralWidget")
         self.setCentralWidget(central)
@@ -1505,33 +1264,52 @@ class OkaySettingsWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 1. Pasek boczny nawigacji (Sidebar oparty na przyciskach w QVBoxLayout - 100% odporny na błędy nakładania)
+        # 1. Pasek boczny nawigacji (Sidebar)
         self.sidebar_widget = QWidget()
         self.sidebar_widget.setObjectName("sidebarWidget")
-        self.sidebar_widget.setFixedWidth(220)
+        self.sidebar_widget.setFixedWidth(240)
 
         sidebar_layout = QVBoxLayout(self.sidebar_widget)
-        sidebar_layout.setContentsMargins(12, 16, 12, 16)
+        sidebar_layout.setContentsMargins(10, 18, 10, 18)
         sidebar_layout.setSpacing(6)
+
+        # Header w pasku bocznym
+        header_widget = QWidget()
+        header_layout = QVBoxLayout(header_widget)
+        header_layout.setContentsMargins(14, 0, 14, 12)
+        header_layout.setSpacing(2)
+
+        lbl_logo = QLabel("󰒓  OKay Settings")
+        lbl_logo.setObjectName("sidebarLogo")
+        lbl_desc = QLabel("Centrum sterowania OKsavi")
+        lbl_desc.setObjectName("sidebarSubtitle")
+
+        header_layout.addWidget(lbl_logo)
+        header_layout.addWidget(lbl_desc)
+        sidebar_layout.addWidget(header_widget)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setObjectName("sidebarSep")
+        sidebar_layout.addWidget(sep)
+
+        sidebar_layout.addSpacing(6)
 
         self.btn_group = QButtonGroup(self)
         self.btn_group.setExclusive(True)
 
         categories = [
-            ("Wygląd", "🎨"),
-            ("System i Ekran", "🖥️"),
-            ("Wydajność", "⚡"),
-            ("Skróty", "⌨️"),
-            ("Aktualizacje", "🔄"),
-            ("Informacje", "ℹ️")
+            ("󰏘  Wygląd", 0),
+            ("󰍹  System i Ekran", 1),
+            ("󰓅  Wydajność", 2),
+            ("󰌌  Skróty klawiszowe", 3),
+            ("󰑓  Aktualizacje", 4),
+            ("󰋽  O systemie", 5)
         ]
 
         self.sidebar_buttons = []
-        for idx, (label, icon_text) in enumerate(categories):
-            btn = QPushButton(f"{icon_text}  {label}")
-            btn.setProperty("class", "sidebar-btn")
-            btn.setCheckable(True)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        for label, idx in categories:
+            btn = SidebarButton(label)
             self.btn_group.addButton(btn, idx)
             sidebar_layout.addWidget(btn)
             self.sidebar_buttons.append(btn)
@@ -1573,11 +1351,11 @@ class OkaySettingsWindow(QMainWindow):
 
 def main():
     """Główny punkt wejściowy aplikacji OKay Settings."""
-    # Wymuszenie integracji z Wayland
     os.environ.setdefault("QT_QPA_PLATFORM", "wayland;xcb")
 
     app = QApplication(sys.argv)
-    app.setApplicationName("OKay Settings")
+    app.setApplicationName("okay-settings")
+    app.setDesktopFileName("okay-settings")
     app.setStyleSheet(CATPPUCCIN_MOCHA_QSS)
 
     window = OkaySettingsWindow()

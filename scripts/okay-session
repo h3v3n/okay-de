@@ -1,6 +1,7 @@
 #!/bin/sh
 
 # OKay DE - Główny skrypt startowy sesji środowiska graficznego
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 export XDG_CURRENT_DESKTOP=OKay:labwc
 export XDG_SESSION_DESKTOP=OKay
 export XDG_SESSION_TYPE=wayland
