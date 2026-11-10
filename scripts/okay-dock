@@ -4,18 +4,19 @@
 """
 OKay Dock (okay-dock)
 Natywny pasek zadań (Taskbar / Panel) w stylu KDE Plasma dla OKay DE w PyQt6.
-Zawiera:
-- Menu Start a'la KDE Kickoff z wyszukiwarką i kategoriami aplikacji
-- Menedżer zadań z prawdziwymi ikonami systemowymi i wskaźnikiem aktywnych okien
-- Tackę systemową (schowek, zaawansowany aplet głośności)
-- Zegar cyfrowy KDE Digital Clock (czas i data w dwóch wierszach)
-- Przycisk 'Pokaż Pulpit' (Show Desktop)
+Funkcje:
+- Menu Start a'la KDE Kickoff z płynną animacją Fade In/Out i wyszukiwarką na żywo
+- Dynamiczny menedżer zadań:
+  * Zminimalizowane okna NIE znikają z paska zadań
+  * Pod otwartymi i zminimalizowanymi aplikacjami wyświetlana jest mała biała kreska
+  * Kliknięcie aktywnego okna minimalizuje je, a kliknięcie zminimalizowanego przywraca
+- Prawdziwe ikony systemowe (QIcon.fromTheme) z awaryjnym generatorem QPainter
+- Tacka systemowa: schowek, zegar cyfrowy KDE, aplet głośności i przycisk 'Pokaż Pulpit'
 """
 
 import os
 import sys
 import json
-import glob
 import shutil
 import subprocess
 
@@ -23,9 +24,12 @@ try:
     from PyQt6.QtWidgets import (
         QApplication, QWidget, QHBoxLayout, QVBoxLayout, QPushButton,
         QMenu, QInputDialog, QMessageBox, QFrame, QSpacerItem, QSizePolicy,
-        QLabel, QLineEdit, QListWidget, QListWidgetItem, QScrollArea
+        QLabel, QLineEdit, QListWidget, QListWidgetItem, QGraphicsOpacityEffect
     )
-    from PyQt6.QtCore import Qt, QTimer, QSize, QFileSystemWatcher, QDateTime, QPoint, QRect
+    from PyQt6.QtCore import (
+        Qt, QTimer, QSize, QFileSystemWatcher, QDateTime, QPoint,
+        QPropertyAnimation, QEasingCurve
+    )
     from PyQt6.QtGui import QIcon, QPixmap, QColor, QPainter, QFont, QPen, QBrush, QWheelEvent
 except ImportError as err:
     print(
@@ -37,7 +41,7 @@ except ImportError as err:
 
 
 # ============================================================================
-# Generator i Menedżer Ikon Graficznych (System Icons + SVG/Painter Fallback)
+# Generator i Menedżer Ikon Graficznych (System Icons + Painter Fallback)
 # ============================================================================
 
 class IconHelper:
@@ -73,7 +77,7 @@ class IconHelper:
 
     @staticmethod
     def _get_theme_candidates(name_or_cmd: str, fallback_type: str) -> list:
-        key = name_or_cmd.lower()
+        key = name_or_cmd.lower().replace(".desktop", "")
         mapping = {
             "foot": ["utilities-terminal", "terminal", "org.gnome.Terminal", "xterm"],
             "terminal": ["utilities-terminal", "terminal"],
@@ -128,7 +132,7 @@ class IconHelper:
         color_accent = QColor("#89b4fa")
         color_sub = QColor("#cdd6f4")
 
-        if icon_type == "terminal":
+        if icon_type in ["terminal", "foot"]:
             painter.setBrush(QBrush(QColor("#181825")))
             painter.setPen(QPen(color_accent, 2))
             painter.drawRoundedRect(4, 8, 40, 32, 4, 4)
@@ -137,19 +141,19 @@ class IconHelper:
             painter.drawLine(18, 24, 10, 30)
             painter.setPen(QPen(color_sub, 3))
             painter.drawLine(22, 30, 34, 30)
-        elif icon_type == "files":
+        elif icon_type in ["files", "pcmanfm"]:
             painter.setBrush(QBrush(QColor("#fab387")))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(6, 12, 16, 8, 3, 3)
             painter.setBrush(QBrush(QColor("#89b4fa")))
             painter.drawRoundedRect(6, 16, 36, 24, 4, 4)
-        elif icon_type == "settings":
+        elif icon_type in ["settings", "okay-settings"]:
             painter.setPen(QPen(color_accent, 3))
             painter.setBrush(QBrush(QColor("#313244")))
             painter.drawEllipse(12, 12, 24, 24)
             painter.setBrush(QBrush(color_accent))
             painter.drawEllipse(20, 20, 8, 8)
-        elif icon_type == "browser":
+        elif icon_type in ["browser", "firefox"]:
             painter.setPen(QPen(QColor("#89dceb"), 2))
             painter.setBrush(QBrush(QColor("#1e1e2e")))
             painter.drawEllipse(8, 8, 32, 32)
@@ -167,7 +171,6 @@ class IconHelper:
             painter.setBrush(QBrush(color_sub))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRect(8, 18, 8, 12)
-            # Stożek głośnika
             polygon = [QPoint(16, 18), QPoint(26, 10), QPoint(26, 38), QPoint(16, 30)]
             painter.drawPolygon(polygon)
             if "high" in icon_type or "med" in icon_type:
@@ -247,32 +250,45 @@ QPushButton#startBtn:hover {
     color: #11111b;
 }
 
-/* Przyciski aplikacji paska zadań (Icons-Only Task Manager) */
+/* Przyciski zadań w taskbarze (Icons-Only Task Manager) */
 QPushButton.task-btn {
     background-color: transparent;
     border: none;
+    border-bottom: 3px solid transparent;
     border-radius: 4px;
     min-width: 44px;
     max-width: 52px;
     min-height: 38px;
     max-height: 38px;
-    padding: 4px;
+    padding: 3px;
+    margin: 0px 2px;
 }
 
 QPushButton.task-btn:hover {
     background-color: #313244;
 }
 
-/* Wskaźnik aktywnego okna KDE Plasma: niebieska linia na dole */
-QPushButton.task-btn[active="true"] {
-    background-color: #181825;
-    border-bottom: 3px solid #89b4fa;
-    border-bottom-left-radius: 2px;
-    border-bottom-right-radius: 2px;
+/* Aplikacja jest już otwarta (w tle lub zminimalizowana): MAŁA BIAŁA KRESKA POD IKONĄ */
+QPushButton.task-btn[running="true"] {
+    border-bottom: 3px solid #ffffff;
+    border-bottom-left-radius: 1px;
+    border-bottom-right-radius: 1px;
 }
 
-QPushButton.task-btn[running="true"] {
-    border-bottom: 3px solid #585b70;
+/* Aplikacja jest aktualnie aktywna na pierwszym planie */
+QPushButton.task-btn[active="true"] {
+    background-color: #24273a;
+    border-bottom: 3px solid #ffffff;
+    border-bottom-left-radius: 1px;
+    border-bottom-right-radius: 1px;
+}
+
+/* Aplikacja zminimalizowana: pozostaje na pasku z małą białą kreską */
+QPushButton.task-btn[minimized="true"] {
+    background-color: transparent;
+    border-bottom: 3px solid #ffffff;
+    border-bottom-left-radius: 1px;
+    border-bottom-right-radius: 1px;
 }
 
 /* Separator pionowy */
@@ -298,7 +314,7 @@ QLabel#clockDate {
     font-family: 'Cantarell', 'Segoe UI', sans-serif;
 }
 
-/* Przycisk 'Pokaż Pulpit' (prawy brzeg ekranu a'la KDE / Windows) */
+/* Przycisk 'Pokaż Pulpit' (prawy brzeg ekranu) */
 QPushButton#showDesktopBtn {
     background-color: transparent;
     border-left: 1px solid #313244;
@@ -388,16 +404,22 @@ QListWidget#kickoffList::item:selected {
 
 
 # ============================================================================
-# Menu Start a'la KDE Kickoff
+# Menu Start a'la KDE Kickoff z animacją Fade
 # ============================================================================
 
 class KickoffMenu(QWidget):
-    """Eleganckie menu programów a'la KDE Plasma Kickoff z wyszukiwarką."""
+    """Eleganckie menu programów a'la KDE Plasma Kickoff z animacją Fade In/Out."""
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.setObjectName("kickoffWindow")
         self.setFixedSize(400, 480)
+        self.setWindowOpacity(0.0)
+
+        # Animacja Fade
+        self.fade_anim = QPropertyAnimation(self, b"windowOpacity")
+        self.fade_anim.setDuration(160)
+        self.fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(14, 14, 14, 14)
@@ -456,7 +478,6 @@ class KickoffMenu(QWidget):
             {"name": "Zrzut ekranu", "cmd": "okay-screenshot", "icon": "fuzzel", "desc": "Przechwytywanie ekranu"},
         ]
 
-        # Skanowanie /usr/share/applications/ dla popularnych programów (np. firefox)
         if os.path.exists("/usr/share/applications/firefox.desktop") or shutil.which("firefox"):
             self.all_apps.append({"name": "Przeglądarka Firefox", "cmd": "firefox", "icon": "firefox", "desc": "Przeglądarka internetowa"})
 
@@ -486,11 +507,11 @@ class KickoffMenu(QWidget):
         cmd = item.data(Qt.ItemDataRole.UserRole)
         if cmd:
             subprocess.Popen([cmd], shell=True)
-            self.close()
+            self.close_animated()
 
     def _exec_and_close(self, args: list):
         subprocess.Popen(args)
-        self.close()
+        self.close_animated()
 
     def show_above(self, target_pos: QPoint):
         self.search_bar.clear()
@@ -498,36 +519,130 @@ class KickoffMenu(QWidget):
         x = max(0, target_pos.x())
         y = max(0, target_pos.y() - self.height() - 6)
         self.move(x, y)
+        self.setWindowOpacity(0.0)
         self.show()
         self.raise_()
         self.activateWindow()
         self.search_bar.setFocus()
 
+        # Fade in
+        self.fade_anim.stop()
+        self.fade_anim.setStartValue(0.0)
+        self.fade_anim.setEndValue(1.0)
+        self.fade_anim.start()
+
+    def close_animated(self):
+        """Płynny Fade Out przed ukryciem menu."""
+        self.fade_anim.stop()
+        self.fade_anim.setStartValue(self.windowOpacity())
+        self.fade_anim.setEndValue(0.0)
+        try:
+            self.fade_anim.finished.disconnect(self._finish_close)
+        except Exception:
+            pass
+        self.fade_anim.finished.connect(self._finish_close)
+        self.fade_anim.start()
+
+    def _finish_close(self):
+        try:
+            self.fade_anim.finished.disconnect(self._finish_close)
+        except Exception:
+            pass
+        self.hide()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.close_animated()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
 
 # ============================================================================
-# Przyciski Aplikacji i Aplety Tacki Systemowej
+# Przycisk Zadania z małą białą kreską i kontrolą minimalizacji
 # ============================================================================
 
 class TaskButton(QPushButton):
-    """Przycisk zadania z prawdziwą ikoną graficzną a'la KDE Plasma."""
+    """Przycisk zadania z prawdziwą ikoną, małą białą kreską i obsługą minimalizacji."""
 
     def __init__(self, app_id: str, app_info: dict, parent=None):
         super().__init__(parent)
         self.app_id = app_id
         self.app_info = app_info
+        self.is_running = False
+        self.is_active = False
+        self.is_minimized = False
+
         self.setProperty("class", "dock-btn task-btn")
+        self.setProperty("running", "false")
+        self.setProperty("active", "false")
+        self.setProperty("minimized", "false")
+
         self.setIconSize(QSize(24, 24))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(app_info.get("name", app_id))
 
         icon_name = app_info.get("icon_name") or app_info.get("cmd") or app_id
         self.setIcon(IconHelper.get_icon(icon_name, app_id))
-        self.clicked.connect(self._launch)
+        self.clicked.connect(self._handle_click)
 
-    def _launch(self):
+    def set_window_state(self, is_running: bool, is_active: bool = False, is_minimized: bool = False):
+        changed = (
+            self.is_running != is_running or
+            self.is_active != is_active or
+            self.is_minimized != is_minimized
+        )
+        if changed:
+            self.is_running = is_running
+            self.is_active = is_active
+            self.is_minimized = is_minimized
+
+            self.setProperty("running", "true" if is_running else "false")
+            self.setProperty("active", "true" if is_active else "false")
+            self.setProperty("minimized", "true" if is_minimized else "false")
+
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.update()
+
+    def _handle_click(self):
         cmd = self.app_info.get("cmd", self.app_id)
+        app_id_clean = self.app_info.get("app_id") or self.app_id
+
+        # Obsługa aktywacji / minimalizacji przez wlrctl
+        if self.is_running and shutil.which("wlrctl"):
+            if self.is_active:
+                # Okno jest aktywne -> minimalizujemy je (pozostaje na pasku z małą białą kreską!)
+                subprocess.Popen(["wlrctl", "toplevel", "minimize", f"app_id:{app_id_clean}"])
+                self.set_window_state(is_running=True, is_active=False, is_minimized=True)
+            else:
+                # Okno zminimalizowane lub w tle -> przywracamy i skupiamy
+                subprocess.Popen(["wlrctl", "toplevel", "focus", f"app_id:{app_id_clean}"])
+                self.set_window_state(is_running=True, is_active=True, is_minimized=False)
+            return
+
+        # Start nowej instancji
         if cmd:
             subprocess.Popen([cmd], shell=True)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        action_launch = menu.addAction(f"Uruchom nowe okno: {self.app_info.get('name', self.app_id)}")
+        action_launch.triggered.connect(lambda: subprocess.Popen([self.app_info.get("cmd", self.app_id)], shell=True))
+
+        if self.is_running and shutil.which("wlrctl"):
+            menu.addSeparator()
+            if not self.is_minimized:
+                action_min = menu.addAction("Zminimalizuj")
+                action_min.triggered.connect(lambda: subprocess.Popen(["wlrctl", "toplevel", "minimize", f"app_id:{self.app_id}"]))
+            else:
+                action_restore = menu.addAction("Przywróć okno")
+                action_restore.triggered.connect(lambda: subprocess.Popen(["wlrctl", "toplevel", "focus", f"app_id:{self.app_id}"]))
+
+            action_close = menu.addAction("Zamknij")
+            action_close.triggered.connect(lambda: subprocess.Popen(["wlrctl", "toplevel", "close", f"app_id:{self.app_id}"]))
+
+        menu.exec(event.globalPos())
 
 
 class VolumeApplet(QPushButton):
@@ -630,11 +745,14 @@ class OkayDock(QWidget):
             Qt.WindowType.WindowStaysOnTopHint
         )
 
+        self.pinned_buttons = {}
+        self.dynamic_buttons = {}
+
         self._init_ui()
         self._setup_watcher()
         self._setup_timers()
 
-        # Kickoff Menu
+        # Menu Kickoff
         self.kickoff_menu = KickoffMenu()
 
         # Reakcja na zmianę rozdzielczości ekranu oraz synchronizacja po starcie sesji
@@ -677,11 +795,11 @@ class OkayDock(QWidget):
         sep1.setFrameShape(QFrame.Shape.VLine)
         self.layout_dock.addWidget(sep1)
 
-        # 2. Kontener paska zadań (przypięte aplikacje i aktywne zadania)
+        # 2. Kontener paska zadań (przypięte aplikacje i aktywne zadania z białą kreską)
         self.tasks_widget = QWidget()
         self.layout_tasks = QHBoxLayout(self.tasks_widget)
         self.layout_tasks.setContentsMargins(0, 0, 0, 0)
-        self.layout_tasks.setSpacing(4)
+        self.layout_tasks.setSpacing(2)
         self.layout_dock.addWidget(self.tasks_widget)
 
         self._reload_tasks()
@@ -742,13 +860,20 @@ class OkayDock(QWidget):
         root_layout.addWidget(self.container)
 
     def _setup_timers(self):
+        # Aktualizacja zegara co sekundę
         self.timer_clock = QTimer(self)
         self.timer_clock.timeout.connect(self._update_clock)
         self.timer_clock.start(1000)
 
+        # Aktualizacja głośnika co 3 sekundy
         self.timer_vol = QTimer(self)
         self.timer_vol.timeout.connect(self.btn_volume.update_volume)
         self.timer_vol.start(3000)
+
+        # Monitorowanie otwartych i zminimalizowanych okien co 1.2 sekundy
+        self.timer_windows = QTimer(self)
+        self.timer_windows.timeout.connect(self._scan_open_windows)
+        self.timer_windows.start(1200)
 
     def _setup_watcher(self):
         os.makedirs(os.path.dirname(self.CONFIG_FILE), exist_ok=True)
@@ -780,11 +905,116 @@ class OkayDock(QWidget):
             if widget:
                 widget.deleteLater()
 
+        self.pinned_buttons.clear()
+        self.dynamic_buttons.clear()
+
         apps = self._get_pinned_apps()
         for app_id, app_info in apps.items():
             if app_info.get("enabled", False):
                 btn = TaskButton(app_id, app_info)
                 self.layout_tasks.addWidget(btn)
+                self.pinned_buttons[app_id] = btn
+
+        self._scan_open_windows()
+
+    def _scan_open_windows(self):
+        """Skanuje otwarte okna przez wlrctl i procesy systemowe."""
+        open_windows = {}
+        active_app_id = ""
+
+        # 1. Odpytanie wlrctl toplevel list
+        if shutil.which("wlrctl"):
+            try:
+                res = subprocess.run(
+                    ["wlrctl", "toplevel", "list"],
+                    capture_output=True,
+                    text=True,
+                    timeout=0.5,
+                    check=False
+                )
+                if res.returncode == 0:
+                    for line in res.stdout.strip().splitlines():
+                        if ":" in line:
+                            app_id, title = line.split(":", 1)
+                            open_windows[app_id.strip()] = title.strip()
+            except Exception:
+                pass
+
+            # Sprawdzenie aktywnego okna
+            try:
+                for aid in open_windows.keys():
+                    c = subprocess.run(
+                        ["wlrctl", "toplevel", "find", f"app_id:{aid}", "state:active"],
+                        capture_output=True,
+                        timeout=0.3,
+                        check=False
+                    )
+                    if c.returncode == 0:
+                        active_app_id = aid
+                        break
+            except Exception:
+                pass
+
+        # 2. Aktualizacja stanu przypiętych przycisków
+        for app_id, btn in self.pinned_buttons.items():
+            cmd = btn.app_info.get("cmd", app_id)
+            is_open = False
+
+            # Sprawdzenie przez wlrctl
+            for w_id in open_windows.keys():
+                if w_id.lower() in [app_id.lower(), cmd.lower()]:
+                    is_open = True
+                    break
+
+            # Fallback na pgrep
+            if not is_open:
+                clean_cmd = cmd.split()[0]
+                is_open = self._is_process_running(clean_cmd)
+
+            is_active = (app_id.lower() == active_app_id.lower())
+            is_min = (is_open and not is_active)
+            btn.set_window_state(is_running=is_open, is_active=is_active, is_minimized=is_min)
+
+        # 3. Dynamiczne dodawanie nieprzypiętych otwartych okien (np. edytor, gra, terminal)
+        for w_id, w_title in open_windows.items():
+            if w_id.lower() in ["okay-dock", "waybar", "fuzzel"]:
+                continue
+
+            already_in_dock = False
+            for aid, btn in self.pinned_buttons.items():
+                if aid.lower() == w_id.lower() or btn.app_info.get("cmd", "").lower() == w_id.lower():
+                    already_in_dock = True
+                    break
+
+            if not already_in_dock and w_id not in self.dynamic_buttons:
+                dyn_info = {
+                    "name": w_title or w_id,
+                    "app_id": w_id,
+                    "cmd": w_id,
+                    "icon_name": w_id
+                }
+                dyn_btn = TaskButton(w_id, dyn_info)
+                is_active = (w_id == active_app_id)
+                dyn_btn.set_window_state(is_running=True, is_active=is_active, is_minimized=(not is_active))
+                self.layout_tasks.addWidget(dyn_btn)
+                self.dynamic_buttons[w_id] = dyn_btn
+
+        # Usunięcie zamkniętych dynamicznych okien
+        for dyn_id in list(self.dynamic_buttons.keys()):
+            if dyn_id not in open_windows:
+                btn = self.dynamic_buttons.pop(dyn_id)
+                self.layout_tasks.removeWidget(btn)
+                btn.deleteLater()
+
+    @staticmethod
+    def _is_process_running(proc_name: str) -> bool:
+        if not shutil.which("pgrep"):
+            return False
+        try:
+            r = subprocess.run(["pgrep", "-x", proc_name], capture_output=True, timeout=0.3, check=False)
+            return r.returncode == 0
+        except Exception:
+            return False
 
     def _update_clock(self):
         now = QDateTime.currentDateTime()
@@ -804,8 +1034,8 @@ class OkayDock(QWidget):
             ])
 
     def _toggle_kickoff(self):
-        if self.kickoff_menu.isVisible():
-            self.kickoff_menu.close()
+        if self.kickoff_menu.isVisible() and self.kickoff_menu.windowOpacity() > 0.1:
+            self.kickoff_menu.close_animated()
         else:
             pos = self.btn_start.mapToGlobal(QPoint(0, 0))
             self.kickoff_menu.show_above(pos)

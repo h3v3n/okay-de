@@ -112,7 +112,7 @@ elif [ "$MODE" = "--user" ]; then
     fi
 
     echo "Konfiguracja użytkownika zainstalowana pomyślnie."
-    echo "Wymagane pakiety dla OKay Settings i OKay Dock: python-pyqt6, qt6-wayland."
+    echo "Wymagane pakiety dla OKay Settings i OKay Dock: python-pyqt6, qt6-wayland, wlrctl."
     echo "Sugerowane pakiety narzędzi: swaybg, wdisplays, pavucontrol, papirus-icon-theme."
     echo "Upewnij się, że \$HOME/.local/bin znajduje się w Twojej zmiennej PATH."
 
