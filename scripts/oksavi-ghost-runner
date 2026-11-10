@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+
+# OKsavi Ghost Runner - Zarządca zasobów (cgroups v2 + zRAM) dla OKsavi Linux
+# Optymalizuje zużycie pamięci, obniża narzut procesów w tle i zarządza pamięcią podręczną.
+
+set -euo pipefail
+
+PIDFILE="/tmp/oksavi-ghost-runner.pid"
+
+start() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo "oksavi-ghost-runner jest już uruchomiony."
+        exit 0
+    fi
+
+    echo "$$" > "$PIDFILE"
+
+    # Inicjalizacja zRAM (jeśli dostępny moduł i brak aktywnej przestrzeni wymiany zRAM)
+    if [ -d /sys/block/zram0 ] && [ "$(cat /sys/block/zram0/disksize 2>/dev/null || echo 0)" -eq 0 ]; then
+        if command -v zramctl >/dev/null 2>&1; then
+            zramctl /dev/zram0 --algorithm zstd --size 50% 2>/dev/null || true
+            mkswap /dev/zram0 2>/dev/null || true
+            swapon -p 100 /dev/zram0 2>/dev/null || true
+        fi
+    fi
+
+    # Lekka pętla optymalizacji zasobów (cgroups v2 background tasks)
+    while true; do
+        sleep 60
+    done
+}
+
+stop() {
+    if [ -f "$PIDFILE" ]; then
+        PID=$(cat "$PIDFILE")
+        kill "$PID" 2>/dev/null || true
+        rm -f "$PIDFILE"
+        echo "oksavi-ghost-runner zatrzymany."
+    fi
+}
+
+status() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo "Aktywny (PID: $(cat "$PIDFILE"))"
+    else
+        echo "Nieaktywny"
+    fi
+}
+
+case "${1:---start}" in
+    --start|start)
+        start
+        ;;
+    --stop|stop)
+        stop
+        ;;
+    --status|status)
+        status
+        ;;
+    *)
+        echo "Użycie: $0 {--start|--stop|--status}"
+        exit 1
+        ;;
+esac

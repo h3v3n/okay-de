@@ -1,54 +1,67 @@
 {
   "layer": "top",
-  "position": "top",
-  "height": 32,
-  "spacing": 6,
-  "modules-left": ["custom/launcher", "wlr/taskbar"],
-  "modules-center": ["clock"],
-  "modules-right": ["pulseaudio", "network", "memory", "battery", "tray", "custom/power"],
+  "position": "bottom",
+  "height": 42,
+  "spacing": 4,
+
+  "modules-center": [
+    "custom/launcher",
+    "wlr/taskbar",
+    "custom/separator",
+    "custom/clipboard",
+    "pulseaudio",
+    "network",
+    "battery",
+    "clock",
+    "custom/power"
+  ],
 
   "custom/launcher": {
-    "format": "󰣇 OKay",
+    "format": "󰣇",
     "on-click": "fuzzel",
-    "tooltip": false
+    "tooltip-format": "Wyszukiwarka aplikacji"
   },
 
   "wlr/taskbar": {
-    "format": "{icon} {title}",
-    "icon-size": 16,
+    "format": "{icon}",
+    "icon-size": 24,
     "icon-theme": "Papirus-Dark",
+    "all-outputs": false,
     "tooltip-format": "{title}",
-    "on-click": "activate",
-    "on-click-middle": "close",
-    "max-length": 25
+    "on-click": "minimize-raise",
+    "on-click-middle": "close"
   },
 
-  "clock": {
-    "format": "{:%H:%M  %d.%m.%Y}",
-    "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>"
+  "custom/separator": {
+    "format": "│",
+    "tooltip": false
   },
 
-  "memory": {
-    "format": "󰍛 {percentage}%",
-    "interval": 3,
-    "tooltip-format": "Pamięć: {used:0.1f}GiB / {total:0.1f}GiB"
+  "custom/clipboard": {
+    "format": "󰅍",
+    "on-click": "okay-clipboard",
+    "tooltip-format": "Historia schowka"
   },
 
   "pulseaudio": {
     "format": "{icon} {volume}%",
-    "format-muted": "󰝟 Wyciszony",
+    "format-muted": "󰝟",
     "format-icons": {
       "default": ["󰕿", "󰖀", "󰕾"]
     },
-    "on-click": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
-    "on-click-right": "pavucontrol"
+    "on-click": "okay-volume mute",
+    "on-click-right": "pavucontrol",
+    "on-scroll-up": "okay-volume raise",
+    "on-scroll-down": "okay-volume lower",
+    "tooltip-format": "Głośność: {volume}% (Prawy klik: Mikser)"
   },
 
   "network": {
-    "format-wifi": "󰖩 {essid}",
-    "format-ethernet": "󰈀 Sieć",
-    "format-disconnected": "󰖪 Brak sieci",
-    "tooltip-format": "{ifname}: {ipaddr}/{cidr}"
+    "format-wifi": "󰖩",
+    "format-ethernet": "󰈀",
+    "format-disconnected": "󰖪",
+    "on-click": "foot -e nmtui",
+    "tooltip-format": "{essid} ({signalStrength}%)\nIP: {ipaddr}\nKliknij, aby zarządzać połączeniami"
   },
 
   "battery": {
@@ -59,17 +72,18 @@
     "format": "{icon} {capacity}%",
     "format-charging": "󰂄 {capacity}%",
     "format-plugged": "󰚥 {capacity}%",
-    "format-icons": ["󰂃", "󰁺", "󰁼", "󰁾", "󰂀", "󰂂", "󰁹"]
+    "format-icons": ["󰂃", "󰁺", "󰁼", "󰁾", "󰂀", "󰂂", "󰁹"],
+    "tooltip-format": "{timeTo}\nZużycie: {power}W"
   },
 
-  "tray": {
-    "icon-size": 16,
-    "spacing": 8
+  "clock": {
+    "format": "󰥔 {:%H:%M}",
+    "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>"
   },
 
   "custom/power": {
     "format": "",
     "on-click": "okay-powermenu",
-    "tooltip": false
+    "tooltip-format": "Zasilanie i sesja"
   }
 }

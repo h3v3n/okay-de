@@ -15,7 +15,9 @@ CHOICE=$(printf "%s\n%s\n%s\n%s\n" "$LOCK" "$LOGOUT" "$REBOOT" "$SHUTDOWN" | fuz
 
 case "$CHOICE" in
     *"Zablokuj"*)
-        if command -v swaylock >/dev/null 2>&1; then
+        if command -v okay-lock >/dev/null 2>&1; then
+            okay-lock
+        elif command -v swaylock >/dev/null 2>&1; then
             swaylock -f -c 11111b
         else
             loginctl lock-session

@@ -1,5 +1,11 @@
 # OKay DE - Labwc Theme (Catppuccin Mocha)
 
+# Geometryczne zaokrąglenie okien
+window.cornerRadius: 8
+
+# Układ przycisków paska tytułowego
+window.titlebar.layout: Title:Iconify,Maximize,Close
+
 # Obramowania okien
 border.width: 2
 window.active.border.color: #89b4fa
@@ -11,6 +17,28 @@ window.active.title.bg.color: #1e1e2e
 window.inactive.title.bg.color: #181825
 window.active.label.text.color: #cdd6f4
 window.inactive.label.text.color: #6c7086
+
+# Przyciski sterowania oknami (prostokątne klocki)
+# Przycisk zamykania (Close)
+window.active.button.unhover.close.color: #f38ba8
+window.active.button.hover.close.color: #eba0ac
+window.inactive.button.unhover.close.color: #45475a
+window.inactive.button.hover.close.color: #f38ba8
+window.active.button.close.unpressed.image.color: #f38ba8
+
+# Przycisk maksymalizowania (Maximize)
+window.active.button.unhover.max.color: #89b4fa
+window.active.button.hover.max.color: #b4befe
+window.inactive.button.unhover.max.color: #45475a
+window.inactive.button.hover.max.color: #89b4fa
+window.active.button.max.unpressed.image.color: #89b4fa
+
+# Przycisk minimalizowania (Iconify)
+window.active.button.unhover.iconify.color: #585b70
+window.active.button.hover.iconify.color: #6c7086
+window.inactive.button.unhover.iconify.color: #313244
+window.inactive.button.hover.iconify.color: #585b70
+window.active.button.iconify.unpressed.image.color: #585b70
 
 # Menu kontekstowe (menu.xml)
 menu.border.width: 1

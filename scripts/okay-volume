@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+
+# OKay DE - Sterowanie dźwiękiem z powiadomieniem OSD
+set -euo pipefail
+
+if ! command -v wpctl >/dev/null 2>&1; then
+    exit 0
+fi
+
+ACTION="${1:-toggle}"
+
+case "$ACTION" in
+    raise)
+        wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+
+        ;;
+    lower)
+        wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-
+        ;;
+    mute)
+        wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
+        ;;
+    *)
+        echo "Użycie: $0 {raise|lower|mute}" >&2
+        exit 1
+        ;;
+esac
+
+# Odczyt aktualnego poziomu dźwięku i statusu wyciszenia
+VOL_INFO=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null || echo "Volume: 0.0")
+IS_MUTED=$(echo "$VOL_INFO" | grep -o "\[MUTED\]" || true)
+RAW_VOL=$(echo "$VOL_INFO" | awk '{print $2}')
+VOL_PCT=$(awk -v v="$RAW_VOL" 'BEGIN { printf "%d", (v * 100) }')
+
+if [ -n "$IS_MUTED" ]; then
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -h string:x-canonical-private-synchronous:osd \
+                    -h int:value:0 \
+                    -u low -t 1500 "Dźwięk" "Wyciszony 󰝟"
+    fi
+else
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -h string:x-canonical-private-synchronous:osd \
+                    -h int:value:"$VOL_PCT" \
+                    -u low -t 1500 "Głośność: ${VOL_PCT}%" "Poziom dźwięku"
+    fi
+fi

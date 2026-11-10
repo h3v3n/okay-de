@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Terminal
+GenericName=Emulator terminala
+Comment=Szybki emulator terminala Wayland
+Exec=foot
+Icon=utilities-terminal
+Terminal=false
+Type=Application
+Categories=System;TerminalEmulator;
+StartupNotify=true

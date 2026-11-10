@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+
+# OKay DE - Skrypt blokady ekranu (Catppuccin Mocha)
+set -euo pipefail
+
+if ! command -v swaylock >/dev/null 2>&1; then
+    loginctl lock-session
+    exit 0
+fi
+
+# Paleta barw Catppuccin Mocha
+BG="11111b"
+TEXT="cdd6f4"
+ACCENT="89b4fa"
+RING="313244"
+INPUT="a6e3a1"
+FAIL="f38ba8"
+
+exec swaylock \
+    --daemonize \
+    --color "$BG" \
+    --indicator-radius 100 \
+    --indicator-thickness 8 \
+    --inside-color "$BG" \
+    --ring-color "$RING" \
+    --line-color "$BG" \
+    --key-hl-color "$ACCENT" \
+    --bs-hl-color "$FAIL" \
+    --text-color "$TEXT" \
+    --ring-ver-color "$INPUT" \
+    --inside-ver-color "$BG" \
+    --ring-wrong-color "$FAIL" \
+    --inside-wrong-color "$BG" \
+    --ring-clear-color "$ACCENT" \
+    --inside-clear-color "$BG" \
+    --text-clear-color "$TEXT" \
+    --text-wrong-color "$FAIL" \
+    --text-ver-color "$INPUT" \
+    --separator-color "$BG" \
+    --grace 2 \
+    --fade-in 0.2

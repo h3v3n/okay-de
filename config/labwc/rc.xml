@@ -4,7 +4,20 @@
     <gap>6</gap>
   </core>
 
+  <!-- Kafelkowanie okien przy przeciąganiu myszą do krawędzi ekranu -->
+  <snapping>
+    <range>
+      <inner>10</inner>
+      <outer>10</outer>
+      <cornerRange>20</cornerRange>
+    </range>
+  </snapping>
+
   <theme>
+    <cornerRadius>8</cornerRadius>
+    <titlebar>
+      <layout>Title:Iconify,Maximize,Close</layout>
+    </titlebar>
     <font place="MenuItem">
       <name>JetBrains Mono</name>
       <size>10</size>
@@ -13,7 +26,7 @@
 
   <windowRules>
     <windowRule identifier="fuzzel" serverDecoration="no" />
-    <windowRule identifier="pcmanfm" serverDecoration="no" />
+    <windowRule identifier="pcmanfm" type="desktop" serverDecoration="no" />
   </windowRules>
 
   <mouse>
@@ -39,6 +52,16 @@
       <action name="Execute" command="fuzzel" />
     </keybind>
 
+    <!-- Menu główne / podręczne: Super + M -->
+    <keybind key="W-m">
+      <action name="ShowMenu" menu="root-menu" />
+    </keybind>
+
+    <!-- Centrum sterowania / Ustawienia: Super + I -->
+    <keybind key="W-i">
+      <action name="Execute" command="okay-settings" />
+    </keybind>
+
     <!-- Menedżer plików: Super + E -->
     <keybind key="W-e">
       <action name="Execute" command="pcmanfm" />
@@ -49,9 +72,28 @@
       <action name="Execute" command="okay-clipboard" />
     </keybind>
 
+    <!-- Blokada ekranu: Super + L -->
+    <keybind key="W-l">
+      <action name="Execute" command="okay-lock" />
+    </keybind>
+
     <!-- Zamknięcie aktywnego okna: Super + Q -->
     <keybind key="W-q">
       <action name="Close" />
+    </keybind>
+
+    <!-- Zarządzanie oknami i kafelkowanie (Tiling) -->
+    <keybind key="W-Left">
+      <action name="SnapToEdge" direction="left" />
+    </keybind>
+    <keybind key="W-Right">
+      <action name="SnapToEdge" direction="right" />
+    </keybind>
+    <keybind key="W-Up">
+      <action name="ToggleMaximize" />
+    </keybind>
+    <keybind key="W-Down">
+      <action name="Iconify" />
     </keybind>
 
     <!-- Menu zasilania / Powermenu: Super + Shift + E -->
@@ -64,23 +106,23 @@
       <action name="Execute" command="okay-screenshot" />
     </keybind>
 
-    <!-- Klawisze multimedialne: Regulacja głośności przez wpctl (PipeWire) -->
+    <!-- Klawisze multimedialne: Regulacja głośności z OSD (PipeWire / wpctl) -->
     <keybind key="XF86AudioRaiseVolume">
-      <action name="Execute" command="wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+" />
+      <action name="Execute" command="okay-volume raise" />
     </keybind>
     <keybind key="XF86AudioLowerVolume">
-      <action name="Execute" command="wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-" />
+      <action name="Execute" command="okay-volume lower" />
     </keybind>
     <keybind key="XF86AudioMute">
-      <action name="Execute" command="wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" />
+      <action name="Execute" command="okay-volume mute" />
     </keybind>
 
-    <!-- Klawisze jasności ekranu: brightnessctl -->
+    <!-- Klawisze jasności ekranu z OSD (brightnessctl) -->
     <keybind key="XF86MonBrightnessUp">
-      <action name="Execute" command="brightnessctl set +5%" />
+      <action name="Execute" command="okay-brightness up" />
     </keybind>
     <keybind key="XF86MonBrightnessDown">
-      <action name="Execute" command="brightnessctl set 5%-" />
+      <action name="Execute" command="okay-brightness down" />
     </keybind>
   </keyboard>
 </labwc_config>

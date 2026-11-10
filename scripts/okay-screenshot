@@ -5,6 +5,10 @@
 
 set -euo pipefail
 
+if ! command -v grim >/dev/null 2>&1 || ! command -v slurp >/dev/null 2>&1; then
+    exit 0
+fi
+
 DIR="${HOME}/Pictures/Screenshots"
 mkdir -p "$DIR"
 

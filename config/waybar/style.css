@@ -1,3 +1,8 @@
+/* OKay DE - Minimalistyczny pływający dock Waybar (styl macOS / GNOME) */
+
+/* Dynamiczny import stylu docka (zarządzany przez OKay Settings) */
+@import url("dock-style.css");
+
 * {
     border: none;
     border-radius: 0;
@@ -6,155 +11,129 @@
     min-height: 0;
 }
 
-window#waybar {
-    background-color: #11111b;
+/* Wspólny styl dla wszystkich przycisków i apletów w docku */
+#custom-launcher,
+#taskbar button,
+#custom-clipboard,
+#pulseaudio,
+#network,
+#battery,
+#clock,
+#custom-power {
+    padding: 4px 10px;
+    margin: 2px 2px;
+    border-radius: 12px;
     color: #cdd6f4;
-    border-bottom: 2px solid #313244;
+    background: transparent;
+    transition: all 0.2s ease-in-out;
 }
 
+/* Mikrointerakcje po najechaniu myszą (efekt podświetlenia i uniesienia macOS) */
+#custom-launcher:hover,
+#taskbar button:hover,
+#custom-clipboard:hover,
+#pulseaudio:hover,
+#network:hover,
+#battery:hover,
+#clock:hover {
+    background-color: rgba(137, 180, 250, 0.15);
+    color: #89b4fa;
+    transform: translateY(-2px);
+}
+
+/* Ikona launchera aplikacji */
 #custom-launcher {
-    padding: 0 14px;
+    font-size: 16px;
+    color: #89b4fa;
+    padding: 4px 12px;
+}
+
+#custom-launcher:hover {
     background-color: #89b4fa;
     color: #11111b;
-    font-weight: bold;
+}
+
+/* Lista otwartych programów w docku (wlr/taskbar) */
+#taskbar {
+    background: transparent;
+    padding: 0;
 }
 
 #taskbar button {
-    padding: 0 10px;
-    color: #a6adc8;
-    background: transparent;
     border-bottom: 2px solid transparent;
 }
 
-#taskbar button:hover {
-    background: #1e1e2e;
-    color: #cdd6f4;
+/* Wskaźnik aktywnego programu (błękitna kreska pod ikoną) */
+#taskbar button.active {
+    background-color: rgba(137, 180, 250, 0.12);
+    border-bottom: 2px solid #89b4fa;
+    border-radius: 12px 12px 10px 10px;
+    color: #89b4fa;
 }
 
-#taskbar button.active {
-    color: #89b4fa;
-    border-bottom: 2px solid #89b4fa;
-    background: #1e1e2e;
+#taskbar button.minimized {
+    opacity: 0.5;
+}
+
+/* Separator pionowy dzielący aplikacje od apletów systemowych */
+#custom-separator {
+    color: rgba(205, 214, 244, 0.2);
+    padding: 0 4px;
+    font-size: 14px;
+}
+
+/* Stylizacja apletów statusowych */
+#custom-clipboard {
+    color: #bac2de;
+}
+
+#pulseaudio {
+    color: #f9e2af;
+}
+
+#network {
+    color: #89dceb;
+}
+
+#battery {
+    color: #a6e3a1;
+}
+
+#battery.warning:not(.charging) {
+    color: #fab387;
+}
+
+#battery.critical:not(.charging) {
+    color: #f38ba8;
 }
 
 #clock {
-    padding: 0 12px;
+    color: #cdd6f4;
     font-weight: bold;
-    color: #cdd6f4;
 }
 
-#pulseaudio,
-#network,
-#memory,
-#battery,
-#tray {
-    padding: 0 10px;
-    color: #cdd6f4;
-}
-
-#memory {
-    color: #a6e3a1;
-}
-
-#network {
-    color: #89dceb;
-}
-
-#pulseaudio {
-    color: #f9e2af;
-}
-
-#battery {
-    color: #cdd6f4;
-}
-
-#battery.charging,
-#battery.plugged {
-    color: #a6e3a1;
-}
-
-#battery.warning:not(.charging) {
-    color: #fab387;
-}
-
-#battery.critical:not(.charging) {
-    color: #f38ba8;
-}
-
-#tray {
-    padding: 0 8px;
-}
-
+/* Przycisk menu zasilania */
 #custom-power {
-    padding: 0 12px;
     color: #f38ba8;
-    font-size: 14px;
+    padding: 4px 10px;
 }
 
 #custom-power:hover {
     background-color: #f38ba8;
     color: #11111b;
+    transform: translateY(-2px);
 }
 
+/* Chmurki podpowiedzi (Tooltips) */
 tooltip {
-    background: #1e1e2e;
+    background-color: rgba(30, 30, 46, 0.95);
     border: 1px solid #89b4fa;
-    border-radius: 8px;
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
 tooltip label {
     color: #cdd6f4;
-    padding: 4px 8px;
-}
-
-
-#network {
-    color: #89dceb;
-}
-
-#pulseaudio {
-    color: #f9e2af;
-}
-
-#battery {
-    color: #cdd6f4;
-}
-
-#battery.charging,
-#battery.plugged {
-    color: #a6e3a1;
-}
-
-#battery.warning:not(.charging) {
-    color: #fab387;
-}
-
-#battery.critical:not(.charging) {
-    color: #f38ba8;
-}
-
-#tray {
-    padding: 0 8px;
-}
-
-#custom-power {
-    padding: 0 12px;
-    color: #f38ba8;
-    font-size: 14px;
-}
-
-#custom-power:hover {
-    background-color: #f38ba8;
-    color: #11111b;
-}
-
-tooltip {
-    background: #1e1e2e;
-    border: 1px solid #89b4fa;
-    border-radius: 8px;
-}
-
-tooltip label {
-    color: #cdd6f4;
-    padding: 4px 8px;
+    padding: 6px 10px;
+    font-size: 12px;
 }

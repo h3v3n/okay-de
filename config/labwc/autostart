@@ -12,15 +12,21 @@ fi
 # 2. Demon powiadomień
 mako &
 
-# 3. Pasek statusu Waybar
+# 3. Pływający dock Waybar
 waybar &
 
-# 4. Tło pulpitu (jednolite ciemne tło #181825)
-swaybg -c "#181825" &
+# 4. Interaktywny pulpit z ikonami i tapetą (PCManFM)
+if command -v pcmanfm >/dev/null 2>&1; then
+    pcmanfm --desktop &
+elif command -v swaybg >/dev/null 2>&1; then
+    swaybg -c "#181825" &
+fi
 
 # 5. Menedżer schowka (wl-clipboard + cliphist: obsługa tekstu oraz obrazów)
-wl-paste --watch cliphist store &
-wl-paste --type image --watch cliphist store &
+if command -v wl-paste >/dev/null 2>&1 && command -v cliphist >/dev/null 2>&1; then
+    wl-paste --watch cliphist store &
+    wl-paste --type image --watch cliphist store &
+fi
 
 # 6. Zarządca zasobów OKsavi (cgroups v2 + zRAM)
 if command -v oksavi-ghost-runner >/dev/null 2>&1; then

@@ -1,0 +1,797 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+OKay Settings (okay-settings)
+Natywne centrum sterowania środowiska graficznego OKay DE dla dystrybucji OKsavi Linux.
+Stos technologiczny: Python 3, GTK4, Libadwaita.
+"""
+
+import os
+import sys
+import shutil
+import platform
+import subprocess
+
+try:
+    import gi
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Adw", "1")
+    from gi.repository import Gtk, Gdk, Adw, Gio, GLib
+except ImportError as err:
+    print(
+        f"Błąd krytyczny: Brak wymaganych bibliotek GTK/Libadwaita: {err}\n"
+        "Zainstaluj wymagane pakiety: python-gobject, libadwaita, gtk4.",
+        file=sys.stderr
+    )
+    if shutil.which("notify-send"):
+        subprocess.run([
+            "notify-send",
+            "Błąd OKay Settings",
+            "Wymagane pakiety: python-gobject, libadwaita, gtk4",
+            "-u", "critical"
+        ], check=False)
+    sys.exit(1)
+
+
+class SystemHelper:
+    """Klasa narzędziowa do pobierania informacji o sprzęcie i systemie."""
+
+    @staticmethod
+    def get_distro_name() -> str:
+        """Pobiera nazwę dystrybucji z /etc/os-release z fallbackiem na OKsavi Linux."""
+        os_release = "/etc/os-release"
+        if os.path.exists(os_release):
+            try:
+                with open(os_release, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith("PRETTY_NAME="):
+                            return line.split("=", 1)[1].strip().strip('"')
+                        if line.startswith("NAME="):
+                            return line.split("=", 1)[1].strip().strip('"')
+            except Exception:
+                pass
+        return "OKsavi Linux"
+
+    @staticmethod
+    def get_desktop_info() -> str:
+        """Zwraca identyfikator środowiska graficznego."""
+        return "OKay DE (Wayland / labwc)"
+
+    @staticmethod
+    def get_kernel_release() -> str:
+        """Zwraca wersję jądra Linux."""
+        return platform.release()
+
+    @staticmethod
+    def get_cpu_info() -> str:
+        """Odczytuje nazwę procesora z /proc/cpuinfo."""
+        cpuinfo = "/proc/cpuinfo"
+        if os.path.exists(cpuinfo):
+            try:
+                with open(cpuinfo, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if "model name" in line:
+                            return line.split(":", 1)[1].strip()
+                        if "Hardware" in line:
+                            return line.split(":", 1)[1].strip()
+            except Exception:
+                pass
+        return platform.processor() or "Nieznany procesor"
+
+    @staticmethod
+    def get_memory_info() -> str:
+        """Odczytuje całkowitą pamięć RAM z /proc/meminfo."""
+        meminfo = "/proc/meminfo"
+        if os.path.exists(meminfo):
+            try:
+                with open(meminfo, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith("MemTotal:"):
+                            parts = line.split()
+                            kb = int(parts[1])
+                            gb = kb / (1024 * 1024)
+                            return f"{gb:.1f} GiB RAM"
+            except Exception:
+                pass
+        return "Nieznana"
+
+    @staticmethod
+    def get_zram_status() -> str:
+        """Odczytuje stan i statystyki kompresji pamięci zRAM."""
+        zram_disksize = "/sys/block/zram0/disksize"
+        if os.path.exists(zram_disksize):
+            try:
+                with open(zram_disksize, "r", encoding="utf-8") as f:
+                    size_bytes = int(f.read().strip())
+                    if size_bytes > 0:
+                        size_mb = size_bytes / (1024 * 1024)
+                        return f"Aktywny ({size_mb:.0f} MiB przestrzeni kompresowanej zstd)"
+            except Exception:
+                pass
+        return "Nieskonfigurowany lub brak modułu zRAM"
+
+
+class ConfigManager:
+    """Zarządza konfiguracją wyglądu i ustawień użytkownika."""
+
+    CONFIG_DIR = os.path.expanduser("~/.config/okay-de")
+    WAYBAR_DIR = os.path.expanduser("~/.config/waybar")
+    LABWC_DIR = os.path.expanduser("~/.config/labwc")
+    THEMERC_OVERRIDE = os.path.join(LABWC_DIR, "themerc-override")
+    WALLPAPER_TARGET = os.path.join(CONFIG_DIR, "wallpaper.png")
+    DOCK_STYLE_FILE = os.path.join(CONFIG_DIR, "dock_style")
+    DOCK_CSS_TARGET = os.path.join(WAYBAR_DIR, "dock-style.css")
+
+    DEFAULT_BUTTON_COLORS = {
+        "close": "#f38ba8",
+        "max": "#89b4fa",
+        "iconify": "#585b70"
+    }
+
+    @classmethod
+    def ensure_dirs(cls):
+        """Upewnia się, że katalogi konfiguracji istnieją."""
+        os.makedirs(cls.CONFIG_DIR, exist_ok=True)
+        os.makedirs(cls.WAYBAR_DIR, exist_ok=True)
+        os.makedirs(cls.LABWC_DIR, exist_ok=True)
+
+    @classmethod
+    def set_wallpaper(cls, source_path: str) -> bool:
+        """Kopiuje wskazaną tapetę i natychmiast aplikuje w PCManFM oraz swaybg."""
+        cls.ensure_dirs()
+        try:
+            shutil.copyfile(source_path, cls.WALLPAPER_TARGET)
+
+            # 1. Jeśli aktywny jest pulpit PCManFM, aplikujemy tapetę bezpośrednio przez pcmanfm
+            if shutil.which("pcmanfm"):
+                subprocess.run([
+                    "pcmanfm",
+                    f"-w={cls.WALLPAPER_TARGET}",
+                    "--wallpaper-mode=crop"
+                ], check=False)
+
+            # 2. Obsługa fallbacku dla instalacji używających swaybg
+            pgrep_swaybg = subprocess.run(["pgrep", "-x", "swaybg"], capture_output=True, text=True, check=False)
+            if pgrep_swaybg.returncode == 0:
+                subprocess.run(["pkill", "-x", "swaybg"], check=False)
+                subprocess.Popen([
+                    "swaybg",
+                    "-i", cls.WALLPAPER_TARGET,
+                    "-m", "fill"
+                ])
+            return True
+        except Exception as e:
+            print(f"Błąd zmiany tapety: {e}", file=sys.stderr)
+            return False
+
+    @classmethod
+    def get_dock_style(cls) -> str:
+        """Zwraca aktualny styl docka ('floating' lub 'full')."""
+        cls.ensure_dirs()
+        if os.path.exists(cls.DOCK_STYLE_FILE):
+            try:
+                with open(cls.DOCK_STYLE_FILE, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+        return "floating"
+
+    @classmethod
+    def set_dock_style(cls, style: str) -> bool:
+        """Zapisuje styl docka i natychmiast wysyła SIGUSR2 do waybar."""
+        cls.ensure_dirs()
+        try:
+            with open(cls.DOCK_STYLE_FILE, "w", encoding="utf-8") as f:
+                f.write(style)
+
+            # Generowanie pliku stylizacji dock-style.css dla Waybar
+            if style == "full":
+                css_content = (
+                    "/* OKay DE - Styl docka: Pełna belka */\n"
+                    "window#waybar {\n"
+                    "    background-color: #11111b;\n"
+                    "    border-top: 2px solid #313244;\n"
+                    "    box-shadow: none;\n"
+                    "}\n\n"
+                    ".modules-center {\n"
+                    "    background-color: transparent;\n"
+                    "    border: none;\n"
+                    "    border-radius: 0;\n"
+                    "    padding: 0 8px;\n"
+                    "    margin-bottom: 0;\n"
+                    "    margin-left: auto;\n"
+                    "    margin-right: auto;\n"
+                    "    box-shadow: none;\n"
+                    "}\n"
+                )
+            else:
+                css_content = (
+                    "/* OKay DE - Styl docka: Pływająca wyspa */\n"
+                    "window#waybar {\n"
+                    "    background-color: transparent;\n"
+                    "    border: none;\n"
+                    "    box-shadow: none;\n"
+                    "}\n\n"
+                    ".modules-center {\n"
+                    "    background-color: rgba(30, 30, 46, 0.85);\n"
+                    "    border: 1px solid rgba(137, 180, 250, 0.2);\n"
+                    "    border-radius: 18px;\n"
+                    "    padding: 3px 8px;\n"
+                    "    margin-bottom: 10px;\n"
+                    "    margin-left: auto;\n"
+                    "    margin-right: auto;\n"
+                    "    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);\n"
+                    "}\n"
+                )
+
+            with open(cls.DOCK_CSS_TARGET, "w", encoding="utf-8") as f:
+                f.write(css_content)
+
+            # Natychmiastowe przeładowanie Waybar na żywo
+            subprocess.run(["pkill", "-SIGUSR2", "waybar"], check=False)
+            return True
+        except Exception as e:
+            print(f"Błąd zapisu stylu docka: {e}", file=sys.stderr)
+            return False
+
+    @classmethod
+    def get_button_colors(cls) -> dict:
+        """Odczytuje aktualne kolory przycisków okien z themerc-override."""
+        cls.ensure_dirs()
+        colors = dict(cls.DEFAULT_BUTTON_COLORS)
+
+        path_to_read = None
+        if os.path.exists(cls.THEMERC_OVERRIDE):
+            path_to_read = cls.THEMERC_OVERRIDE
+        elif os.path.exists("/etc/xdg/labwc/themerc-override"):
+            path_to_read = "/etc/xdg/labwc/themerc-override"
+
+        if path_to_read:
+            try:
+                with open(path_to_read, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("#") or ":" not in line:
+                            continue
+                        k, v = [part.strip() for part in line.split(":", 1)]
+                        if k == "window.active.button.unhover.close.color":
+                            colors["close"] = v
+                        elif k == "window.active.button.unhover.max.color":
+                            colors["max"] = v
+                        elif k == "window.active.button.unhover.iconify.color":
+                            colors["iconify"] = v
+            except Exception as e:
+                print(f"Błąd odczytu kolorów przycisków: {e}", file=sys.stderr)
+
+        return colors
+
+    @classmethod
+    def set_button_color(cls, btn_type: str, hex_color: str) -> bool:
+        """Aktualizuje kolory przycisku w themerc-override i wywołuje labwc --reconfigure."""
+        cls.ensure_dirs()
+        hex_color = hex_color.lower()
+
+        if btn_type == "close":
+            key_map = {
+                "window.active.button.unhover.close.color": hex_color,
+                "window.active.button.hover.close.color": hex_color,
+                "window.inactive.button.unhover.close.color": "#45475a",
+                "window.inactive.button.hover.close.color": hex_color,
+                "window.active.button.close.unpressed.image.color": hex_color
+            }
+        elif btn_type == "max":
+            key_map = {
+                "window.active.button.unhover.max.color": hex_color,
+                "window.active.button.hover.max.color": hex_color,
+                "window.inactive.button.unhover.max.color": "#45475a",
+                "window.inactive.button.hover.max.color": hex_color,
+                "window.active.button.max.unpressed.image.color": hex_color
+            }
+        elif btn_type == "iconify":
+            key_map = {
+                "window.active.button.unhover.iconify.color": hex_color,
+                "window.active.button.hover.iconify.color": hex_color,
+                "window.inactive.button.unhover.iconify.color": "#313244",
+                "window.inactive.button.hover.iconify.color": hex_color,
+                "window.active.button.iconify.unpressed.image.color": hex_color
+            }
+        else:
+            return False
+
+        lines = []
+        if os.path.exists(cls.THEMERC_OVERRIDE):
+            with open(cls.THEMERC_OVERRIDE, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        elif os.path.exists("/etc/xdg/labwc/themerc-override"):
+            with open("/etc/xdg/labwc/themerc-override", "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        else:
+            lines = [
+                "# OKay DE - Labwc Theme Override\n",
+                "window.cornerRadius: 8\n",
+                "window.titlebar.layout: Title:Iconify,Maximize,Close\n",
+                "border.width: 2\n",
+                "window.active.border.color: #89b4fa\n",
+                "window.inactive.border.color: #313244\n"
+            ]
+
+        updated_keys = set()
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and ":" in line:
+                key = line.split(":", 1)[0].strip()
+                if key in key_map:
+                    new_lines.append(f"{key}: {key_map[key]}\n")
+                    updated_keys.add(key)
+                    continue
+            new_lines.append(line)
+
+        for k, v in key_map.items():
+            if k not in updated_keys:
+                new_lines.append(f"{k}: {v}\n")
+
+        try:
+            with open(cls.THEMERC_OVERRIDE, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+
+            # Natychmiastowe przeładowanie kompozytora labwc na żywo
+            subprocess.run(["labwc", "--reconfigure"], check=False)
+            return True
+        except Exception as e:
+            print(f"Błąd zapisu themerc-override: {e}", file=sys.stderr)
+            return False
+
+
+class OkaySettingsWindow(Adw.PreferencesWindow):
+    """Główne okno centrum sterowania OKay Settings."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.set_title("Ustawienia OKay DE")
+        self.set_default_size(740, 600)
+        self.set_search_enabled(True)
+
+        # Inicjalizacja modułów
+        self._init_appearance_page()
+        self._init_system_page()
+        self._init_performance_page()
+        self._init_shortcuts_page()
+        self._init_about_page()
+
+    def _show_alert(self, title: str, message: str):
+        """Uniwersalny komunikat dialogowy zgodny z wersjami Libadwaita."""
+        if hasattr(Adw, "AlertDialog"):
+            dialog = Adw.AlertDialog.new(title, message)
+            dialog.add_response("ok", "Rozumiem")
+            dialog.set_default_response("ok")
+            dialog.present(self)
+        elif hasattr(Adw, "MessageDialog"):
+            dialog = Adw.MessageDialog.new(self, title, message)
+            dialog.add_response("ok", "Rozumiem")
+            dialog.set_default_response("ok")
+            dialog.present()
+        else:
+            if shutil.which("notify-send"):
+                subprocess.Popen(["notify-send", title, message, "-u", "normal"])
+
+    def _create_color_picker(self, initial_hex: str, on_changed_callback) -> Gtk.Widget:
+        """Fabrykuje przycisk próbnika koloru kompatybilny ze wszystkimi wersjami GTK4."""
+        rgba = Gdk.RGBA()
+        rgba.parse(initial_hex)
+
+        if hasattr(Gtk, "ColorDialogButton"):
+            dialog = Gtk.ColorDialog.new()
+            dialog.set_with_alpha(False)
+            btn = Gtk.ColorDialogButton.new(dialog)
+            btn.set_rgba(rgba)
+            btn.set_valign(Gtk.Align.CENTER)
+
+            def on_notify_rgba(b, _p):
+                c = b.get_rgba()
+                h = f"#{int(c.red * 255):02x}{int(c.green * 255):02x}{int(c.blue * 255):02x}"
+                on_changed_callback(h)
+
+            btn.connect("notify::rgba", on_notify_rgba)
+            return btn
+        else:
+            btn = Gtk.ColorButton.new_with_rgba(rgba)
+            btn.set_use_alpha(False)
+            btn.set_valign(Gtk.Align.CENTER)
+
+            def on_color_set(b):
+                c = b.get_rgba()
+                h = f"#{int(c.red * 255):02x}{int(c.green * 255):02x}{int(c.blue * 255):02x}"
+                on_changed_callback(h)
+
+            btn.connect("color-set", on_color_set)
+            return btn
+
+    # -------------------------------------------------------------
+    # Moduł 1: Wygląd i Pulpit
+    # -------------------------------------------------------------
+    def _init_appearance_page(self):
+        page = Adw.PreferencesPage()
+        page.set_title("Wygląd")
+        page.set_icon_name("preferences-desktop-theme-symbolic")
+
+        # Grupa 1: Pulpit i Dock
+        group_desktop = Adw.PreferencesGroup()
+        group_desktop.set_title("Wygląd i Pulpit")
+        group_desktop.set_description("Dostosuj tło pulpitu oraz styl paska zadań Waybar.")
+
+        # Wiersz 1: Tapeta pulpitu
+        row_wallpaper = Adw.ActionRow()
+        row_wallpaper.set_title("Tapeta pulpitu")
+        row_wallpaper.set_subtitle("Wybierz plik graficzny (PNG, JPG, WEBP)")
+        row_wallpaper.set_icon_name("preferences-desktop-wallpaper-symbolic")
+
+        btn_wallpaper = Gtk.Button(label="Zmień tapetę...")
+        btn_wallpaper.set_valign(Gtk.Align.CENTER)
+        btn_wallpaper.add_css_class("suggested-action")
+        btn_wallpaper.connect("clicked", self._on_change_wallpaper_clicked)
+        row_wallpaper.add_suffix(btn_wallpaper)
+        group_desktop.add(row_wallpaper)
+
+        # Wiersz 2: Styl docka
+        row_dock = Adw.ComboRow()
+        row_dock.set_title("Styl Docka")
+        row_dock.set_subtitle("Wybierz formę wyświetlania dolnego paska zadań")
+        row_dock.set_icon_name("user-desktop-symbolic")
+
+        dock_model = Gtk.StringList.new(["Pływająca wyspa", "Pełna belka"])
+        row_dock.set_model(dock_model)
+
+        current_style = ConfigManager.get_dock_style()
+        row_dock.set_selected(1 if current_style == "full" else 0)
+        row_dock.connect("notify::selected", self._on_dock_style_changed)
+        group_desktop.add(row_dock)
+
+        page.add(group_desktop)
+
+        # Grupa 2: Przyciski okien (Dekoracje)
+        group_buttons = Adw.PreferencesGroup()
+        group_buttons.set_title("Przyciski okien (Dekoracje)")
+        group_buttons.set_description("Dostosuj barwy prostokątnych przycisków sterowania oknami labwc.")
+
+        current_colors = ConfigManager.get_button_colors()
+
+        # Przycisk zamykania
+        row_close = Adw.ActionRow()
+        row_close.set_title("Przycisk zamykania")
+        row_close.set_subtitle("Kolor aktywnego przycisku Close")
+        row_close.set_icon_name("window-close-symbolic")
+        picker_close = self._create_color_picker(
+            current_colors.get("close", "#f38ba8"),
+            lambda h: ConfigManager.set_button_color("close", h)
+        )
+        row_close.add_suffix(picker_close)
+        group_buttons.add(row_close)
+
+        # Przycisk maksymalizowania
+        row_max = Adw.ActionRow()
+        row_max.set_title("Przycisk maksymalizowania")
+        row_max.set_subtitle("Kolor aktywnego przycisku Maximize")
+        row_max.set_icon_name("window-maximize-symbolic")
+        picker_max = self._create_color_picker(
+            current_colors.get("max", "#89b4fa"),
+            lambda h: ConfigManager.set_button_color("max", h)
+        )
+        row_max.add_suffix(picker_max)
+        group_buttons.add(row_max)
+
+        # Przycisk minimalizowania
+        row_iconify = Adw.ActionRow()
+        row_iconify.set_title("Przycisk minimalizowania")
+        row_iconify.set_subtitle("Kolor aktywnego przycisku Iconify")
+        row_iconify.set_icon_name("window-minimize-symbolic")
+        picker_iconify = self._create_color_picker(
+            current_colors.get("iconify", "#585b70"),
+            lambda h: ConfigManager.set_button_color("iconify", h)
+        )
+        row_iconify.add_suffix(picker_iconify)
+        group_buttons.add(row_iconify)
+
+        page.add(group_buttons)
+
+        self.add(page)
+
+    def _on_change_wallpaper_clicked(self, _button):
+        """Otwiera natywny selektor plików GTK do wyboru tapety."""
+        dialog = Gtk.FileChooserNative.new(
+            "Wybierz tapetę pulpitu",
+            self,
+            Gtk.FileChooserAction.OPEN,
+            "Ustaw jako tapetę",
+            "Anuluj"
+        )
+
+        filter_img = Gtk.FileFilter()
+        filter_img.set_name("Pliki graficzne (*.png, *.jpg, *.jpeg, *.webp)")
+        filter_img.add_mime_type("image/png")
+        filter_img.add_mime_type("image/jpeg")
+        filter_img.add_mime_type("image/webp")
+        filter_img.add_pattern("*.png")
+        filter_img.add_pattern("*.jpg")
+        filter_img.add_pattern("*.jpeg")
+        filter_img.add_pattern("*.webp")
+        dialog.add_filter(filter_img)
+
+        def on_response(native_dialog, response_id):
+            if response_id == Gtk.ResponseType.ACCEPT:
+                gfile = native_dialog.get_file()
+                if gfile:
+                    file_path = gfile.get_path()
+                    if file_path and os.path.isfile(file_path):
+                        success = ConfigManager.set_wallpaper(file_path)
+                        if success and shutil.which("notify-send"):
+                            subprocess.Popen([
+                                "notify-send",
+                                "OKay DE",
+                                f"Ustawiono nową tapetę:\n{os.path.basename(file_path)}"
+                            ])
+            native_dialog.destroy()
+
+        dialog.connect("response", on_response)
+        dialog.show()
+
+    def _on_dock_style_changed(self, combo_row, _param):
+        """Zmienia styl docka Waybar (pływająca wyspa / pełna belka)."""
+        selected_idx = combo_row.get_selected()
+        style_key = "full" if selected_idx == 1 else "floating"
+        ConfigManager.set_dock_style(style_key)
+
+    # -------------------------------------------------------------
+    # Moduł 2: System i Ekran
+    # -------------------------------------------------------------
+    def _init_system_page(self):
+        page = Adw.PreferencesPage()
+        page.set_title("System i Ekran")
+        page.set_icon_name("preferences-system-symbolic")
+
+        group = Adw.PreferencesGroup()
+        group.set_title("Szybkie narzędzia")
+        group.set_description("Zarządzaj wyświetlaczami, rozdzielczością i urządzeniami audio.")
+
+        # Wiersz 1: Ustawienia ekranu (wdisplays)
+        row_display = Adw.ActionRow()
+        row_display.set_title("Ustawienia ekranu")
+        row_display.set_subtitle("Konfiguracja monitorów, pozycji i rozdzielczości (wdisplays)")
+        row_display.set_icon_name("video-display-symbolic")
+
+        btn_display = Gtk.Button(label="Uruchom wdisplays")
+        btn_display.set_valign(Gtk.Align.CENTER)
+        btn_display.connect("clicked", self._on_display_settings_clicked)
+        row_display.add_suffix(btn_display)
+        group.add(row_display)
+
+        # Wiersz 2: Ustawienia dźwięku (pavucontrol)
+        row_audio = Adw.ActionRow()
+        row_audio.set_title("Ustawienia dźwięku")
+        row_audio.set_subtitle("Zaawansowany mikser i urządzenia wyjściowe (pavucontrol)")
+        row_audio.set_icon_name("audio-volume-high-symbolic")
+
+        btn_audio = Gtk.Button(label="Uruchom mikser")
+        btn_audio.set_valign(Gtk.Align.CENTER)
+        btn_audio.connect("clicked", self._on_sound_settings_clicked)
+        row_audio.add_suffix(btn_audio)
+        group.add(row_audio)
+
+        page.add(group)
+        self.add(page)
+
+    def _on_display_settings_clicked(self, _button):
+        """Uruchamia narzędzie wdisplays lub wyświetla ostrzeżenie o braku pakietu."""
+        if shutil.which("wdisplays"):
+            subprocess.Popen(["wdisplays"])
+        else:
+            self._show_alert(
+                "Brak programu wdisplays",
+                "Narzędzie do konfiguracji ekranów 'wdisplays' nie jest zainstalowane.\n\n"
+                "Możesz je zainstalować poleceniem:\n"
+                "sudo pacman -S wdisplays"
+            )
+
+    def _on_sound_settings_clicked(self, _button):
+        """Uruchamia mikser dźwięku pavucontrol lub wyświetla ostrzeżenie."""
+        if shutil.which("pavucontrol"):
+            subprocess.Popen(["pavucontrol"])
+        else:
+            self._show_alert(
+                "Brak miksera pavucontrol",
+                "Graficzny mikser dźwięku 'pavucontrol' nie jest zainstalowany.\n\n"
+                "Możesz go zainstalować poleceniem:\n"
+                "sudo pacman -S pavucontrol"
+            )
+
+    # -------------------------------------------------------------
+    # Moduł 3: Wydajność i Zasoby (Ghost Runner + zRAM)
+    # -------------------------------------------------------------
+    def _init_performance_page(self):
+        page = Adw.PreferencesPage()
+        page.set_title("Wydajność")
+        page.set_icon_name("power-profile-performance-symbolic")
+
+        group_ghost = Adw.PreferencesGroup()
+        group_ghost.set_title("Zarządca zasobów OKsavi (Ghost Runner)")
+        group_ghost.set_description("Optymalizacja cgroups v2, priorytetów zadań oraz pamięci kompresowanej zRAM.")
+
+        row_ghost = Adw.ActionRow()
+        row_ghost.set_title("Demon oksavi-ghost-runner")
+        row_ghost.set_subtitle("Optymalizacja procesów tła i pamięci podręcznej")
+        row_ghost.set_icon_name("system-run-symbolic")
+
+        switch_ghost = Gtk.Switch()
+        switch_ghost.set_valign(Gtk.Align.CENTER)
+
+        is_running = self._is_ghost_runner_running()
+        switch_ghost.set_active(is_running)
+
+        def on_switch_toggled(sw, _p):
+            if sw.get_active():
+                subprocess.Popen(["oksavi-ghost-runner", "--start"])
+            else:
+                subprocess.run(["oksavi-ghost-runner", "--stop"], check=False)
+
+        switch_ghost.connect("notify::active", on_switch_toggled)
+        row_ghost.add_suffix(switch_ghost)
+        group_ghost.add(row_ghost)
+
+        row_zram = Adw.ActionRow()
+        row_zram.set_title("Kompresja pamięci zRAM")
+        row_zram.set_subtitle(SystemHelper.get_zram_status())
+        row_zram.set_icon_name("drive-harddisk-symbolic")
+        group_ghost.add(row_zram)
+
+        page.add(group_ghost)
+
+        # Grupa konserwacji pamięci
+        group_maint = Adw.PreferencesGroup()
+        group_maint.set_title("Konserwacja pamięci operacyjnej")
+        group_maint.set_description("Zwalnianie buforów dyskowych i stron stronnicowania.")
+
+        row_flush = Adw.ActionRow()
+        row_flush.set_title("Zwolnij pamięć podręczną (Drop Caches)")
+        row_flush.set_subtitle("Wymusza zrzut nieużywanych buforów jądra")
+        row_flush.set_icon_name("edit-clear-symbolic")
+
+        btn_flush = Gtk.Button(label="Oczyść RAM")
+        btn_flush.set_valign(Gtk.Align.CENTER)
+        btn_flush.connect("clicked", self._on_flush_ram_clicked)
+        row_flush.add_suffix(btn_flush)
+        group_maint.add(row_flush)
+
+        page.add(group_maint)
+        self.add(page)
+
+    def _is_ghost_runner_running(self) -> bool:
+        """Sprawdza, czy proces oksavi-ghost-runner jest aktywny."""
+        try:
+            res = subprocess.run(["pgrep", "-x", "oksavi-ghost-runner"], capture_output=True, check=False)
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    def _on_flush_ram_clicked(self, _button):
+        """Czyści bufory pamięci podręcznej jądra Linux."""
+        try:
+            subprocess.run(["sync"], check=False)
+            if shutil.which("pkexec"):
+                subprocess.run(["pkexec", "sh", "-c", "echo 3 > /proc/sys/vm/drop_caches"], check=False)
+            if shutil.which("notify-send"):
+                subprocess.Popen(["notify-send", "OKay DE", "Zwolniono pamięć podręczną RAM.", "-u", "low"])
+        except Exception as e:
+            self._show_alert("Błąd", f"Nie udało się oczyścić pamięci: {e}")
+
+    # -------------------------------------------------------------
+    # Moduł 4: Skróty klawiszowe
+    # -------------------------------------------------------------
+    def _init_shortcuts_page(self):
+        page = Adw.PreferencesPage()
+        page.set_title("Skróty")
+        page.set_icon_name("preferences-desktop-keyboard-shortcuts-symbolic")
+
+        # 1. Okna i kafelkowanie
+        group_wm = Adw.PreferencesGroup()
+        group_wm.set_title("Zarządzanie oknami i kafelkowanie")
+        self._add_shortcut_row(group_wm, "Kafelkowanie do lewej połowy", "Super + Left")
+        self._add_shortcut_row(group_wm, "Kafelkowanie do prawej połowy", "Super + Right")
+        self._add_shortcut_row(group_wm, "Maksymalizacja okna", "Super + Up")
+        self._add_shortcut_row(group_wm, "Minimalizacja do docka", "Super + Down")
+        self._add_shortcut_row(group_wm, "Zamknięcie aktywnego okna", "Super + Q")
+        self._add_shortcut_row(group_wm, "Przełączanie okien", "Alt + Tab")
+        page.add(group_wm)
+
+        # 2. Aplikacje i pulpit
+        group_apps = Adw.PreferencesGroup()
+        group_apps.set_title("Aplikacje i pulpit")
+        self._add_shortcut_row(group_apps, "Emulator terminala (foot)", "Super + Return")
+        self._add_shortcut_row(group_apps, "Launcher aplikacji (fuzzel)", "Super + Spacja")
+        self._add_shortcut_row(group_apps, "Centrum sterowania (OKay Settings)", "Super + I")
+        self._add_shortcut_row(group_apps, "Menedżer plików (pcmanfm)", "Super + E")
+        self._add_shortcut_row(group_apps, "Historia schowka (cliphist)", "Super + V")
+        self._add_shortcut_row(group_apps, "Blokada ekranu", "Super + L")
+        self._add_shortcut_row(group_apps, "Menu główne pulpitu", "Super + M")
+        self._add_shortcut_row(group_apps, "Menu zasilania (Powermenu)", "Super + Shift + E")
+        self._add_shortcut_row(group_apps, "Zrzut ekranu do pliku i schowka", "PrintScreen")
+        page.add(group_apps)
+
+        self.add(page)
+
+    def _add_shortcut_row(self, group: Adw.PreferencesGroup, description: str, key_combo: str):
+        row = Adw.ActionRow()
+        row.set_title(description)
+
+        badge = Gtk.Label(label=key_combo)
+        badge.add_css_class("heading")
+        badge.add_css_class("dim-label")
+        badge.set_valign(Gtk.Align.CENTER)
+
+        row.add_suffix(badge)
+        group.add(row)
+
+    # -------------------------------------------------------------
+    # Moduł 5: O systemie (Informacje)
+    # -------------------------------------------------------------
+    def _init_about_page(self):
+        page = Adw.PreferencesPage()
+        page.set_title("Informacje")
+        page.set_icon_name("help-about-symbolic")
+
+        group = Adw.PreferencesGroup()
+        group.set_title("O systemie")
+        group.set_description("Podstawowe dane o sprzęcie i zainstalowanym oprogramowaniu.")
+
+        self._add_info_row(group, "Dystrybucja", SystemHelper.get_distro_name(), "distributor-logo-symbolic")
+        self._add_info_row(group, "Środowisko graficzne", SystemHelper.get_desktop_info(), "user-desktop-symbolic")
+        self._add_info_row(group, "Wersja jądra Linux", SystemHelper.get_kernel_release(), "applications-system-symbolic")
+        self._add_info_row(group, "Procesor (CPU)", SystemHelper.get_cpu_info(), "cpu-symbolic")
+        self._add_info_row(group, "Pamięć operacyjna", SystemHelper.get_memory_info(), "drive-harddisk-symbolic")
+
+        page.add(group)
+        self.add(page)
+
+    def _add_info_row(self, group: Adw.PreferencesGroup, title: str, value: str, icon_name: str):
+        """Pomocniczy wiersz informacji o systemie."""
+        row = Adw.ActionRow()
+        row.set_title(title)
+        row.set_icon_name(icon_name)
+
+        label = Gtk.Label(label=value)
+        label.set_selectable(True)
+        label.add_css_class("dim-label")
+        label.set_valign(Gtk.Align.CENTER)
+
+        row.add_suffix(label)
+        group.add(row)
+
+
+class OkaySettingsApp(Adw.Application):
+    """Główna aplikacja Libadwaita."""
+
+    def __init__(self):
+        super().__init__(
+            application_id="org.oksavi.okay.settings",
+            flags=Gio.ApplicationFlags.FLAGS_NONE
+        )
+
+    def do_activate(self):
+        # Wymuszenie ciemnego motywu Catppuccin Mocha / Adwaita Dark
+        style_manager = Adw.StyleManager.get_default()
+        style_manager.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+
+        win = self.props.active_window
+        if not win:
+            win = OkaySettingsWindow(application=self)
+        win.present()
+
+
+def main():
+    """Punkt startowy programu."""
+    app = OkaySettingsApp()
+    return app.run(sys.argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

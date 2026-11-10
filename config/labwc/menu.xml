@@ -7,8 +7,14 @@
     <item label="Menedżer plików">
       <action name="Execute" command="pcmanfm" />
     </item>
+    <item label="Otwórz Pulpit">
+      <action name="Execute" command="pcmanfm ~/Desktop" />
+    </item>
     <item label="Wyszukiwarka">
       <action name="Execute" command="fuzzel" />
+    </item>
+    <item label="Ustawienia OKay">
+      <action name="Execute" command="okay-settings" />
     </item>
 
     <separator />
