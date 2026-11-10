@@ -259,10 +259,14 @@ class OkayDock(QWidget):
         self._setup_watcher()
         self._setup_timers()
 
-        # Reakcja na zmianę rozdzielczości ekranu
+        # Reakcja na zmianę rozdzielczości ekranu oraz opóźniona synchronizacja (VM)
         screen = QApplication.primaryScreen()
         if screen:
             screen.geometryChanged.connect(lambda _g: self.reposition())
+
+        QTimer.singleShot(200, self.reposition)
+        QTimer.singleShot(800, self.reposition)
+        QTimer.singleShot(2000, self.reposition)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -514,15 +518,20 @@ class OkayDock(QWidget):
 
     def reposition(self):
         screen = QApplication.primaryScreen()
-        if not screen:
-            return
-        geom = screen.geometry()
         h = 40
-        w = geom.width()
-        x = geom.x()
-        y = geom.y() + geom.height() - h
+        w = 1280
+        x = 0
+        y = 760
+        if screen:
+            geom = screen.geometry()
+            if geom.width() >= 400:
+                w = geom.width()
+            if geom.height() >= 300:
+                y = geom.y() + geom.height() - h
+            x = geom.x()
         self.setGeometry(x, y, w, h)
-        self.setFixedSize(w, h)
+        self.setFixedHeight(h)
+        self.setMinimumWidth(w)
 
 
 def main():

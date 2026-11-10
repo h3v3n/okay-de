@@ -546,7 +546,7 @@ class SidebarButton(QPushButton):
         self.setObjectName("sidebarBtn")
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(44)
+        self.setFixedHeight(38)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
 
@@ -1045,15 +1045,13 @@ QPushButton#sidebarBtn {
     border: none;
     border-radius: 6px;
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
     text-align: left;
-    padding-left: 14px;
-    padding-right: 14px;
-    height: 44px;
-    min-height: 44px;
-    max-height: 44px;
-    margin: 1px 4px;
-    font-family: 'JetBrains Mono', 'Cantarell', 'Noto Sans', sans-serif;
+    padding: 0px 16px;
+    margin: 0px;
+    min-height: 38px;
+    max-height: 38px;
+    font-family: 'Cantarell', 'Inter', 'Noto Sans', 'DejaVu Sans', sans-serif;
 }
 
 QPushButton#sidebarBtn:hover {
@@ -1253,8 +1251,8 @@ class OkaySettingsWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Ustawienia OKay DE")
-        self.resize(900, 620)
-        self.setMinimumSize(800, 520)
+        self.resize(760, 500)
+        self.setMinimumSize(640, 420)
 
         central = QWidget()
         central.setObjectName("centralWidget")
@@ -1267,19 +1265,19 @@ class OkaySettingsWindow(QMainWindow):
         # 1. Pasek boczny nawigacji (Sidebar)
         self.sidebar_widget = QWidget()
         self.sidebar_widget.setObjectName("sidebarWidget")
-        self.sidebar_widget.setFixedWidth(240)
+        self.sidebar_widget.setFixedWidth(210)
 
         sidebar_layout = QVBoxLayout(self.sidebar_widget)
-        sidebar_layout.setContentsMargins(10, 18, 10, 18)
-        sidebar_layout.setSpacing(6)
+        sidebar_layout.setContentsMargins(10, 16, 10, 16)
+        sidebar_layout.setSpacing(4)
 
         # Header w pasku bocznym
         header_widget = QWidget()
         header_layout = QVBoxLayout(header_widget)
-        header_layout.setContentsMargins(14, 0, 14, 12)
+        header_layout.setContentsMargins(12, 0, 12, 10)
         header_layout.setSpacing(2)
 
-        lbl_logo = QLabel("󰒓  OKay Settings")
+        lbl_logo = QLabel("OKay Settings")
         lbl_logo.setObjectName("sidebarLogo")
         lbl_desc = QLabel("Centrum sterowania OKsavi")
         lbl_desc.setObjectName("sidebarSubtitle")
@@ -1293,18 +1291,18 @@ class OkaySettingsWindow(QMainWindow):
         sep.setObjectName("sidebarSep")
         sidebar_layout.addWidget(sep)
 
-        sidebar_layout.addSpacing(6)
+        sidebar_layout.addSpacing(4)
 
         self.btn_group = QButtonGroup(self)
         self.btn_group.setExclusive(True)
 
         categories = [
-            ("󰏘  Wygląd", 0),
-            ("󰍹  System i Ekran", 1),
-            ("󰓅  Wydajność", 2),
-            ("󰌌  Skróty klawiszowe", 3),
-            ("󰑓  Aktualizacje", 4),
-            ("󰋽  O systemie", 5)
+            ("Wygląd", 0),
+            ("System i Ekran", 1),
+            ("Wydajność", 2),
+            ("Skróty klawiszowe", 3),
+            ("Aktualizacje", 4),
+            ("O systemie", 5)
         ]
 
         self.sidebar_buttons = []

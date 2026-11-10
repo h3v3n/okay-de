@@ -2,6 +2,7 @@
 <labwc_config>
   <core>
     <gap>6</gap>
+    <margin bottom="40" />
   </core>
 
   <!-- Kafelkowanie okien przy przeciąganiu myszą do krawędzi ekranu -->
@@ -30,11 +31,13 @@
   <windowRules>
     <windowRule identifier="*" serverDecoration="yes" />
     <windowRule identifier="okay-dock" serverDecoration="no" skipTaskbar="yes" skipWindowSwitcher="yes">
-      <action name="MoveToEdge" direction="down" />
+      <action name="MoveToEdge" direction="down" snapWindows="no" />
+      <action name="ToggleAlwaysOnTop" />
       <fixedPosition>yes</fixedPosition>
     </windowRule>
     <windowRule title="okay-dock*" serverDecoration="no" skipTaskbar="yes" skipWindowSwitcher="yes">
-      <action name="MoveToEdge" direction="down" />
+      <action name="MoveToEdge" direction="down" snapWindows="no" />
+      <action name="ToggleAlwaysOnTop" />
       <fixedPosition>yes</fixedPosition>
     </windowRule>
     <windowRule identifier="fuzzel" serverDecoration="no" />
