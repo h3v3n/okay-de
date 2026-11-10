@@ -1,6 +1,6 @@
 # OKay DE
 
-Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi Linux**, oparte na kompozytorze `labwc` z minimalistycznym pływającym dockiem w stylu macOS / GNOME, interaktywnym pulpitem z ikonami plików (`pcmanfm --desktop`) oraz natywnym centrum sterowania **OKay Settings** (GTK4 + Libadwaita).
+Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi Linux**, oparte na kompozytorze `labwc` z minimalistycznym pływającym dockiem w stylu macOS / GNOME, interaktywnym pulpitem z ikonami plików (`pcmanfm --desktop`) oraz natywnym centrum sterowania **OKay Settings** (PyQt6).
 
 ---
 
@@ -11,7 +11,7 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
   - Terminal (`foot`)
   - Przeglądarka plików (`pcmanfm`)
   - Centrum sterowania (`okay-settings`)
-- **Centrum Sterowania (OKay Settings):** Nowoczesna aplikacja w Pythonie 3 oparta o GTK4 i Libadwaita (`Adw.PreferencesWindow`), umożliwiająca:
+- **Centrum Sterowania (OKay Settings):** Nowoczesna aplikacja w Pythonie 3 oparta o PyQt6 (Qt 6), umożliwiająca:
   - Zmianę tapety pulpitu i stylu paska zadań (pływająca wyspa vs pełna belka).
   - Dynamiczną zmianę kolorów prostokątnych przycisków okien (zamknij, maksymalizuj, minimalizuj) z natychmiastowym przeładowaniem kompozytora `labwc`.
   - Szybki dostęp do konfiguracji ekranów (`wdisplays`) i miksera (`pavucontrol`).
@@ -33,7 +33,7 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 | :--- | :--- | :--- |
 | **Kompozytor Wayland** | `labwc` | Stacking compositor zgodny z protokołem wlroots i Openbox XML |
 | **Pulpit z ikonami** | `pcmanfm --desktop` | Interaktywny pulpit z obsługą ikon plików i tła |
-| **Centrum Sterowania** | `okay-settings` | Natywna aplikacja Pythona 3 (GTK4 + Libadwaita) |
+| **Centrum Sterowania** | `okay-settings` | Natywna aplikacja Pythona 3 (PyQt6) |
 | **Dock / Pasek statusu** | `waybar` | Pływający dock dolny z zadaniami, dźwiękiem, siecią i zegarem |
 | **Launcher aplikacji** | `fuzzel` | Błyskawiczny launcher aplikacji z akceleracją Wayland |
 | **Emulator terminala** | `foot` | Ultra-lekki terminal Wayland z przezroczystością tła `0.95` |
@@ -84,7 +84,7 @@ sudo pacman -S labwc waybar pcmanfm fuzzel foot mako swaylock grim slurp wl-clip
 
 ### Pakiety dla OKay Settings:
 ```bash
-sudo pacman -S python python-gobject libadwaita gtk4
+sudo pacman -S python python-pyqt6 qt6-wayland
 ```
 
 ### Sugerowane pakiety opcjonalne:

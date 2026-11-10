@@ -26,9 +26,8 @@ depends=(
     'adwaita-icon-theme'
     'xdg-user-dirs'
     'python'
-    'python-gobject'
-    'libadwaita'
-    'gtk4'
+    'python-pyqt6'
+    'qt6-wayland'
 )
 optdepends=(
     'util-linux: obsługa zramctl dla zarządcy pamięci oksavi-ghost-runner'

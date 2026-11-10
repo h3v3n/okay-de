@@ -35,6 +35,14 @@ if [ "$MODE" = "--system" ]; then
     install -d /usr/share/backgrounds/okay-de
     install -m 644 backgrounds/default.png /usr/share/backgrounds/okay-de/default.png
 
+    # Zapis wersji commita dla środowiska
+    install -d /etc/okay-de
+    if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git rev-parse --short HEAD > /etc/okay-de/version 2>/dev/null || echo "963cf2c" > /etc/okay-de/version
+    else
+        echo "963cf2c" > /etc/okay-de/version
+    fi
+
     echo "Instalacja systemowa zakończona sukcesem."
 elif [ "$MODE" = "--user" ]; then
     echo "Instalowanie konfiguracji OKay DE dla bieżącego użytkownika ($HOME/.config)..."
@@ -87,8 +95,15 @@ elif [ "$MODE" = "--user" ]; then
     cp sessions/okay-settings.desktop "$HOME/Desktop/"
     chmod 644 "$HOME/Desktop/"*.desktop
 
+    # Zapis wersji commita dla profilu użytkownika
+    if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git rev-parse --short HEAD > "$HOME/.config/okay-de/version" 2>/dev/null || echo "963cf2c" > "$HOME/.config/okay-de/version"
+    else
+        echo "963cf2c" > "$HOME/.config/okay-de/version"
+    fi
+
     echo "Konfiguracja użytkownika zainstalowana pomyślnie."
-    echo "Wymagane pakiety dla OKay Settings: python-gobject, libadwaita, gtk4."
+    echo "Wymagane pakiety dla OKay Settings: python-pyqt6, qt6-wayland."
     echo "Sugerowane pakiety narzędzi: swaybg, waybar, wdisplays, pavucontrol, papirus-icon-theme."
     echo "Upewnij się, że \$HOME/.local/bin znajduje się w Twojej zmiennej PATH."
 else
