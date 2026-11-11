@@ -505,20 +505,39 @@ class WaylandToplevelClient:
 
     DISPLAY_ID = 1
     REGISTRY_ID = 2
-    INIT_SYNC_ID = 3
-    MANAGER_ID = 4
-    SEAT_ID = 5
-    SECOND_SYNC_ID = 6
 
     def __init__(self, on_change_cb=None):
         self.on_change_cb = on_change_cb
         self.sock = None
         self.recv_buf = b""
+        # Kolejne ID obiektów klienta w Wayland muszą być przydzielane ściśle sekwencyjnie (bez luk)
+        self._next_id = 3
+        self._protocol_error = False
+        self.manager_id = None
+        self.seat_id = None
         self.manager_bound = False
         self.seat_bound = False
         self.handles = {}
         self.connected = False
-        self._connect()
+        try:
+            self._connect()
+        except Exception as e:
+            print(f"[okay-panel] Wyjątek klienta wlr-foreign-toplevel (fallback): {e}", file=sys.stderr)
+            self._close_socket()
+
+    def _alloc_id(self) -> int:
+        obj_id = self._next_id
+        self._next_id += 1
+        return obj_id
+
+    def _close_socket(self):
+        self.connected = False
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
 
     @staticmethod
     def _pack_string(s: str) -> bytes:
@@ -556,12 +575,20 @@ class WaylandToplevelClient:
         size = 8 + len(payload)
         return struct.pack("<II", obj_id, (size << 16) | (opcode & 0xFFFF)) + payload
 
-    def _send(self, data: bytes):
-        if self.sock:
-            try:
-                self.sock.sendall(data)
-            except Exception as e:
-                print(f"[okay-panel] Błąd zapisu Wayland: {e}", file=sys.stderr)
+    def _send(self, data: bytes) -> bool:
+        if not self.sock:
+            return False
+        try:
+            self.sock.sendall(data)
+            return True
+        except (BrokenPipeError, OSError) as e:
+            print(f"[okay-panel] Błąd zapisu Wayland (rozłączono toplevel fallback): {e}", file=sys.stderr)
+            self._close_socket()
+            return False
+        except Exception as e:
+            print(f"[okay-panel] Nieoczekiwany błąd zapisu Wayland: {e}", file=sys.stderr)
+            self._close_socket()
+            return False
 
     def _connect(self):
         xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
@@ -577,31 +604,48 @@ class WaylandToplevelClient:
             self.sock.settimeout(1.0)
             self.sock.connect(sock_path)
 
-            self._send(
+            init_sync_id = self._alloc_id()
+            if not self._send(
                 self._pack_msg(self.DISPLAY_ID, 1, struct.pack("<I", self.REGISTRY_ID)) +
-                self._pack_msg(self.DISPLAY_ID, 0, struct.pack("<I", self.INIT_SYNC_ID))
-            )
-            self._roundtrip_until(self.INIT_SYNC_ID)
+                self._pack_msg(self.DISPLAY_ID, 0, struct.pack("<I", init_sync_id))
+            ):
+                return
+            self._roundtrip_until(init_sync_id)
+
+            if self._protocol_error or self.sock is None:
+                self._close_socket()
+                return
+
+            if self.manager_bound and self.manager_id is not None:
+                second_sync_id = self._alloc_id()
+                if not self._send(self._pack_msg(self.DISPLAY_ID, 0, struct.pack("<I", second_sync_id))):
+                    return
+                self._roundtrip_until(second_sync_id)
+
+            if self._protocol_error or self.sock is None:
+                self._close_socket()
+                return
 
             if self.manager_bound:
-                self._send(self._pack_msg(self.DISPLAY_ID, 0, struct.pack("<I", self.SECOND_SYNC_ID)))
-                self._roundtrip_until(self.SECOND_SYNC_ID)
                 self.connected = True
                 print(f"[okay-panel] Połączono z protokołem wlr-foreign-toplevel (okien: {len(self.handles)})", file=sys.stderr)
 
             self.sock.setblocking(False)
             GLib.io_add_watch(self.sock.fileno(), GLib.IO_IN, self._on_socket_ready)
         except Exception as e:
-            print(f"[okay-panel] Błąd inicjalizacji wlr-foreign-toplevel: {e}", file=sys.stderr)
-            self.connected = False
+            print(f"[okay-panel] Błąd inicjalizacji wlr-foreign-toplevel (tryb fallback): {e}", file=sys.stderr)
+            self._close_socket()
 
     def _roundtrip_until(self, sync_obj_id: int):
         done = False
         deadline = time.monotonic() + 1.0
         while not done and time.monotonic() < deadline:
+            if self._protocol_error or self.sock is None:
+                break
             try:
                 chunk = self.sock.recv(65536)
                 if not chunk:
+                    self._close_socket()
                     break
                 self.recv_buf += chunk
                 _, sync_hit = self._process_buffer(target_sync_id=sync_obj_id)
@@ -609,24 +653,40 @@ class WaylandToplevelClient:
                     done = True
             except socket.timeout:
                 break
-            except Exception:
+            except Exception as e:
+                print(f"[okay-panel] Błąd odczytu Wayland roundtrip: {e}", file=sys.stderr)
+                self._close_socket()
                 break
 
     def _on_socket_ready(self, source, condition) -> bool:
+        if self.sock is None or self._protocol_error:
+            self._close_socket()
+            return False
         try:
             while True:
                 chunk = self.sock.recv(65536)
                 if not chunk:
+                    self._close_socket()
                     return False
                 self.recv_buf += chunk
         except BlockingIOError:
             pass
-        except Exception:
+        except Exception as e:
+            print(f"[okay-panel] Błąd gniazda Wayland (wyłączam toplevel fallback): {e}", file=sys.stderr)
+            self._close_socket()
             return False
 
-        changed, _ = self._process_buffer()
-        if changed and self.on_change_cb:
-            GLib.idle_add(self.on_change_cb)
+        try:
+            changed, _ = self._process_buffer()
+            if self._protocol_error or self.sock is None:
+                self._close_socket()
+                return False
+            if changed and self.on_change_cb:
+                GLib.idle_add(self.on_change_cb)
+        except Exception as e:
+            print(f"[okay-panel] Błąd przetwarzania zdarzeń Wayland: {e}", file=sys.stderr)
+            self._close_socket()
+            return False
         return True
 
     def _process_buffer(self, target_sync_id: int = -1) -> tuple:
@@ -642,82 +702,98 @@ class WaylandToplevelClient:
             payload = self.recv_buf[8:size]
             self.recv_buf = self.recv_buf[size:]
 
-            if obj_id == self.DISPLAY_ID:
-                if opcode == 0:
-                    err_obj, err_code = struct.unpack_from("<II", payload, 0)
-                    err_msg, _ = self._unpack_string(payload, 8)
-                    print(f"[okay-panel] Wayland error (obj={err_obj}, code={err_code}): {err_msg}", file=sys.stderr)
-            elif obj_id == target_sync_id:
-                if opcode == 0:
-                    sync_hit = True
-            elif obj_id == self.REGISTRY_ID:
-                if opcode == 0:
-                    name = struct.unpack_from("<I", payload, 0)[0]
-                    iface, off = self._unpack_string(payload, 4)
-                    ver = struct.unpack_from("<I", payload, off)[0]
-                    if iface == "zwlr_foreign_toplevel_manager_v1" and not self.manager_bound:
-                        bind_ver = min(ver, 3)
-                        self._send(self._pack_msg(
-                            self.REGISTRY_ID, 0,
-                            struct.pack("<I", name) + self._pack_string(iface) + struct.pack("<II", bind_ver, self.MANAGER_ID)
-                        ))
-                        self.manager_bound = True
-                    elif iface == "wl_seat" and not self.seat_bound:
-                        bind_ver = min(ver, 1)
-                        self._send(self._pack_msg(
-                            self.REGISTRY_ID, 0,
-                            struct.pack("<I", name) + self._pack_string(iface) + struct.pack("<II", bind_ver, self.SEAT_ID)
-                        ))
-                        self.seat_bound = True
-            elif obj_id == self.MANAGER_ID:
-                if opcode == 0:
-                    handle_id = struct.unpack_from("<I", payload, 0)[0]
-                    self.handles[handle_id] = {
-                        "handle_id": handle_id,
-                        "app_id": "",
-                        "title": "",
-                        "focused": False,
-                        "minimized": False,
-                        "maximized": False,
-                        "ready": False,
-                        "pending": {
+            try:
+                if obj_id == self.DISPLAY_ID:
+                    if opcode == 0 and len(payload) >= 8:
+                        err_obj, err_code = struct.unpack_from("<II", payload, 0)
+                        err_msg, _ = self._unpack_string(payload, 8)
+                        print(f"[okay-panel] Wayland error (obj={err_obj}, code={err_code}): {err_msg}", file=sys.stderr)
+                        self._protocol_error = True
+                        self.manager_bound = False
+                        self.seat_bound = False
+                        self.connected = False
+                        break
+                elif obj_id == target_sync_id:
+                    if opcode == 0:
+                        sync_hit = True
+                elif obj_id == self.REGISTRY_ID:
+                    if opcode == 0 and len(payload) >= 8:
+                        name = struct.unpack_from("<I", payload, 0)[0]
+                        iface, off = self._unpack_string(payload, 4)
+                        if off + 4 > len(payload):
+                            continue
+                        ver = struct.unpack_from("<I", payload, off)[0]
+                        if ver < 1:
+                            continue
+                        if iface == "zwlr_foreign_toplevel_manager_v1" and not self.manager_bound:
+                            bind_ver = min(ver, 2)
+                            new_id = self._alloc_id()
+                            if self._send(self._pack_msg(
+                                self.REGISTRY_ID, 0,
+                                struct.pack("<I", name) + self._pack_string(iface) + struct.pack("<II", bind_ver, new_id)
+                            )):
+                                self.manager_id = new_id
+                                self.manager_bound = True
+                        elif iface == "wl_seat" and not self.seat_bound:
+                            bind_ver = min(ver, 1)
+                            new_id = self._alloc_id()
+                            if self._send(self._pack_msg(
+                                self.REGISTRY_ID, 0,
+                                struct.pack("<I", name) + self._pack_string(iface) + struct.pack("<II", bind_ver, new_id)
+                            )):
+                                self.seat_id = new_id
+                                self.seat_bound = True
+                elif self.manager_id is not None and obj_id == self.manager_id:
+                    if opcode == 0 and len(payload) >= 4:
+                        handle_id = struct.unpack_from("<I", payload, 0)[0]
+                        self.handles[handle_id] = {
+                            "handle_id": handle_id,
                             "app_id": "",
                             "title": "",
                             "focused": False,
                             "minimized": False,
                             "maximized": False,
+                            "ready": False,
+                            "pending": {
+                                "app_id": "",
+                                "title": "",
+                                "focused": False,
+                                "minimized": False,
+                                "maximized": False,
+                            }
                         }
-                    }
-                elif opcode == 1:
-                    self.manager_bound = False
-            elif obj_id in self.handles:
-                h = self.handles[obj_id]
-                if opcode == 0:
-                    title, _ = self._unpack_string(payload, 0)
-                    h["pending"]["title"] = title
-                elif opcode == 1:
-                    app_id, _ = self._unpack_string(payload, 0)
-                    h["pending"]["app_id"] = app_id
-                elif opcode == 4:
-                    raw_arr, _ = self._unpack_array(payload, 0)
-                    n = len(raw_arr) // 4
-                    states = set(struct.unpack(f"<{n}I", raw_arr)) if n > 0 else set()
-                    h["pending"]["maximized"] = (0 in states)
-                    h["pending"]["minimized"] = (1 in states)
-                    h["pending"]["focused"] = (2 in states)
-                elif opcode == 5:
-                    p = h["pending"]
-                    h["app_id"] = p["app_id"]
-                    h["title"] = p["title"]
-                    h["maximized"] = p["maximized"]
-                    h["minimized"] = p["minimized"]
-                    h["focused"] = p["focused"]
-                    h["ready"] = True
-                    changed = True
-                elif opcode == 6:
-                    del self.handles[obj_id]
-                    self._send(self._pack_msg(obj_id, 7))
-                    changed = True
+                    elif opcode == 1:
+                        self.manager_bound = False
+                elif obj_id in self.handles:
+                    h = self.handles[obj_id]
+                    if opcode == 0:
+                        title, _ = self._unpack_string(payload, 0)
+                        h["pending"]["title"] = title
+                    elif opcode == 1:
+                        app_id, _ = self._unpack_string(payload, 0)
+                        h["pending"]["app_id"] = app_id
+                    elif opcode == 4:
+                        raw_arr, _ = self._unpack_array(payload, 0)
+                        n = len(raw_arr) // 4
+                        states = set(struct.unpack(f"<{n}I", raw_arr[: n * 4])) if n > 0 else set()
+                        h["pending"]["maximized"] = (0 in states)
+                        h["pending"]["minimized"] = (1 in states)
+                        h["pending"]["focused"] = (2 in states)
+                    elif opcode == 5:
+                        p = h["pending"]
+                        h["app_id"] = p["app_id"]
+                        h["title"] = p["title"]
+                        h["maximized"] = p["maximized"]
+                        h["minimized"] = p["minimized"]
+                        h["focused"] = p["focused"]
+                        h["ready"] = True
+                        changed = True
+                    elif opcode == 6:
+                        del self.handles[obj_id]
+                        self._send(self._pack_msg(obj_id, 7))
+                        changed = True
+            except Exception as e:
+                print(f"[okay-panel] Błąd dekodowania wiadomości Wayland (obj={obj_id}, op={opcode}): {e}", file=sys.stderr)
 
         return changed, sync_hit
 
@@ -739,28 +815,28 @@ class WaylandToplevelClient:
         return res
 
     def activate_or_minimize(self, handle_id: int, is_focused: bool, is_minimized: bool):
-        if handle_id not in self.handles:
+        if not self.connected or handle_id not in self.handles:
             return
         if is_focused:
             self._send(self._pack_msg(handle_id, 2))
         else:
             if is_minimized:
                 self._send(self._pack_msg(handle_id, 3))
-            if self.seat_bound:
-                self._send(self._pack_msg(handle_id, 4, struct.pack("<I", self.SEAT_ID)))
+            if self.seat_bound and self.seat_id is not None:
+                self._send(self._pack_msg(handle_id, 4, struct.pack("<I", self.seat_id)))
 
     def set_minimized(self, handle_id: int, minimized: bool):
-        if handle_id not in self.handles:
+        if not self.connected or handle_id not in self.handles:
             return
         if minimized:
             self._send(self._pack_msg(handle_id, 2))
         else:
             self._send(self._pack_msg(handle_id, 3))
-            if self.seat_bound:
-                self._send(self._pack_msg(handle_id, 4, struct.pack("<I", self.SEAT_ID)))
+            if self.seat_bound and self.seat_id is not None:
+                self._send(self._pack_msg(handle_id, 4, struct.pack("<I", self.seat_id)))
 
     def close_window(self, handle_id: int):
-        if handle_id in self.handles:
+        if self.connected and handle_id in self.handles:
             self._send(self._pack_msg(handle_id, 5))
 
 
@@ -774,7 +850,11 @@ class WindowManager:
 
     @classmethod
     def init_client(cls, on_change_cb):
-        cls._wl_client = WaylandToplevelClient(on_change_cb)
+        try:
+            cls._wl_client = WaylandToplevelClient(on_change_cb)
+        except Exception as e:
+            print(f"[okay-panel] Błąd uruchamiania klienta wlr-foreign-toplevel (fallback): {e}", file=sys.stderr)
+            cls._wl_client = None
 
     @classmethod
     def get_open_windows(cls) -> list:
