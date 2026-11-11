@@ -21,12 +21,19 @@ mako &
     pkill -9 -x okay-dock 2>/dev/null || true
     pkill -x sfwbar 2>/dev/null || true
     sleep 0.5
-    if command -v sfwbar >/dev/null 2>&1; then
-        sfwbar > /tmp/sfwbar.log 2>&1
-    elif [ -x /usr/bin/sfwbar ]; then
-        /usr/bin/sfwbar > /tmp/sfwbar.log 2>&1
-    elif [ -x /usr/local/bin/sfwbar ]; then
-        /usr/local/bin/sfwbar > /tmp/sfwbar.log 2>&1
+    SFWBAR_BIN="$(command -v sfwbar 2>/dev/null || echo "")"
+    if [ -z "$SFWBAR_BIN" ]; then
+        if [ -x /usr/bin/sfwbar ]; then SFWBAR_BIN="/usr/bin/sfwbar"; fi
+        if [ -x /usr/local/bin/sfwbar ]; then SFWBAR_BIN="/usr/local/bin/sfwbar"; fi
+    fi
+    if [ -n "$SFWBAR_BIN" ]; then
+        if [ -f "$HOME/.config/sfwbar/sfwbar.config" ]; then
+            "$SFWBAR_BIN" -f "$HOME/.config/sfwbar/sfwbar.config" > /tmp/sfwbar.log 2>&1
+        elif [ -f /etc/xdg/sfwbar/sfwbar.config ]; then
+            "$SFWBAR_BIN" -f /etc/xdg/sfwbar/sfwbar.config > /tmp/sfwbar.log 2>&1
+        else
+            "$SFWBAR_BIN" > /tmp/sfwbar.log 2>&1
+        fi
     fi
 ) &
 

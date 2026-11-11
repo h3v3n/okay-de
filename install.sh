@@ -3,6 +3,45 @@
 # OKay DE - Instalator środowiska graficznego dla OKsavi Linux
 set -euo pipefail
 
+ensure_sfwbar() {
+    if command -v sfwbar >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "Wykryto brak pakietu sfwbar. Próba instalacji..."
+    # 1. Sprawdź oficjalne repozytoria pacman (gdyby istniał w lokalnym repozytorium OKsavi)
+    if pacman -S --needed --noconfirm sfwbar 2>/dev/null; then
+        return 0
+    fi
+    # 2. Sprawdź yay
+    if command -v yay >/dev/null 2>&1; then
+        echo "Instalacja sfwbar z AUR za pomocą yay..."
+        yay -S --needed --noconfirm sfwbar && return 0
+    fi
+    # 3. Sprawdź paru
+    if command -v paru >/dev/null 2>&1; then
+        echo "Instalacja sfwbar z AUR za pomocą paru..."
+        paru -S --needed --noconfirm sfwbar && return 0
+    fi
+    # 4. Automatyczna kompilacja z AUR za pomocą makepkg
+    echo "Pobieranie i kompilacja sfwbar z AUR..."
+    if command -v git >/dev/null 2>&1 && command -v makepkg >/dev/null 2>&1; then
+        local build_dir
+        build_dir=$(mktemp -d /tmp/sfwbar-aur-XXXXXX)
+        git clone --depth 1 https://aur.archlinux.org/sfwbar.git "$build_dir" 2>/dev/null || true
+        if [ -f "$build_dir/PKGBUILD" ]; then
+            (
+                cd "$build_dir"
+                makepkg -si --noconfirm || true
+            )
+        fi
+        rm -rf "$build_dir"
+    fi
+    if ! command -v sfwbar >/dev/null 2>&1; then
+        echo "UWAGA: sfwbar nie został odnaleziony w repozytoriach." >&2
+        echo "Możesz zainstalować go ręcznie poleceniem: yay -S sfwbar (lub paru -S sfwbar)." >&2
+    fi
+}
+
 MODE="${1:---user}"
 
 if [ "$MODE" = "--system" ]; then
@@ -15,9 +54,10 @@ if [ "$MODE" = "--system" ]; then
 
     # Instalacja pakietów systemowych dla pełnej obsługi okien i taskbara
     if command -v pacman >/dev/null 2>&1; then
-        echo "Weryfikacja i instalacja pakietów (sfwbar, wlrctl, python-pyqt6, qt6-wayland)..."
-        pacman -S --needed --noconfirm sfwbar wlrctl python-pyqt6 qt6-wayland 2>/dev/null || true
+        echo "Weryfikacja i instalacja pakietów (wlrctl, python-pyqt6, qt6-wayland)..."
+        pacman -S --needed --noconfirm wlrctl python-pyqt6 qt6-wayland 2>/dev/null || true
     fi
+    ensure_sfwbar
 
     # Usunięcie pozostałości starego paska docka (okay-dock) oraz waybar
     rm -rf /etc/xdg/waybar /etc/okay-dock 2>/dev/null || true
@@ -60,22 +100,18 @@ if [ "$MODE" = "--system" ]; then
 elif [ "$MODE" = "--user" ]; then
     echo "Instalowanie konfiguracji OKay DE dla bieżącego użytkownika ($HOME/.config)..."
 
-    # Weryfikacja obecności sfwbar i wlrctl
-    MISSING_PKGS=()
-    if ! command -v sfwbar >/dev/null 2>&1; then
-        MISSING_PKGS+=("sfwbar")
-    fi
+    # Weryfikacja obecności wlrctl
     if ! command -v wlrctl >/dev/null 2>&1; then
-        MISSING_PKGS+=("wlrctl")
-    fi
-    if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
         if command -v pkexec >/dev/null 2>&1; then
-            echo "Wykryto brak pakietów (${MISSING_PKGS[*]}). Instalowanie..."
-            pkexec pacman -S --needed --noconfirm "${MISSING_PKGS[@]}" 2>/dev/null || true
+            echo "Wykryto brak wlrctl. Instalowanie pakietu..."
+            pkexec pacman -S --needed --noconfirm wlrctl 2>/dev/null || true
         elif command -v sudo >/dev/null 2>&1; then
-            sudo pacman -S --needed --noconfirm "${MISSING_PKGS[@]}" 2>/dev/null || true
+            sudo pacman -S --needed --noconfirm wlrctl 2>/dev/null || true
         fi
     fi
+
+    # Weryfikacja i instalacja sfwbar
+    ensure_sfwbar
 
     # Tworzenie katalogów docelowych
     mkdir -p "$HOME/.config/labwc"
