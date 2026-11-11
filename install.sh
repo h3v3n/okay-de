@@ -30,19 +30,26 @@ if [ "$MODE" = "--system" ]; then
         install -m 440 config/sudoers/99-okay-de /etc/sudoers.d/99-okay-de
     fi
 
-    # Usunięcie pozostałości starych/konfliktujących pasków
+    # Usunięcie pozostałości starych/konfliktujących pasków oraz osieroconych plików poprzednich wersji
     rm -rf /etc/okay-dock /etc/xdg/sfwbar /etc/xdg/waybar /etc/xdg/okay-de/panel 2>/dev/null || true
+    rm -rf /usr/share/okay-de/settings /usr/local/share/okay-de/settings 2>/dev/null || true
     rm -f /usr/local/bin/okay-dock /usr/bin/okay-dock 2>/dev/null || true
-    rm -f /usr/share/applications/okay-dock.desktop 2>/dev/null || true
+    rm -f /usr/bin/okay-settings /usr/local/bin/okay-settings 2>/dev/null || true
+    rm -f /usr/share/applications/okay-dock.desktop /usr/share/applications/okay-de-settings.desktop /usr/share/applications/oksavi-settings.desktop 2>/dev/null || true
+    rm -f /usr/local/share/applications/okay-settings.desktop /usr/local/share/applications/okay-dock.desktop 2>/dev/null || true
     pkill -9 -x okay-dock 2>/dev/null || true
+    pkill -9 -x okay-settings 2>/dev/null || true
     pkill -9 -x waybar 2>/dev/null || true
     pkill -9 -x sfwbar 2>/dev/null || true
 
-    # Dodatkowa instalacja okay-settings, jego modułów i okay-panel w /usr/local
-    install -d /usr/local/bin /usr/local/share/okay-de/settings
+    # Nadpisanie okay-settings, jego modułów i okay-panel zarówno w /usr/bin, jak i w /usr/local/bin
+    install -d /usr/bin /usr/local/bin /usr/share/okay-de/settings /usr/local/share/okay-de/settings
+    install -m 755 scripts/okay-settings /usr/bin/okay-settings
     install -m 755 scripts/okay-settings /usr/local/bin/okay-settings
+    install -m 755 scripts/okay-panel /usr/bin/okay-panel
     install -m 755 scripts/okay-panel /usr/local/bin/okay-panel
     if [ -d scripts/settings ]; then
+        install -m 644 scripts/settings/*.py /usr/share/okay-de/settings/
         install -m 644 scripts/settings/*.py /usr/local/share/okay-de/settings/
     fi
 
@@ -50,11 +57,19 @@ if [ "$MODE" = "--system" ]; then
     install -d /etc/xdg/okay-de
     install -m 644 config/okay-de/panel.json /etc/xdg/okay-de/panel.json
 
-    # Rejestracja plików .desktop w /usr/share/applications
+    # Rejestracja plików .desktop w /usr/share/applications, naprawa starych ścieżek Exec i aktualizacja bazy
+    for sys_desktop in /usr/share/applications/*.desktop /usr/local/share/applications/*.desktop; do
+        if [ -f "$sys_desktop" ] && grep -qE '^Exec=(/usr/bin/|/usr/local/bin/)okay-settings' "$sys_desktop" 2>/dev/null; then
+            sed -i -E 's|^Exec=(/usr/bin/|/usr/local/bin/)okay-settings|Exec=okay-settings|' "$sys_desktop" 2>/dev/null || true
+        fi
+    done
     install -d /usr/share/applications
     install -m 644 sessions/okay-settings.desktop /usr/share/applications/okay-settings.desktop
     install -m 644 sessions/foot.desktop /usr/share/applications/foot.desktop
     install -m 644 sessions/pcmanfm.desktop /usr/share/applications/pcmanfm.desktop
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database /usr/share/applications/ 2>/dev/null || true
+    fi
 
     # Szablon pierwszych ikon na pulpicie dla nowych użytkowników (/etc/skel/Desktop)
     echo "Tworzenie szablonu ikon pulpitu w /etc/skel/Desktop/..."
@@ -144,6 +159,8 @@ elif [ "$MODE" = "--user" ]; then
     fi
 
     # Bezpieczne kopiowanie skryptów i aplikacji do ~/.local/bin oraz modułów settings
+    rm -rf "$HOME/.local/share/okay-de/settings" 2>/dev/null || true
+    rm -f "$HOME/.local/bin/okay-settings" 2>/dev/null || true
     if [ -d scripts ]; then
         for s in scripts/*; do
             if [ -f "$s" ]; then
@@ -158,19 +175,39 @@ elif [ "$MODE" = "--user" ]; then
     fi
     chmod +x "$HOME/.config/labwc/autostart" 2>/dev/null || true
 
-    # Bezpieczne kopiowanie wpisów .desktop
+    # Czyszczenie starych/osieroconych wpisów .desktop oraz naprawa ścieżek Exec
+    rm -f "$HOME/.local/share/applications/okay-dock.desktop" \
+          "$HOME/.local/share/applications/okay-de-settings.desktop" \
+          "$HOME/.local/share/applications/oksavi-settings.desktop" \
+          "$HOME/.local/share/applications/okay-de.desktop" 2>/dev/null || true
+    rm -f "$HOME/Desktop/okay-dock.desktop" \
+          "$HOME/Desktop/okay-de-settings.desktop" \
+          "$HOME/Desktop/oksavi-settings.desktop" 2>/dev/null || true
+
+    for existing_desktop in "$HOME/.local/share/applications/"*.desktop; do
+        if [ -f "$existing_desktop" ] && grep -qE '^Exec=(/usr/bin/|/usr/local/bin/)okay-settings' "$existing_desktop" 2>/dev/null; then
+            sed -i -E 's|^Exec=(/usr/bin/|/usr/local/bin/)okay-settings|Exec=okay-settings|' "$existing_desktop" 2>/dev/null || true
+        fi
+    done
+
+    # Kopiowanie aktualnych wpisów .desktop aplikacji i odświeżenie bazy oraz cache fuzzel
     if [ -d sessions ]; then
         for d in sessions/*.desktop; do
-            if [ -f "$d" ]; then
+            if [ -f "$d" ] && [ "$(basename "$d")" != "okay-de.desktop" ]; then
                 cp "$d" "$HOME/.local/share/applications/"
             fi
         done
     fi
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$HOME/.local/share/applications/" 2>/dev/null || true
+    fi
+    rm -f "$HOME/.cache/fuzzel" 2>/dev/null || true
 
-    # Całkowite usunięcie pozostałości starego paska docka (okay-dock)
+    # Całkowite usunięcie pozostałości starego paska docka (okay-dock) i instancji starego okay-settings
     rm -rf "$HOME/.config/okay-dock" 2>/dev/null || true
-    rm -f "$HOME/.local/bin/okay-dock" "$HOME/.local/share/applications/okay-dock.desktop" 2>/dev/null || true
+    rm -f "$HOME/.local/bin/okay-dock" 2>/dev/null || true
     pkill -9 -x okay-dock 2>/dev/null || true
+    pkill -9 -x okay-settings 2>/dev/null || true
 
     # Przeładowanie lub uruchomienie paska zadań OKay DE
     if [ -x "$HOME/.local/bin/okay-panel" ]; then
