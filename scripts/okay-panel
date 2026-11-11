@@ -1,49 +1,694 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-# OKay DE - Główny zarządca paska zadań (Panel Supervisor)
-# Wybiera najlepszy dostępny backend paska (sfwbar / waybar) i dba o jego stabilność.
+"""
+OKay Panel (okay-panel)
+Natywny pasek zadań środowiska graficznego OKay DE dla dystrybucji OKsavi Linux.
+Stos technologiczny: Python 3, GTK 3, GtkLayerShell (wlr-layer-shell dla Wayland).
+Motyw: Catppuccin Mocha | Styl: KDE Plasma (0px radius, ostre krawędzie, biała kreska statusu).
+"""
 
-ACTION="${1:-start}"
+import os
+import sys
+import glob
+import json
+import time
+import signal
+import shutil
+import subprocess
+from datetime import datetime
 
-restart_panel() {
-    pkill -9 -x okay-dock 2>/dev/null || true
-    pkill -x sfwbar 2>/dev/null || true
-    pkill -x waybar 2>/dev/null || true
-    sleep 0.3
+# Inicjalizacja bibliotek GTK3 i Wayland Layer-Shell
+import gi
+gi.require_version('Gtk', '3.0')
+try:
+    gi.require_version('GtkLayerShell', '0.1')
+    from gi.repository import GtkLayerShell
+    HAS_LAYER_SHELL = True
+except (ValueError, ImportError):
+    HAS_LAYER_SHELL = False
+
+from gi.repository import Gtk, Gdk, GLib, Gio, GdkPixbuf
+
+# ============================================================================
+# Style CSS (Catppuccin Mocha - 0px radius, ostry design)
+# ============================================================================
+
+CATPPUCCIN_CSS = b"""
+* {
+    font-family: "JetBrains Mono", sans-serif;
+    font-size: 11px;
+    border-radius: 0px;
+    margin: 0;
+    padding: 0;
 }
 
-if [ "$ACTION" = "--restart" ] || [ "$ACTION" = "restart" ]; then
-    restart_panel
-fi
+window#okay-panel {
+    background-color: #11111b;
+    border-top: 1px solid #313244;
+    color: #cdd6f4;
+}
 
-# 1. Domyślny stabilny backend: waybar (oficjalny pakiet w repozytorium Arch Linux)
-if [ "${OKAY_PANEL_BACKEND:-waybar}" = "waybar" ] && command -v waybar >/dev/null 2>&1; then
-    CONFIG_FILE="$HOME/.config/waybar/config.jsonc"
-    STYLE_FILE="$HOME/.config/waybar/style.css"
-    [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="/etc/xdg/waybar/config.jsonc"
-    [ ! -f "$STYLE_FILE" ] && STYLE_FILE="/etc/xdg/waybar/style.css"
+button {
+    background-color: transparent;
+    border: none;
+    border-radius: 0px;
+    color: #cdd6f4;
+    padding: 0 4px;
+    margin: 0;
+    min-height: 38px;
+    outline: none;
+    box-shadow: none;
+}
 
-    if [ -f "$CONFIG_FILE" ] && [ -f "$STYLE_FILE" ]; then
-        exec waybar -c "$CONFIG_FILE" -s "$STYLE_FILE" > /tmp/waybar.log 2>&1
-    else
-        exec waybar > /tmp/waybar.log 2>&1
-    fi
-fi
+button:hover {
+    background-color: #313244;
+}
 
-# 2. Alternatywny backend: sfwbar (opcjonalny, lekki pasek z AUR)
-if command -v sfwbar >/dev/null 2>&1; then
-    CONFIG_FILE="$HOME/.config/sfwbar/sfwbar.config"
-    [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="/etc/xdg/sfwbar/sfwbar.config"
-    if [ -f "$CONFIG_FILE" ]; then
-        exec sfwbar -f "$CONFIG_FILE" > /tmp/sfwbar.log 2>&1
-    fi
-fi
+/* Przycisk Start (Menu) */
+#start-button {
+    background-color: transparent;
+    color: #89b4fa;
+    padding: 0 12px;
+    font-size: 15px;
+}
 
-# 3. Awaryjny fallback do waybar
-if command -v waybar >/dev/null 2>&1; then
-    exec waybar > /tmp/waybar.log 2>&1
-fi
+#start-button:hover {
+    background-color: #313244;
+}
 
-echo "Błąd: Nie znaleziono żadnego kompatybilnego paska zadań (sfwbar ani waybar)." >&2
-echo "Zainstaluj waybar poleceniem: sudo pacman -S waybar" >&2
-exit 1
+/* Pasek zadań - elementy aplikacji */
+.task-item {
+    background-color: transparent;
+    border: none;
+    border-bottom: 3px solid transparent;
+    padding: 0 10px;
+    margin: 0 1px;
+    min-width: 40px;
+}
+
+/* Uruchomiona aplikacja - wyraźna biała kreska statusu na dole */
+.task-item.app-open {
+    border-bottom: 3px solid #ffffff;
+}
+
+/* Aktywna / zogniskowana aplikacja */
+.task-item.app-focused {
+    background-color: #24273a;
+    border-bottom: 3px solid #ffffff;
+}
+
+/* Zminimalizowane okno */
+.task-item.app-minimized {
+    opacity: 0.65;
+    border-bottom: 3px solid #ffffff;
+}
+
+.task-item:hover {
+    background-color: #313244;
+}
+
+/* Prawa strona: Bateria, Głośność, Zegar, Pokaż pulpit */
+.status-item {
+    padding: 0 8px;
+    margin: 0 1px;
+    color: #cdd6f4;
+}
+
+.status-item:hover {
+    background-color: #313244;
+}
+
+#clock-button {
+    padding: 0 10px;
+    margin: 0 2px;
+}
+
+#clock-button:hover {
+    background-color: #24273a;
+}
+
+#desktop-button {
+    border-left: 1px solid #313244;
+    min-width: 14px;
+    padding: 0 6px;
+    margin-left: 4px;
+}
+
+#desktop-button:hover {
+    background-color: #89b4fa;
+}
+"""
+
+# ============================================================================
+# Pomocnik ikon i procesów
+# ============================================================================
+
+class AppHelper:
+    ICON_THEME = Gtk.IconTheme.get_default()
+
+    APP_ICON_MAP = {
+        "foot": "utilities-terminal",
+        "pcmanfm": "system-file-manager",
+        "settings": "preferences-system",
+        "okay-settings": "preferences-system",
+        "firefox": "firefox",
+        "chromium": "chromium",
+        "google-chrome": "google-chrome",
+        "code": "code",
+        "vlc": "vlc",
+        "mpv": "mpv",
+        "gimp": "gimp",
+        "thunar": "system-file-manager",
+        "nautilus": "system-file-manager",
+        "pavucontrol": "multimedia-volume-control"
+    }
+
+    @classmethod
+    def get_icon_name(cls, app_id: str) -> str:
+        clean_id = app_id.lower().strip()
+        if clean_id in cls.APP_ICON_MAP:
+            return cls.APP_ICON_MAP[clean_id]
+        if cls.ICON_THEME.has_icon(clean_id):
+            return clean_id
+        # Sprawdzenie wariantu z myślnikiem lub kropką
+        parts = clean_id.split(".")
+        if parts and cls.ICON_THEME.has_icon(parts[-1]):
+            return parts[-1]
+        return "application-x-executable"
+
+
+# ============================================================================
+# Zarządca okien Wayland (wlrctl)
+# ============================================================================
+
+class WindowManager:
+    @staticmethod
+    def get_open_windows() -> list:
+        """Pobiera listę otwartych okien z kompozytora labwc przez wlrctl."""
+        if not shutil.which("wlrctl"):
+            return []
+        try:
+            res = subprocess.run(
+                ["wlrctl", "toplevel", "list"],
+                capture_output=True, text=True, timeout=0.4, check=False
+            )
+            if res.returncode != 0 or not res.stdout.strip():
+                return []
+            windows = []
+            for line in res.stdout.strip().split("\n"):
+                if not line.strip():
+                    continue
+                if ":" in line:
+                    app_id, title = line.split(":", 1)
+                    windows.append({
+                        "app_id": app_id.strip(),
+                        "title": title.strip()
+                    })
+                else:
+                    windows.append({
+                        "app_id": line.strip(),
+                        "title": line.strip()
+                    })
+            return windows
+        except Exception:
+            return []
+
+    @staticmethod
+    def get_focused_app_id() -> str:
+        """Zwraca app_id aktywnego okna."""
+        if not shutil.which("wlrctl"):
+            return ""
+        try:
+            res = subprocess.run(
+                ["wlrctl", "toplevel", "list", "state:focused"],
+                capture_output=True, text=True, timeout=0.3, check=False
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                first_line = res.stdout.strip().split("\n")[0]
+                return first_line.split(":", 1)[0].strip()
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def get_minimized_app_ids() -> set:
+        """Zwraca zbiór app_id zminimalizowanych okien."""
+        if not shutil.which("wlrctl"):
+            return set()
+        try:
+            res = subprocess.run(
+                ["wlrctl", "toplevel", "list", "state:minimized"],
+                capture_output=True, text=True, timeout=0.3, check=False
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                out = set()
+                for line in res.stdout.strip().split("\n"):
+                    if line.strip():
+                        out.add(line.split(":", 1)[0].strip())
+                return out
+        except Exception:
+            pass
+        return set()
+
+    @staticmethod
+    def activate_or_minimize(app_id: str, is_focused: bool, is_minimized: bool):
+        """Przełącza stan okna: minimalizuje aktywne, przywraca zminimalizowane/nieaktywne."""
+        if not shutil.which("wlrctl"):
+            return
+        try:
+            if is_focused:
+                subprocess.Popen(["wlrctl", "toplevel", "minimize", "true", f"app_id:{app_id}"])
+            elif is_minimized:
+                subprocess.Popen(["wlrctl", "toplevel", "minimize", "false", f"app_id:{app_id}"])
+                subprocess.Popen(["wlrctl", "toplevel", "focus", f"app_id:{app_id}"])
+            else:
+                subprocess.Popen(["wlrctl", "toplevel", "focus", f"app_id:{app_id}"])
+        except Exception:
+            pass
+
+    @staticmethod
+    def close_window(app_id: str):
+        """Zamyka okno danej aplikacji."""
+        if shutil.which("wlrctl"):
+            try:
+                subprocess.Popen(["wlrctl", "toplevel", "close", f"app_id:{app_id}"])
+            except Exception:
+                pass
+
+
+# ============================================================================
+# Główne okno paska zadań OKay Panel
+# ============================================================================
+
+class OkayPanel(Gtk.Window):
+    def __init__(self):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.set_name("okay-panel")
+        self.set_title("okay-panel")
+
+        # Konfiguracja Wayland Layer-Shell
+        if HAS_LAYER_SHELL:
+            GtkLayerShell.init_for_window(self)
+            GtkLayerShell.set_layer(self, GtkLayerShell.Layer.TOP)
+            GtkLayerShell.auto_exclusive_zone_enable(self)
+            GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, True)
+            GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.LEFT, True)
+            GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.RIGHT, True)
+        else:
+            self.set_type_hint(Gdk.WindowTypeHint.DOCK)
+            self.set_decorated(False)
+            self.set_keep_above(True)
+
+        self.set_default_size(1920, 38)
+        self.set_size_request(-1, 38)
+
+        # Załadowanie stylów CSS Catppuccin Mocha
+        css_provider = Gtk.CssProvider()
+        css_provider.load_from_data(CATPPUCCIN_CSS)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(),
+            css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+        # Główny kontener poziomy
+        self.main_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.add(self.main_box)
+
+        # Lewa strona (Menu Start + Taskbar)
+        self.left_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        self.main_box.pack_start(self.left_box, False, False, 0)
+
+        # 1. Przycisk Menu Start (OKsavi / OKay DE)
+        self._build_start_button()
+
+        # 2. Kontener paska zadań (Taskbar)
+        self.tasks_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        self.left_box.pack_start(self.tasks_box, False, False, 0)
+
+        # Środkowy elastyczny separator
+        self.spacer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self.spacer.set_hexpand(True)
+        self.main_box.pack_start(self.spacer, True, True, 0)
+
+        # Prawa strona (Bateria, Głośność, Zegar, Pokaż pulpit)
+        self.right_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        self.main_box.pack_end(self.right_box, False, False, 0)
+
+        self._build_right_section()
+
+        self._pinned_apps_file = os.path.expanduser("~/.config/okay-de/pinned_apps.json")
+        self._pinned_apps_mtime = 0
+
+        # Domyślne przypięte aplikacje
+        self.pinned_apps = self._load_pinned_apps()
+
+        # Stan dynamiczny okien
+        self.current_window_state = []
+        self.current_focused = ""
+        self.current_minimized = set()
+
+        # Timer odświeżania okien (co 350 ms)
+        GLib.timeout_add(350, self._update_tasks)
+        # Timer odświeżania zegara i statusów (co 1000 ms)
+        GLib.timeout_add(1000, self._update_status)
+
+        # Pierwsze odświeżenie
+        self._update_tasks()
+        self._update_status()
+
+    # ------------------------------------------------------------------------
+    # Budowa widoków
+    # ------------------------------------------------------------------------
+
+    def _build_start_button(self):
+        btn = Gtk.Button()
+        btn.set_name("start-button")
+        btn.set_tooltip_text("Programy (Super / Fuzzel)\nPPM: Menu zasilania")
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        # Ikona dystrybucji lub logo systemu
+        icon_name = "distributor-logo"
+        if not Gtk.IconTheme.get_default().has_icon(icon_name):
+            icon_name = "start-here" if Gtk.IconTheme.get_default().has_icon("start-here") else "system-run"
+        img = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.LARGE_TOOLBAR)
+        box.pack_start(img, True, True, 0)
+        btn.add(box)
+
+        btn.connect("button-press-event", self._on_start_button_press)
+        self.left_box.pack_start(btn, False, False, 0)
+
+    def _build_right_section(self):
+        # 1. Przycisk "Pokaż pulpit" (na samym skraju prawej strony)
+        btn_desktop = Gtk.Button()
+        btn_desktop.set_name("desktop-button")
+        btn_desktop.set_tooltip_text("Pokaż pulpit (Super + D)")
+        btn_desktop.connect("clicked", self._on_desktop_clicked)
+        self.right_box.pack_end(btn_desktop, False, False, 0)
+
+        # 2. Zegar cyfrowy (styl KDE - godzina na górze, data na dole)
+        self.btn_clock = Gtk.Button()
+        self.btn_clock.set_name("clock-button")
+        self.lbl_clock = Gtk.Label()
+        self.lbl_clock.set_justify(Gtk.Justification.CENTER)
+        self.btn_clock.add(self.lbl_clock)
+        self.right_box.pack_end(self.btn_clock, False, False, 0)
+
+        # 3. Głośność (Audio Volume)
+        self.btn_volume = Gtk.Button()
+        self.btn_volume.get_style_context().add_class("status-item")
+        self.box_volume = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.img_volume = Gtk.Image.new_from_icon_name("audio-volume-high", Gtk.IconSize.MENU)
+        self.lbl_volume = Gtk.Label(label="100%")
+        self.box_volume.pack_start(self.img_volume, False, False, 0)
+        self.box_volume.pack_start(self.lbl_volume, False, False, 0)
+        self.btn_volume.add(self.box_volume)
+
+        self.btn_volume.connect("button-press-event", self._on_volume_press)
+        self.btn_volume.connect("scroll-event", self._on_volume_scroll)
+        self.right_box.pack_end(self.btn_volume, False, False, 0)
+
+        # 4. Wskaźnik baterii (dla laptopów)
+        self.box_battery = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.box_battery.get_style_context().add_class("status-item")
+        self.img_battery = Gtk.Image.new_from_icon_name("battery-full", Gtk.IconSize.MENU)
+        self.lbl_battery = Gtk.Label(label="")
+        self.box_battery.pack_start(self.img_battery, False, False, 0)
+        self.box_battery.pack_start(self.lbl_battery, False, False, 0)
+        self.right_box.pack_end(self.box_battery, False, False, 0)
+
+    # ------------------------------------------------------------------------
+    # Zdarzenia użytkownika
+    # ------------------------------------------------------------------------
+
+    def _on_start_button_press(self, widget, event):
+        if event.button == 1:
+            subprocess.Popen(["fuzzel"])
+        elif event.button == 3:
+            subprocess.Popen(["okay-powermenu"])
+        return True
+
+    def _on_desktop_clicked(self, widget):
+        windows = WindowManager.get_open_windows()
+        minimized = WindowManager.get_minimized_app_ids()
+        unminimized = [w["app_id"] for w in windows if w["app_id"] not in minimized]
+        if unminimized:
+            for app_id in unminimized:
+                subprocess.Popen(["wlrctl", "toplevel", "minimize", "true", f"app_id:{app_id}"])
+        elif windows:
+            for w in windows:
+                subprocess.Popen(["wlrctl", "toplevel", "minimize", "false", f"app_id:{w['app_id']}"])
+
+    def _on_volume_press(self, widget, event):
+        if event.button == 1:
+            subprocess.Popen(["pavucontrol"])
+        elif event.button == 3:
+            subprocess.Popen(["okay-volume", "mute"])
+        return True
+
+    def _on_volume_scroll(self, widget, event):
+        if event.direction == Gdk.ScrollDirection.UP:
+            subprocess.Popen(["okay-volume", "raise"])
+        elif event.direction == Gdk.ScrollDirection.DOWN:
+            subprocess.Popen(["okay-volume", "lower"])
+        return True
+
+    # ------------------------------------------------------------------------
+    # Logika paska zadań i okien
+    # ------------------------------------------------------------------------
+
+    def _load_pinned_apps(self) -> dict:
+        config_file = os.path.expanduser("~/.config/okay-de/pinned_apps.json")
+        default_pins = {
+            "foot": {"cmd": "foot", "icon": "utilities-terminal", "title": "Terminal (foot)", "enabled": True},
+            "pcmanfm": {"cmd": "pcmanfm", "icon": "system-file-manager", "title": "Menedżer plików (pcmanfm)", "enabled": True},
+            "okay-settings": {"cmd": "okay-settings", "icon": "preferences-system", "title": "Ustawienia OKay", "enabled": True},
+            "firefox": {"cmd": "firefox", "icon": "firefox", "title": "Przeglądarka internetowa", "enabled": True}
+        }
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    res = {}
+                    for k, v in data.items():
+                        if v.get("enabled", True):
+                            cmd = v.get("cmd", k)
+                            res[k] = {
+                                "cmd": cmd,
+                                "icon": v.get("icon_name", AppHelper.get_icon_name(cmd.split()[0])),
+                                "title": v.get("name", k),
+                                "enabled": True
+                            }
+                    return res if res else default_pins
+            except Exception:
+                pass
+        return default_pins
+
+    def _update_tasks(self) -> bool:
+        """Pobiera aktualny stan okien i dynamicznie buduje przyciski paska zadań."""
+        try:
+            mtime = os.path.getmtime(self._pinned_apps_file) if os.path.exists(self._pinned_apps_file) else 0
+            if mtime != self._pinned_apps_mtime:
+                self._pinned_apps_mtime = mtime
+                self.pinned_apps = self._load_pinned_apps()
+                self._last_state_key = None
+        except Exception:
+            pass
+
+        windows = WindowManager.get_open_windows()
+        focused_app = WindowManager.get_focused_app_id()
+        minimized_apps = WindowManager.get_minimized_app_ids()
+
+        # Sprawdzenie czy nastąpiła zmiana w oknach, aby uniknąć zbędnego przebudowywania GUI
+        state_key = (
+            [(w["app_id"], w["title"]) for w in windows],
+            focused_app,
+            tuple(sorted(minimized_apps))
+        )
+        if hasattr(self, "_last_state_key") and self._last_state_key == state_key:
+            return True
+        self._last_state_key = state_key
+
+        # Czyszczenie dotychczasowych przycisków w taskbarze
+        for child in self.tasks_box.get_children():
+            self.tasks_box.remove(child)
+
+        open_app_ids = {w["app_id"] for w in windows}
+        processed_app_ids = set()
+
+        # 1. Renderowanie przypiętych aplikacji (Pins)
+        for pin_id, pin_data in self.pinned_apps.items():
+            cmd = pin_data["cmd"]
+            base_app = cmd.split()[0]
+            is_running = (base_app in open_app_ids) or (pin_id in open_app_ids)
+
+            matching_app_id = base_app if base_app in open_app_ids else pin_id
+            if is_running:
+                processed_app_ids.add(matching_app_id)
+
+            btn = Gtk.Button()
+            btn.get_style_context().add_class("task-item")
+
+            # Stylizacja stanów:
+            if is_running:
+                # Biała kreska świadcząca o tym, że aplikacja jest otwarta!
+                btn.get_style_context().add_class("app-open")
+                if matching_app_id == focused_app:
+                    btn.get_style_context().add_class("app-focused")
+                elif matching_app_id in minimized_apps:
+                    btn.get_style_context().add_class("app-minimized")
+            else:
+                btn.get_style_context().add_class("app-pinned")
+
+            btn.set_tooltip_text(pin_data["title"])
+            icon_name = AppHelper.get_icon_name(base_app)
+            img = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.DND)
+            btn.add(img)
+
+            # Obsługa kliknięć
+            btn.connect("button-press-event", self._on_task_press, matching_app_id, cmd, is_running, matching_app_id == focused_app, matching_app_id in minimized_apps)
+            self.tasks_box.pack_start(btn, False, False, 0)
+
+        # 2. Renderowanie dynamicznych, nieprzypiętych aplikacji, które są otwarte
+        for win in windows:
+            app_id = win["app_id"]
+            if app_id in processed_app_ids:
+                continue
+            processed_app_ids.add(app_id)
+
+            btn = Gtk.Button()
+            btn.get_style_context().add_class("task-item")
+            # Każda uruchomiona nieprzypięta aplikacja ma pod sobą BIAŁĄ KRESKĘ!
+            btn.get_style_context().add_class("app-open")
+
+            if app_id == focused_app:
+                btn.get_style_context().add_class("app-focused")
+            elif app_id in minimized_apps:
+                btn.get_style_context().add_class("app-minimized")
+
+            btn.set_tooltip_text(win["title"])
+            icon_name = AppHelper.get_icon_name(app_id)
+            img = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.DND)
+            btn.add(img)
+
+            btn.connect("button-press-event", self._on_task_press, app_id, app_id, True, app_id == focused_app, app_id in minimized_apps)
+            self.tasks_box.pack_start(btn, False, False, 0)
+
+        self.tasks_box.show_all()
+        return True
+
+    def _on_task_press(self, widget, event, app_id: str, cmd: str, is_running: bool, is_focused: bool, is_minimized: bool):
+        if event.button == 1:
+            if not is_running:
+                # Aplikacja nie była otwarta -> uruchom ją
+                subprocess.Popen(cmd.split())
+            else:
+                # Aplikacja jest już otwarta -> przywróć / zminimalizuj bez otwierania duplikatów!
+                WindowManager.activate_or_minimize(app_id, is_focused, is_minimized)
+        elif event.button == 3 and is_running:
+            # Prawym przyciskiem myszy zamknij okno
+            WindowManager.close_window(app_id)
+        return True
+
+    # ------------------------------------------------------------------------
+    # Logika statusów (Głośność, Bateria, Zegar)
+    # ------------------------------------------------------------------------
+
+    def _update_status(self) -> bool:
+        now = datetime.now()
+        # Dwuwierszowy format KDE: HH:MM na górze, DD.MM.YYYY na dole
+        time_str = now.strftime("%H:%M")
+        date_str = now.strftime("%d.%m.%Y")
+        self.lbl_clock.set_markup(f"<b>{time_str}</b>\n<small>{date_str}</small>")
+        self.btn_clock.set_tooltip_text(now.strftime("%A, %d %B %Y"))
+
+        # Głośność (wpctl)
+        try:
+            res = subprocess.run(
+                ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
+                capture_output=True, text=True, timeout=0.2, check=False
+            )
+            if res.returncode == 0:
+                out = res.stdout.strip()
+                is_muted = "[MUTED]" in out
+                parts = out.split()
+                vol = 100
+                if len(parts) >= 2:
+                    try:
+                        vol = int(float(parts[1]) * 100)
+                    except ValueError:
+                        pass
+
+                if is_muted:
+                    self.img_volume.set_from_icon_name("audio-volume-muted", Gtk.IconSize.MENU)
+                    self.lbl_volume.set_text("Mute")
+                    self.btn_volume.set_tooltip_text("Dźwięk wyciszony (LPM: Mikser, PPM: Włącz)")
+                else:
+                    icon = "audio-volume-high" if vol > 65 else ("audio-volume-medium" if vol > 25 else "audio-volume-low")
+                    self.img_volume.set_from_icon_name(icon, Gtk.IconSize.MENU)
+                    self.lbl_volume.set_text(f"{vol}%")
+                    self.btn_volume.set_tooltip_text(f"Głośność: {vol}%\nLPM: Mikser, Rolka: +/-")
+        except Exception:
+            pass
+
+        # Bateria (sprawdzenie obecności w /sys/class/power_supply)
+        bat_dirs = glob.glob("/sys/class/power_supply/BAT*")
+        if bat_dirs:
+            try:
+                bat_dir = bat_dirs[0]
+                cap_file = os.path.join(bat_dir, "capacity")
+                stat_file = os.path.join(bat_dir, "status")
+                if os.path.exists(cap_file):
+                    with open(cap_file, "r") as f:
+                        cap = int(f.read().strip())
+                    status = "Discharging"
+                    if os.path.exists(stat_file):
+                        with open(stat_file, "r") as f:
+                            status = f.read().strip()
+
+                    is_charging = (status == "Charging")
+                    icon = "battery-charging" if is_charging else ("battery-full" if cap > 75 else ("battery-good" if cap > 35 else "battery-low"))
+                    self.img_battery.set_from_icon_name(icon, Gtk.IconSize.MENU)
+                    self.lbl_battery.set_text(f"{cap}%")
+                    self.box_battery.set_tooltip_text(f"Bateria: {cap}% ({status})")
+                    self.box_battery.set_visible(True)
+            except Exception:
+                self.box_battery.set_visible(False)
+        else:
+            self.box_battery.set_visible(False)
+
+        return True
+
+
+# ============================================================================
+# Główna funkcja startowa
+# ============================================================================
+
+def main():
+    # Obsługa sygnałów zamknięcia
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+    # Zapewnienie pojedynczej instancji paska i obsługa --restart
+    my_pid = os.getpid()
+    try:
+        res = subprocess.run(["pgrep", "-f", "okay-panel"], capture_output=True, text=True, check=False)
+        for line in res.stdout.strip().splitlines():
+            try:
+                pid = int(line.strip())
+                if pid != my_pid:
+                    os.kill(pid, signal.SIGTERM)
+            except (ValueError, ProcessLookupError, PermissionError):
+                pass
+        time.sleep(0.15)
+    except Exception:
+        pass
+
+    app = OkayPanel()
+    app.connect("destroy", Gtk.main_quit)
+    app.show_all()
+    Gtk.main()
+
+if __name__ == "__main__":
+    main()

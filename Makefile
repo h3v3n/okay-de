@@ -80,12 +80,6 @@ install:
 	install -m 644 config/pcmanfm/default/desktop-items-0.conf $(DESTDIR)/etc/xdg/pcmanfm/default/desktop-items-0.conf
 	install -m 644 config/pcmanfm/default/pcmanfm.conf $(DESTDIR)/etc/xdg/pcmanfm/default/pcmanfm.conf
 
-	install -d $(DESTDIR)/etc/xdg/sfwbar
-	install -m 644 config/sfwbar/* $(DESTDIR)/etc/xdg/sfwbar/
-
-	install -d $(DESTDIR)/etc/xdg/waybar
-	install -m 644 config/waybar/* $(DESTDIR)/etc/xdg/waybar/
-
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-session
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-settings

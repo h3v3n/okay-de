@@ -346,12 +346,8 @@ class InstallUpdateWorker(QThread):
             subprocess.run(["labwc", "--reconfigure"], check=False)
             if shutil.which("okay-panel"):
                 subprocess.Popen(["okay-panel", "--restart"])
-            elif shutil.which("sfwbar"):
-                subprocess.run(["pkill", "-x", "sfwbar"], check=False)
-                subprocess.Popen(["sfwbar"])
-            elif shutil.which("waybar"):
-                subprocess.run(["pkill", "-x", "waybar"], check=False)
-                subprocess.Popen(["waybar"])
+            elif os.path.exists(os.path.expanduser("~/.local/bin/okay-panel")):
+                subprocess.Popen([os.path.expanduser("~/.local/bin/okay-panel"), "--restart"])
 
             if shutil.which("notify-send"):
                 subprocess.Popen([
@@ -401,36 +397,12 @@ class ConfigManager:
         return apps
 
     @classmethod
-    def sync_sfwbar_pins(cls, apps: dict):
-        """Aktualizuje listę przypiętych aplikacji (pins) w ~/.config/sfwbar/sfwbar.config."""
-        sfwbar_conf = os.path.expanduser("~/.config/sfwbar/sfwbar.config")
-        if not os.path.exists(sfwbar_conf):
-            return
-        enabled_pins = []
-        for app_id, data in apps.items():
-            if data.get("enabled", False):
-                cmd = data.get("cmd", app_id).split()[0]
-                enabled_pins.append(f'"{cmd}"')
-        pins_str = f"pins = {', '.join(enabled_pins)}"
-        try:
-            with open(sfwbar_conf, "r", encoding="utf-8") as f:
-                content = f.read()
-            new_content = re.sub(r'pins\s*=\s*[^\n]+', pins_str, content)
-            if new_content != content:
-                with open(sfwbar_conf, "w", encoding="utf-8") as f:
-                    f.write(new_content)
-                subprocess.run(["killall", "-SIGHUP", "sfwbar"], check=False)
-        except Exception as e:
-            print(f"Błąd synchronizacji pins w sfwbar: {e}", file=sys.stderr)
-
-    @classmethod
     def set_pinned_apps(cls, apps: dict) -> bool:
-        """Zapisuje przypięte aplikacje do konfiguracji paska zadań sfwbar."""
+        """Zapisuje przypięte aplikacje do konfiguracji paska zadań (pinned_apps.json)."""
         cls.ensure_dirs()
         try:
             with open(cls.PINNED_APPS_FILE, "w", encoding="utf-8") as f:
                 json.dump(apps, f, indent=2, ensure_ascii=False)
-            cls.sync_sfwbar_pins(apps)
             return True
         except Exception as e:
             print(f"Błąd zapisu przypiętych aplikacji: {e}", file=sys.stderr)
@@ -612,7 +584,7 @@ class AppearancePage(QWidget):
         # 2. Karta Przypięte aplikacje w pasku zadań (Taskbar)
         card_pinned = PreferenceCard(
             "Przypięte aplikacje w pasku zadań (Taskbar)",
-            "Zarządzaj skrótami do programów stale widocznymi na dolnym pasku zadań sfwbar."
+            "Zarządzaj skrótami do programów stale widocznymi na dolnym pasku zadań okay-panel."
         )
 
         self.pinned_apps = ConfigManager.get_pinned_apps()
