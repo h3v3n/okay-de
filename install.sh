@@ -15,8 +15,8 @@ if [ "$MODE" = "--system" ]; then
 
     # Instalacja pakietów systemowych dla pełnej obsługi okien i taskbara
     if command -v pacman >/dev/null 2>&1; then
-        echo "Weryfikacja i instalacja pakietów (python-pyqt6, qt6-wayland, wlrctl)..."
-        pacman -S --needed --noconfirm wlrctl python-pyqt6 qt6-wayland 2>/dev/null || true
+        echo "Weryfikacja i instalacja pakietów (sfwbar, wlrctl, python-pyqt6, qt6-wayland)..."
+        pacman -S --needed --noconfirm sfwbar wlrctl python-pyqt6 qt6-wayland 2>/dev/null || true
     fi
 
     # Dodatkowa instalacja okay-settings i okay-dock w /usr/local/bin
@@ -60,18 +60,26 @@ if [ "$MODE" = "--system" ]; then
 elif [ "$MODE" = "--user" ]; then
     echo "Instalowanie konfiguracji OKay DE dla bieżącego użytkownika ($HOME/.config)..."
 
-    # Weryfikacja obecności wlrctl
+    # Weryfikacja obecności sfwbar i wlrctl
+    MISSING_PKGS=()
+    if ! command -v sfwbar >/dev/null 2>&1; then
+        MISSING_PKGS+=("sfwbar")
+    fi
     if ! command -v wlrctl >/dev/null 2>&1; then
+        MISSING_PKGS+=("wlrctl")
+    fi
+    if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
         if command -v pkexec >/dev/null 2>&1; then
-            echo "Wykryto brak wlrctl. Instalowanie pakietu..."
-            pkexec pacman -S --needed --noconfirm wlrctl 2>/dev/null || true
+            echo "Wykryto brak pakietów (${MISSING_PKGS[*]}). Instalowanie..."
+            pkexec pacman -S --needed --noconfirm "${MISSING_PKGS[@]}" 2>/dev/null || true
         elif command -v sudo >/dev/null 2>&1; then
-            sudo pacman -S --needed --noconfirm wlrctl 2>/dev/null || true
+            sudo pacman -S --needed --noconfirm "${MISSING_PKGS[@]}" 2>/dev/null || true
         fi
     fi
 
     # Tworzenie katalogów docelowych
     mkdir -p "$HOME/.config/labwc"
+    mkdir -p "$HOME/.config/sfwbar"
     mkdir -p "$HOME/.config/foot"
     mkdir -p "$HOME/.config/fuzzel"
     mkdir -p "$HOME/.config/mako"
@@ -87,6 +95,7 @@ elif [ "$MODE" = "--user" ]; then
 
     # Kopiowanie konfiguracji (w tym masek przycisków XBM i wektorów SVG do labwc)
     cp -r config/labwc/* "$HOME/.config/labwc/" 2>/dev/null || true
+    cp -r config/sfwbar/* "$HOME/.config/sfwbar/" 2>/dev/null || true
     cp -r config/foot/* "$HOME/.config/foot/" 2>/dev/null || true
     cp -r config/fuzzel/* "$HOME/.config/fuzzel/" 2>/dev/null || true
     cp -r config/mako/* "$HOME/.config/mako/" 2>/dev/null || true
@@ -120,9 +129,14 @@ elif [ "$MODE" = "--user" ]; then
         done
     fi
 
-    # Usunięcie starej konfiguracji waybar i wyczyszczenie procesu
+    # Usunięcie starej konfiguracji waybar i wyczyszczenie procesów
     rm -rf "$HOME/.config/waybar" 2>/dev/null || true
     pkill -x waybar 2>/dev/null || true
+    pkill -x okay-dock 2>/dev/null || true
+    if pgrep -x sfwbar >/dev/null 2>&1; then
+        echo "Przeładowywanie uruchomionego paska sfwbar (SIGHUP)..."
+        killall -SIGHUP sfwbar 2>/dev/null || true
+    fi
 
     # Inicjalizacja domyślnych ikon na pulpicie użytkownika
     echo "Kopiowanie domyślnych ikon na pulpit ($HOME/Desktop)..."
@@ -139,7 +153,7 @@ elif [ "$MODE" = "--user" ]; then
     fi
 
     echo "Konfiguracja użytkownika zainstalowana pomyślnie."
-    echo "Wymagane pakiety dla OKay Settings i OKay Dock: python-pyqt6, qt6-wayland, wlrctl."
+    echo "Wymagane pakiety: sfwbar, python-pyqt6, qt6-wayland, wlrctl."
     echo "Sugerowane pakiety narzędzi: swaybg, wdisplays, pavucontrol, papirus-icon-theme."
     echo "Upewnij się, że \$HOME/.local/bin znajduje się w Twojej zmiennej PATH."
 

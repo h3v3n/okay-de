@@ -2,7 +2,7 @@
 <labwc_config>
   <core>
     <gap>6</gap>
-    <margin bottom="44" />
+    <margin bottom="0" />
   </core>
 
   <!-- Kafelkowanie okien przy przeciąganiu myszą do krawędzi ekranu -->
@@ -97,6 +97,11 @@
     <!-- Zamknięcie aktywnego okna: Super + Q -->
     <keybind key="W-q">
       <action name="Close" />
+    </keybind>
+
+    <!-- Pokaż pulpit / Minimalizuj wszystkie okna: Super + D -->
+    <keybind key="W-d">
+      <action name="ToggleShowDesktop" />
     </keybind>
 
     <!-- Zarządzanie oknami i kafelkowanie (Tiling) -->

@@ -15,17 +15,26 @@ fi
 # 2. Demon powiadomień
 mako &
 
-# 3. Pasek zadań OKay Dock (PyQt6)
+# 3. Pasek zadań OKay DE (sfwbar z wlr-layer-shell)
 (
-    sleep 1
-    if command -v okay-dock >/dev/null 2>&1; then
+    # Zakończenie ewentualnych starych instancji
+    pkill -x sfwbar 2>/dev/null || true
+    pkill -x okay-dock 2>/dev/null || true
+    sleep 0.5
+    if command -v sfwbar >/dev/null 2>&1; then
+        sfwbar > /tmp/sfwbar.log 2>&1
+    elif [ -x /usr/bin/sfwbar ]; then
+        /usr/bin/sfwbar > /tmp/sfwbar.log 2>&1
+    elif [ -x /usr/local/bin/sfwbar ]; then
+        /usr/local/bin/sfwbar > /tmp/sfwbar.log 2>&1
+    elif command -v okay-dock >/dev/null 2>&1; then
         okay-dock > /tmp/okay-dock.log 2>&1
     elif [ -x "$HOME/.local/bin/okay-dock" ]; then
         "$HOME/.local/bin/okay-dock" > /tmp/okay-dock.log 2>&1
-    elif [ -x /usr/bin/okay-dock ]; then
-        /usr/bin/okay-dock > /tmp/okay-dock.log 2>&1
     elif [ -x /usr/local/bin/okay-dock ]; then
         /usr/local/bin/okay-dock > /tmp/okay-dock.log 2>&1
+    elif [ -x /usr/bin/okay-dock ]; then
+        /usr/bin/okay-dock > /tmp/okay-dock.log 2>&1
     fi
 ) &
 

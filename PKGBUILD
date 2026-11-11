@@ -24,6 +24,8 @@ depends=(
     'papirus-icon-theme'
     'adwaita-icon-theme'
     'xdg-user-dirs'
+    'sfwbar'
+    'wlrctl'
     'python'
     'python-pyqt6'
     'qt6-wayland'
