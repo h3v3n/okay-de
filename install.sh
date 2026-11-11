@@ -15,22 +15,38 @@ if [ "$MODE" = "--system" ]; then
 
     # Instalacja pakietów systemowych dla pełnej obsługi okien i taskbara
     if command -v pacman >/dev/null 2>&1; then
-        echo "Weryfikacja i instalacja pakietów (gtk3, gtk-layer-shell, python-gobject, wlrctl, python-pyqt6, qt6-wayland)..."
-        pacman -S --needed --noconfirm gtk3 gtk-layer-shell python-gobject wlrctl python-pyqt6 qt6-wayland 2>/dev/null || true
+        echo "Weryfikacja i instalacja pakietów systemowych (waybar, wlrctl, python-pyqt6, qt6-wayland)..."
+        pacman -S --needed --noconfirm waybar wlrctl python-pyqt6 qt6-wayland gtk3 gtk-layer-shell python-gobject 2>/dev/null || true
     fi
 
-    # Usunięcie pozostałości starych pasków (okay-dock, sfwbar, waybar)
-    rm -rf /etc/okay-dock /etc/xdg/sfwbar /etc/xdg/waybar 2>/dev/null || true
+    # Instalacja reguł uprawnień Polkit i Sudoers dla okay-settings
+    if [ -f config/polkit/99-okay-de.rules ]; then
+        install -d /etc/polkit-1/rules.d /usr/share/polkit-1/rules.d
+        install -m 644 config/polkit/99-okay-de.rules /etc/polkit-1/rules.d/99-okay-de.rules
+        install -m 644 config/polkit/99-okay-de.rules /usr/share/polkit-1/rules.d/99-okay-de.rules
+    fi
+    if [ -f config/sudoers/99-okay-de ]; then
+        install -d /etc/sudoers.d
+        install -m 440 config/sudoers/99-okay-de /etc/sudoers.d/99-okay-de
+    fi
+
+    # Usunięcie pozostałości starego paska docka (okay-dock)
+    rm -rf /etc/okay-dock 2>/dev/null || true
     rm -f /usr/local/bin/okay-dock /usr/bin/okay-dock 2>/dev/null || true
     rm -f /usr/share/applications/okay-dock.desktop 2>/dev/null || true
     pkill -9 -x okay-dock 2>/dev/null || true
-    pkill -x waybar 2>/dev/null || true
-    pkill -x sfwbar 2>/dev/null || true
 
     # Dodatkowa instalacja okay-settings i okay-panel w /usr/local/bin
     install -d /usr/local/bin
     install -m 755 scripts/okay-settings /usr/local/bin/okay-settings
     install -m 755 scripts/okay-panel /usr/local/bin/okay-panel
+
+    # Instalacja konfiguracji paska zadań w /etc/xdg
+    install -d /etc/xdg/okay-de/panel /etc/xdg/sfwbar /etc/xdg/waybar
+    cp -r config/okay-de/panel/* /etc/xdg/okay-de/panel/ 2>/dev/null || true
+    cp config/okay-de/panel/sfwbar.config /etc/xdg/sfwbar/sfwbar.config 2>/dev/null || true
+    cp config/okay-de/panel/waybar.jsonc /etc/xdg/waybar/config.jsonc 2>/dev/null || true
+    cp config/okay-de/panel/waybar.css /etc/xdg/waybar/style.css 2>/dev/null || true
 
     # Rejestracja plików .desktop w /usr/share/applications
     install -d /usr/share/applications
@@ -62,14 +78,14 @@ if [ "$MODE" = "--system" ]; then
 elif [ "$MODE" = "--user" ]; then
     echo "Instalowanie konfiguracji OKay DE dla bieżącego użytkownika ($HOME/.config)..."
 
-    # Weryfikacja obecności wlrctl i bibliotek GTK3 / Layer-Shell
+    # Weryfikacja obecności paska zadań (sfwbar lub waybar) oraz wlrctl
     PKGS_TO_INSTALL=()
     if ! command -v wlrctl >/dev/null 2>&1; then PKGS_TO_INSTALL+=("wlrctl"); fi
-    if ! pacman -Qi gtk-layer-shell >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk-layer-shell"); fi
-    if ! pacman -Qi python-gobject >/dev/null 2>&1; then PKGS_TO_INSTALL+=("python-gobject"); fi
-    if ! pacman -Qi gtk3 >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk3"); fi
+    if ! command -v sfwbar >/dev/null 2>&1 && ! command -v waybar >/dev/null 2>&1; then
+        PKGS_TO_INSTALL+=("waybar")
+    fi
     if [ ${#PKGS_TO_INSTALL[@]} -gt 0 ] && command -v pacman >/dev/null 2>&1; then
-        echo "Wykryto brak pakietów dla nowego paska zadań: ${PKGS_TO_INSTALL[*]}"
+        echo "Wykryto brak pakietów dla paska zadań: ${PKGS_TO_INSTALL[*]}"
         INSTALLED=0
         if command -v sudo >/dev/null 2>&1; then
             echo "Instalowanie pakietów przez sudo pacman..."
@@ -79,28 +95,12 @@ elif [ "$MODE" = "--user" ]; then
             echo "Instalowanie pakietów przez pkexec pacman..."
             pkexec pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" && INSTALLED=1 || true
         fi
-        if [ "$INSTALLED" -eq 0 ]; then
-            echo "UWAGA: Nie udało się zainstalować pakietów automatycznie." >&2
-            echo "Wykonaj ręcznie: sudo pacman -S --needed ${PKGS_TO_INSTALL[*]}" >&2
-        fi
     fi
 
     # Zapewnienie ścieżki ~/.local/bin w profilu powłoki
     if [ -f "$HOME/.bashrc" ] && ! grep -q '\.local/bin' "$HOME/.bashrc" 2>/dev/null; then
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
     fi
-
-    # Wykrycie i podmiana starego bashowego okay-panel w lokalizacjach systemowych
-    for sys_bin in /usr/bin/okay-panel /usr/local/bin/okay-panel; do
-        if [ -f "$sys_bin" ] && grep -q "sfwbar" "$sys_bin" 2>/dev/null; then
-            echo "Wykryto przestarzały skrypt systemowy w $sys_bin. Podmiana na natywny okay-panel..."
-            if command -v pkexec >/dev/null 2>&1; then
-                pkexec cp scripts/okay-panel "$sys_bin" 2>/dev/null || true
-            elif command -v sudo >/dev/null 2>&1; then
-                sudo cp scripts/okay-panel "$sys_bin" 2>/dev/null || true
-            fi
-        fi
-    done
 
     # Tworzenie katalogów docelowych
     mkdir -p "$HOME/.config/labwc"
@@ -110,16 +110,19 @@ elif [ "$MODE" = "--user" ]; then
     mkdir -p "$HOME/.config/gtk-3.0"
     mkdir -p "$HOME/.config/gtk-4.0"
     mkdir -p "$HOME/.config/pcmanfm"
-    mkdir -p "$HOME/.config/okay-de"
+    mkdir -p "$HOME/.config/okay-de/panel"
+    mkdir -p "$HOME/.config/sfwbar"
+    mkdir -p "$HOME/.config/waybar"
     mkdir -p "$HOME/.local/bin"
     mkdir -p "$HOME/.local/share/applications"
     mkdir -p "$HOME/.local/share/themes"
     mkdir -p "$HOME/Desktop"
 
-    # Usunięcie starych konfiguracji waybar i sfwbar z profilu użytkownika
-    rm -rf "$HOME/.config/sfwbar" "$HOME/.config/waybar" 2>/dev/null || true
-    pkill -x waybar 2>/dev/null || true
-    pkill -x sfwbar 2>/dev/null || true
+    # Kopiowanie konfiguracji paska zadań (sfwbar & waybar z motywem OKsavi Dark Neon)
+    cp -r config/okay-de/panel/* "$HOME/.config/okay-de/panel/" 2>/dev/null || true
+    cp config/okay-de/panel/sfwbar.config "$HOME/.config/sfwbar/sfwbar.config" 2>/dev/null || true
+    cp config/okay-de/panel/waybar.jsonc "$HOME/.config/waybar/config.jsonc" 2>/dev/null || true
+    cp config/okay-de/panel/waybar.css "$HOME/.config/waybar/style.css" 2>/dev/null || true
 
     # Kopiowanie konfiguracji (w tym masek przycisków XBM i wektorów SVG do labwc)
     cp -r config/labwc/* "$HOME/.config/labwc/" 2>/dev/null || true
@@ -187,7 +190,7 @@ elif [ "$MODE" = "--user" ]; then
     fi
 
     echo "Konfiguracja użytkownika zainstalowana pomyślnie."
-    echo "Wymagane pakiety: gtk3, gtk-layer-shell, python-gobject, wlrctl, python-pyqt6, qt6-wayland."
+    echo "Wymagane pakiety: sfwbar (lub waybar), wlrctl, python-pyqt6, qt6-wayland."
     echo "Sugerowane pakiety narzędzi: swaybg, wdisplays, pavucontrol, papirus-icon-theme."
     echo "Upewnij się, że \$HOME/.local/bin znajduje się w Twojej zmiennej PATH."
 

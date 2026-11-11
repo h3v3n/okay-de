@@ -1,0 +1,9 @@
+/* OKay DE - Uprawnienia administracyjne Polkit dla grupy wheel w OKsavi Linux
+ * Pozwala użytkownikom grupy wheel na instalowanie pakietów, zarządzanie zasilaniem
+ * i aktualizację środowiska graficznego w okay-settings bez monitów o hasło.
+ */
+polkit.addRule(function(action, subject) {
+    if (subject.isInGroup("wheel")) {
+        return polkit.Result.YES;
+    }
+});

@@ -31,8 +31,12 @@ depends=(
     'python-pyqt6'
     'qt6-wayland'
     'wlrctl'
+    'sfwbar'
+    'waybar'
 )
 optdepends=(
+    'sfwbar: lekki natywny pasek zadań C/layer-shell z AUR'
+    'waybar: stabilny pasek zadań z oficjalnego repozytorium Arch Linux'
     'util-linux: obsługa zramctl dla zarządcy pamięci oksavi-ghost-runner'
     'wdisplays: graficzna konfiguracja wielu monitorów w Wayland'
     'pavucontrol: zaawansowany mikser dźwięku dla PipeWire'

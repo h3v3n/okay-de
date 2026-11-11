@@ -21,9 +21,9 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 - **Architektura Server-Side Decorations (SSD):** Belka kompozytora `labwc` o wysokości 30px (`titlebar.height: 30`) stanowi nadrzędną ramkę na zewnątrz każdego okna. Dzięki zmiennym sesyjnym `GTK_CSD=0` oraz `QT_WAYLAND_DISABLE_WINDOWDECORATION=0` aplikacje GTK3/GTK4 i Qt nie wstrzykują przycisków sterowania do pasków zakładek i nagłówków.
 - **Dekoracje okien:** Trzy spłaszczone, panoramiczne prostokąty (48x10px) w układzie `:iconify,max,close` z zaokrągleniem narożników `8px` (`cornerRadius: 8`) bez wyświetlania nazwy okna (`showTitle: no`). Lewy przycisk minimalizuje okno, środkowy maksymalizuje, a prawy zamyka program.
 - **Tapeta i tło pulpitu (`swaybg`):** Demon tapety Wayland z bezpieczną kaskadą: tapeta użytkownika (`~/.config/okay-de/wallpaper.png`) -> tapeta systemowa (`/usr/share/backgrounds/okay-de/default.png`) -> awaryjny kolor bazowy Catppuccin Mocha (`#1e1e2e`).
-- **Pasek Zadań OKay (`okay-panel`):** Oficjalny, wbudowany natywny pasek zadań OKay DE (Python 3, GTK 3, GtkLayerShell) z bezpośrednią obsługą `zwlr_layer_shell_v1` i `wlrctl`. Zawiera menu programów (LPM: Fuzzel, PPM: Menu zasilania), dynamiczny taskbar z białą kreską statusu pod każdą uruchomioną aplikacją, aplet głośności (wpctl + mikser pavucontrol), wskaźnik naładowania baterii, dwuwierszowy zegar cyfrowy w stylu KDE Plasma oraz przycisk „Pokaż pulpit”.
+- **Pasek Zadań OKay (`okay-panel`):** Szybki i lekki pasek zadań oparty o sprawdzony komponent `sfwbar` (oraz `waybar` jako stabilny fallback) z natywną obsługą `wlr-layer-shell` oraz `wlr-foreign-toplevel`. Zawiera przycisk Menu Start (OK), listę aktywnych okien z ikonami i nazwami, zasobnik systemowy (Tray / SNI), aplet głośności oraz zegar z datą w stylistyce OKsavi Linux (#00e676).
 - **Kafelkowanie (Snapping / Tiling):** Wbudowane przeciąganie okien myszą do krawędzi ekranu oraz skróty `Super + Strzałki`.
-- **Motyw i ikony:** Catppuccin Mocha z akcentem Sapphire/Blue (`#89b4fa`), zestaw ikon `Papirus-Dark` oraz kursor `Adwaita (24px)`.
+- **Motyw i ikony:** Ciemny motyw OKsavi Dark Neon z akcentem zieleni (#00e676), zestaw ikon `Papirus-Dark` oraz kursor `Adwaita (24px)`.
 
 ---
 
@@ -34,7 +34,7 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 | **Kompozytor Wayland** | `labwc` | Stacking compositor zgodny z protokołem wlroots i Openbox XML |
 | **Pulpit z ikonami** | `pcmanfm --desktop` | Interaktywny pulpit z obsługą ikon plików i tła |
 | **Centrum Sterowania** | `okay-settings` | Natywna aplikacja Pythona 3 (PyQt6) |
-| **Pasek zadań (Taskbar)** | `okay-panel` | Własny natywny pasek zadań (GTK 3, GtkLayerShell) w motywie Catppuccin Mocha z białą kreską statusu |
+| **Pasek zadań (Taskbar)** | `okay-panel` | Panel `sfwbar` (lub `waybar` fallback) z obsługą wlr-layer-shell i brandingiem OKsavi |
 | **Launcher aplikacji** | `fuzzel` | Błyskawiczny launcher aplikacji z akceleracją Wayland |
 | **Emulator terminala** | `foot` | Ultra-lekki terminal Wayland z przezroczystością tła `0.95` |
 | **Menedżer plików** | `pcmanfm` | Szybki menedżer plików z ciemnym motywem GTK |

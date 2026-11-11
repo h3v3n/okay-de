@@ -15,27 +15,10 @@ fi
 # 2. Demon powiadomień
 mako &
 
-# 3. Pasek zadań OKay DE (Natywny okay-panel)
+# 3. Pasek zadań OKay DE (sfwbar / waybar)
 (
-    sleep 0.8
-    PANEL_BIN=""
-    if [ -x "$HOME/.local/bin/okay-panel" ]; then
-        PANEL_BIN="$HOME/.local/bin/okay-panel"
-    elif [ -x /usr/local/bin/okay-panel ]; then
-        PANEL_BIN="/usr/local/bin/okay-panel"
-    elif [ -x /usr/bin/okay-panel ]; then
-        PANEL_BIN="/usr/bin/okay-panel"
-    elif command -v okay-panel >/dev/null 2>&1; then
-        PANEL_BIN="$(command -v okay-panel)"
-    fi
-
-    if [ -n "$PANEL_BIN" ]; then
-        pkill -f okay-panel 2>/dev/null || true
-        while true; do
-            "$PANEL_BIN" > /tmp/okay-panel.log 2>&1
-            sleep 2
-        done
-    fi
+    sleep 0.5
+    okay-panel &
 ) &
 
 # 4. Tapeta i tło pulpitu (swaybg z kolorem bazowym i tapetą)

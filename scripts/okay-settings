@@ -399,12 +399,39 @@ class ConfigManager:
         return apps
 
     @classmethod
+    def sync_sfwbar_pins(cls, apps: dict):
+        """Aktualizuje listę przypiętych aplikacji (pins) w konfiguracji sfwbar."""
+        paths = [
+            os.path.expanduser("~/.config/okay-de/panel/sfwbar.config"),
+            os.path.expanduser("~/.config/sfwbar/sfwbar.config")
+        ]
+        enabled_pins = []
+        for app_id, data in apps.items():
+            if data.get("enabled", False):
+                cmd = data.get("cmd", app_id).split()[0]
+                enabled_pins.append(f'"{cmd}"')
+        pins_str = f"pins = {', '.join(enabled_pins)}"
+        for conf in paths:
+            if os.path.exists(conf):
+                try:
+                    with open(conf, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    new_content = re.sub(r'pins\s*=\s*[^\n]+', pins_str, content)
+                    if new_content != content:
+                        with open(conf, "w", encoding="utf-8") as f:
+                            f.write(new_content)
+                except Exception:
+                    pass
+        subprocess.run(["killall", "-SIGHUP", "sfwbar"], check=False)
+
+    @classmethod
     def set_pinned_apps(cls, apps: dict) -> bool:
-        """Zapisuje przypięte aplikacje do konfiguracji paska zadań (pinned_apps.json)."""
+        """Zapisuje przypięte aplikacje do konfiguracji paska zadań."""
         cls.ensure_dirs()
         try:
             with open(cls.PINNED_APPS_FILE, "w", encoding="utf-8") as f:
                 json.dump(apps, f, indent=2, ensure_ascii=False)
+            cls.sync_sfwbar_pins(apps)
             return True
         except Exception as e:
             print(f"Błąd zapisu przypiętych aplikacji: {e}", file=sys.stderr)
