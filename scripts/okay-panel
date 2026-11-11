@@ -19,16 +19,21 @@ import subprocess
 from datetime import datetime
 
 # Inicjalizacja bibliotek GTK3 i Wayland Layer-Shell
-import gi
-gi.require_version('Gtk', '3.0')
+try:
+    import gi
+    gi.require_version('Gtk', '3.0')
+    from gi.repository import Gtk, Gdk, GLib, Gio, GdkPixbuf
+except (ImportError, ValueError) as err:
+    print(f"Błąd uruchamiania okay-panel: {err}", file=sys.stderr)
+    print("Zainstaluj wymagane pakiety: sudo pacman -S --needed gtk3 gtk-layer-shell python-gobject wlrctl", file=sys.stderr)
+    sys.exit(1)
+
 try:
     gi.require_version('GtkLayerShell', '0.1')
     from gi.repository import GtkLayerShell
     HAS_LAYER_SHELL = True
 except (ValueError, ImportError):
     HAS_LAYER_SHELL = False
-
-from gi.repository import Gtk, Gdk, GLib, Gio, GdkPixbuf
 
 # ============================================================================
 # Style CSS (Catppuccin Mocha - 0px radius, ostry design)

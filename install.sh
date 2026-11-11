@@ -67,6 +67,7 @@ elif [ "$MODE" = "--user" ]; then
     if ! command -v wlrctl >/dev/null 2>&1; then PKGS_TO_INSTALL+=("wlrctl"); fi
     if ! pacman -Qi gtk-layer-shell >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk-layer-shell"); fi
     if ! pacman -Qi python-gobject >/dev/null 2>&1; then PKGS_TO_INSTALL+=("python-gobject"); fi
+    if ! pacman -Qi gtk3 >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk3"); fi
     if [ ${#PKGS_TO_INSTALL[@]} -gt 0 ] && command -v pacman >/dev/null 2>&1; then
         if command -v pkexec >/dev/null 2>&1; then
             echo "Wykryto brak pakietów (${PKGS_TO_INSTALL[*]}). Instalowanie..."
@@ -75,6 +76,23 @@ elif [ "$MODE" = "--user" ]; then
             sudo pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" 2>/dev/null || true
         fi
     fi
+
+    # Zapewnienie ścieżki ~/.local/bin w profilu powłoki
+    if [ -f "$HOME/.bashrc" ] && ! grep -q '\.local/bin' "$HOME/.bashrc" 2>/dev/null; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+    fi
+
+    # Wykrycie i podmiana starego bashowego okay-panel w lokalizacjach systemowych
+    for sys_bin in /usr/bin/okay-panel /usr/local/bin/okay-panel; do
+        if [ -f "$sys_bin" ] && grep -q "sfwbar" "$sys_bin" 2>/dev/null; then
+            echo "Wykryto przestarzały skrypt systemowy w $sys_bin. Podmiana na natywny okay-panel..."
+            if command -v pkexec >/dev/null 2>&1; then
+                pkexec cp scripts/okay-panel "$sys_bin" 2>/dev/null || true
+            elif command -v sudo >/dev/null 2>&1; then
+                sudo cp scripts/okay-panel "$sys_bin" 2>/dev/null || true
+            fi
+        fi
+    done
 
     # Tworzenie katalogów docelowych
     mkdir -p "$HOME/.config/labwc"
@@ -136,10 +154,14 @@ elif [ "$MODE" = "--user" ]; then
     pkill -9 -x okay-dock 2>/dev/null || true
 
     # Przeładowanie lub uruchomienie paska zadań OKay DE
-    if command -v okay-panel >/dev/null 2>&1; then
-        okay-panel --restart >/dev/null 2>&1 &
-    elif [ -x "$HOME/.local/bin/okay-panel" ]; then
+    if [ -x "$HOME/.local/bin/okay-panel" ]; then
         "$HOME/.local/bin/okay-panel" --restart >/dev/null 2>&1 &
+    elif [ -x /usr/local/bin/okay-panel ]; then
+        /usr/local/bin/okay-panel --restart >/dev/null 2>&1 &
+    elif [ -x /usr/bin/okay-panel ]; then
+        /usr/bin/okay-panel --restart >/dev/null 2>&1 &
+    elif command -v okay-panel >/dev/null 2>&1; then
+        okay-panel --restart >/dev/null 2>&1 &
     fi
 
     # Inicjalizacja domyślnych ikon na pulpicie użytkownika

@@ -19,14 +19,14 @@ mako &
 (
     sleep 0.5
     pkill -x okay-panel 2>/dev/null || true
-    if command -v okay-panel >/dev/null 2>&1; then
-        okay-panel > /tmp/okay-panel.log 2>&1
-    elif [ -x "$HOME/.local/bin/okay-panel" ]; then
+    if [ -x "$HOME/.local/bin/okay-panel" ]; then
         "$HOME/.local/bin/okay-panel" > /tmp/okay-panel.log 2>&1
     elif [ -x /usr/local/bin/okay-panel ]; then
         /usr/local/bin/okay-panel > /tmp/okay-panel.log 2>&1
     elif [ -x /usr/bin/okay-panel ]; then
         /usr/bin/okay-panel > /tmp/okay-panel.log 2>&1
+    elif command -v okay-panel >/dev/null 2>&1; then
+        okay-panel > /tmp/okay-panel.log 2>&1
     fi
 ) &
 

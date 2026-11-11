@@ -326,6 +326,8 @@ class InstallUpdateWorker(QThread):
                 res = subprocess.run(cmd, cwd=work_dir, capture_output=True, text=True, check=False)
                 if res.returncode != 0:
                     raise RuntimeError(f"Błąd instalacji systemowej: {res.stderr or res.stdout}")
+                # Aktualizujemy też profil bieżącego użytkownika
+                subprocess.run(["bash", install_script, "--user"], cwd=work_dir, check=False)
             else:
                 cmd = ["bash", install_script, "--user"]
                 res = subprocess.run(cmd, cwd=work_dir, capture_output=True, text=True, check=False)
@@ -889,8 +891,8 @@ class UpdatesPage(QWidget):
 
         self.combo_mode = QComboBox()
         self.combo_mode.addItems([
-            "Katalog użytkownika (~/.config, ~/.local)",
-            "Systemowy (/etc, /usr - wymaga uprawnień)"
+            "Systemowy (/etc, /usr - zalecany, wymaga uprawnień)",
+            "Katalog użytkownika (~/.config, ~/.local)"
         ])
         self.card_update.add_row(PreferenceRow(
             "Zakres instalacji",
@@ -947,7 +949,7 @@ class UpdatesPage(QWidget):
             self.card_update.setVisible(False)
 
     def _install_update(self):
-        target_mode = "system" if self.combo_mode.currentIndex() == 1 else "user"
+        target_mode = "system" if self.combo_mode.currentIndex() == 0 else "user"
         self.btn_install.setEnabled(False)
         self.btn_check.setEnabled(False)
         self.row_install.set_subtitle("Inicjowanie procesu aktualizacji...")
