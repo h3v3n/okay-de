@@ -15,8 +15,8 @@ if [ "$MODE" = "--system" ]; then
 
     # Instalacja pakietów systemowych dla pełnej obsługi okien i zunifikowanego taskbara
     if command -v pacman >/dev/null 2>&1; then
-        echo "Weryfikacja i instalacja pakietów systemowych (gtk3, gtk-layer-shell, python-gobject, wlrctl, python-pyqt6, qt6-wayland)..."
-        pacman -S --needed --noconfirm gtk3 gtk-layer-shell python-gobject wlrctl python-pyqt6 qt6-wayland 2>/dev/null || true
+        echo "Weryfikacja i instalacja pakietów systemowych (gtk3, gtk-layer-shell, python-gobject, python-pyqt6, qt6-wayland)..."
+        pacman -S --needed --noconfirm gtk3 gtk-layer-shell python-gobject python-pyqt6 qt6-wayland
     fi
 
     # Instalacja reguł uprawnień Polkit i Sudoers dla okay-settings
@@ -77,9 +77,8 @@ if [ "$MODE" = "--system" ]; then
 elif [ "$MODE" = "--user" ]; then
     echo "Instalowanie konfiguracji OKay DE dla bieżącego użytkownika ($HOME/.config)..."
 
-    # Weryfikacja obecności oficjalnych bibliotek GTK3 / Layer-Shell / wlrctl
+    # Weryfikacja obecności oficjalnych bibliotek GTK3 / Layer-Shell
     PKGS_TO_INSTALL=()
-    if ! command -v wlrctl >/dev/null 2>&1; then PKGS_TO_INSTALL+=("wlrctl"); fi
     if ! pacman -Qi gtk-layer-shell >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk-layer-shell"); fi
     if ! pacman -Qi python-gobject >/dev/null 2>&1; then PKGS_TO_INSTALL+=("python-gobject"); fi
     if ! pacman -Qi gtk3 >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk3"); fi
@@ -191,7 +190,7 @@ elif [ "$MODE" = "--user" ]; then
     fi
 
     echo "Konfiguracja użytkownika zainstalowana pomyślnie."
-    echo "Wymagane pakiety: gtk3, gtk-layer-shell, python-gobject, wlrctl, python-pyqt6, qt6-wayland."
+    echo "Wymagane pakiety: gtk3, gtk-layer-shell, python-gobject, python-pyqt6, qt6-wayland."
     echo "Sugerowane pakiety narzędzi: swaybg, wdisplays, pavucontrol, papirus-icon-theme."
     echo "Upewnij się, że \$HOME/.local/bin znajduje się w Twojej zmiennej PATH."
 

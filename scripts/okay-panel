@@ -20,6 +20,8 @@ import json
 import time
 import signal
 import shutil
+import socket
+import struct
 import subprocess
 from datetime import datetime
 
@@ -494,93 +496,351 @@ class AppHelper:
 
 
 # ============================================================================
-# Zarządca okien Wayland (wlrctl)
+# Natywny klient Wayland wlr-foreign-toplevel-management-v1
+# ============================================================================
+
+class WaylandToplevelClient:
+    """Natywny klient protokołu Wayland zwlr_foreign_toplevel_manager_v1 (zero zależności zewnętrznych)."""
+    IGNORED_APP_IDS = {"okay-panel", "okay-dock", "fuzzel", "mako", "waybar", "sfwbar"}
+
+    DISPLAY_ID = 1
+    REGISTRY_ID = 2
+    INIT_SYNC_ID = 3
+    MANAGER_ID = 4
+    SEAT_ID = 5
+    SECOND_SYNC_ID = 6
+
+    def __init__(self, on_change_cb=None):
+        self.on_change_cb = on_change_cb
+        self.sock = None
+        self.recv_buf = b""
+        self.manager_bound = False
+        self.seat_bound = False
+        self.handles = {}
+        self.connected = False
+        self._connect()
+
+    @staticmethod
+    def _pack_string(s: str) -> bytes:
+        raw = s.encode("utf-8") + b"\x00"
+        length = len(raw)
+        pad = (4 - (length % 4)) % 4
+        return struct.pack("<I", length) + raw + (b"\x00" * pad)
+
+    @staticmethod
+    def _unpack_string(payload: bytes, offset: int = 0) -> tuple:
+        if offset + 4 > len(payload):
+            return "", offset
+        (length,) = struct.unpack_from("<I", payload, offset)
+        offset += 4
+        if length == 0:
+            return "", offset
+        raw = payload[offset : offset + max(0, length - 1)]
+        pad = (4 - (length % 4)) % 4
+        offset += length + pad
+        return raw.decode("utf-8", errors="replace"), offset
+
+    @staticmethod
+    def _unpack_array(payload: bytes, offset: int = 0) -> tuple:
+        if offset + 4 > len(payload):
+            return b"", offset
+        (length,) = struct.unpack_from("<I", payload, offset)
+        offset += 4
+        raw = payload[offset : offset + length]
+        pad = (4 - (length % 4)) % 4
+        offset += length + pad
+        return raw, offset
+
+    @staticmethod
+    def _pack_msg(obj_id: int, opcode: int, payload: bytes = b"") -> bytes:
+        size = 8 + len(payload)
+        return struct.pack("<II", obj_id, (size << 16) | (opcode & 0xFFFF)) + payload
+
+    def _send(self, data: bytes):
+        if self.sock:
+            try:
+                self.sock.sendall(data)
+            except Exception as e:
+                print(f"[okay-panel] Błąd zapisu Wayland: {e}", file=sys.stderr)
+
+    def _connect(self):
+        xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        wayland_display = os.environ.get("WAYLAND_DISPLAY", "wayland-0")
+        sock_path = wayland_display if os.path.isabs(wayland_display) else os.path.join(xdg_runtime, wayland_display)
+
+        if not os.path.exists(sock_path):
+            print(f"[okay-panel] Nie znaleziono gniazda Wayland: {sock_path}", file=sys.stderr)
+            return
+
+        try:
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.settimeout(1.0)
+            self.sock.connect(sock_path)
+
+            self._send(
+                self._pack_msg(self.DISPLAY_ID, 1, struct.pack("<I", self.REGISTRY_ID)) +
+                self._pack_msg(self.DISPLAY_ID, 0, struct.pack("<I", self.INIT_SYNC_ID))
+            )
+            self._roundtrip_until(self.INIT_SYNC_ID)
+
+            if self.manager_bound:
+                self._send(self._pack_msg(self.DISPLAY_ID, 0, struct.pack("<I", self.SECOND_SYNC_ID)))
+                self._roundtrip_until(self.SECOND_SYNC_ID)
+                self.connected = True
+                print(f"[okay-panel] Połączono z protokołem wlr-foreign-toplevel (okien: {len(self.handles)})", file=sys.stderr)
+
+            self.sock.setblocking(False)
+            GLib.io_add_watch(self.sock.fileno(), GLib.IO_IN, self._on_socket_ready)
+        except Exception as e:
+            print(f"[okay-panel] Błąd inicjalizacji wlr-foreign-toplevel: {e}", file=sys.stderr)
+            self.connected = False
+
+    def _roundtrip_until(self, sync_obj_id: int):
+        done = False
+        deadline = time.monotonic() + 1.0
+        while not done and time.monotonic() < deadline:
+            try:
+                chunk = self.sock.recv(65536)
+                if not chunk:
+                    break
+                self.recv_buf += chunk
+                _, sync_hit = self._process_buffer(target_sync_id=sync_obj_id)
+                if sync_hit:
+                    done = True
+            except socket.timeout:
+                break
+            except Exception:
+                break
+
+    def _on_socket_ready(self, source, condition) -> bool:
+        try:
+            while True:
+                chunk = self.sock.recv(65536)
+                if not chunk:
+                    return False
+                self.recv_buf += chunk
+        except BlockingIOError:
+            pass
+        except Exception:
+            return False
+
+        changed, _ = self._process_buffer()
+        if changed and self.on_change_cb:
+            GLib.idle_add(self.on_change_cb)
+        return True
+
+    def _process_buffer(self, target_sync_id: int = -1) -> tuple:
+        changed = False
+        sync_hit = False
+
+        while len(self.recv_buf) >= 8:
+            obj_id, word1 = struct.unpack_from("<II", self.recv_buf, 0)
+            size = word1 >> 16
+            opcode = word1 & 0xFFFF
+            if size < 8 or len(self.recv_buf) < size:
+                break
+            payload = self.recv_buf[8:size]
+            self.recv_buf = self.recv_buf[size:]
+
+            if obj_id == self.DISPLAY_ID:
+                if opcode == 0:
+                    err_obj, err_code = struct.unpack_from("<II", payload, 0)
+                    err_msg, _ = self._unpack_string(payload, 8)
+                    print(f"[okay-panel] Wayland error (obj={err_obj}, code={err_code}): {err_msg}", file=sys.stderr)
+            elif obj_id == target_sync_id:
+                if opcode == 0:
+                    sync_hit = True
+            elif obj_id == self.REGISTRY_ID:
+                if opcode == 0:
+                    name = struct.unpack_from("<I", payload, 0)[0]
+                    iface, off = self._unpack_string(payload, 4)
+                    ver = struct.unpack_from("<I", payload, off)[0]
+                    if iface == "zwlr_foreign_toplevel_manager_v1" and not self.manager_bound:
+                        bind_ver = min(ver, 3)
+                        self._send(self._pack_msg(
+                            self.REGISTRY_ID, 0,
+                            struct.pack("<I", name) + self._pack_string(iface) + struct.pack("<II", bind_ver, self.MANAGER_ID)
+                        ))
+                        self.manager_bound = True
+                    elif iface == "wl_seat" and not self.seat_bound:
+                        bind_ver = min(ver, 1)
+                        self._send(self._pack_msg(
+                            self.REGISTRY_ID, 0,
+                            struct.pack("<I", name) + self._pack_string(iface) + struct.pack("<II", bind_ver, self.SEAT_ID)
+                        ))
+                        self.seat_bound = True
+            elif obj_id == self.MANAGER_ID:
+                if opcode == 0:
+                    handle_id = struct.unpack_from("<I", payload, 0)[0]
+                    self.handles[handle_id] = {
+                        "handle_id": handle_id,
+                        "app_id": "",
+                        "title": "",
+                        "focused": False,
+                        "minimized": False,
+                        "maximized": False,
+                        "ready": False,
+                        "pending": {
+                            "app_id": "",
+                            "title": "",
+                            "focused": False,
+                            "minimized": False,
+                            "maximized": False,
+                        }
+                    }
+                elif opcode == 1:
+                    self.manager_bound = False
+            elif obj_id in self.handles:
+                h = self.handles[obj_id]
+                if opcode == 0:
+                    title, _ = self._unpack_string(payload, 0)
+                    h["pending"]["title"] = title
+                elif opcode == 1:
+                    app_id, _ = self._unpack_string(payload, 0)
+                    h["pending"]["app_id"] = app_id
+                elif opcode == 4:
+                    raw_arr, _ = self._unpack_array(payload, 0)
+                    n = len(raw_arr) // 4
+                    states = set(struct.unpack(f"<{n}I", raw_arr)) if n > 0 else set()
+                    h["pending"]["maximized"] = (0 in states)
+                    h["pending"]["minimized"] = (1 in states)
+                    h["pending"]["focused"] = (2 in states)
+                elif opcode == 5:
+                    p = h["pending"]
+                    h["app_id"] = p["app_id"]
+                    h["title"] = p["title"]
+                    h["maximized"] = p["maximized"]
+                    h["minimized"] = p["minimized"]
+                    h["focused"] = p["focused"]
+                    h["ready"] = True
+                    changed = True
+                elif opcode == 6:
+                    del self.handles[obj_id]
+                    self._send(self._pack_msg(obj_id, 7))
+                    changed = True
+
+        return changed, sync_hit
+
+    def get_windows(self) -> list:
+        res = []
+        for h in self.handles.values():
+            if not h["ready"]:
+                continue
+            app_id = h["app_id"].strip()
+            if app_id.lower() in self.IGNORED_APP_IDS:
+                continue
+            res.append({
+                "handle_id": h["handle_id"],
+                "app_id": app_id,
+                "title": h["title"].strip(),
+                "focused": h["focused"],
+                "minimized": h["minimized"],
+            })
+        return res
+
+    def activate_or_minimize(self, handle_id: int, is_focused: bool, is_minimized: bool):
+        if handle_id not in self.handles:
+            return
+        if is_focused:
+            self._send(self._pack_msg(handle_id, 2))
+        else:
+            if is_minimized:
+                self._send(self._pack_msg(handle_id, 3))
+            if self.seat_bound:
+                self._send(self._pack_msg(handle_id, 4, struct.pack("<I", self.SEAT_ID)))
+
+    def set_minimized(self, handle_id: int, minimized: bool):
+        if handle_id not in self.handles:
+            return
+        if minimized:
+            self._send(self._pack_msg(handle_id, 2))
+        else:
+            self._send(self._pack_msg(handle_id, 3))
+            if self.seat_bound:
+                self._send(self._pack_msg(handle_id, 4, struct.pack("<I", self.SEAT_ID)))
+
+    def close_window(self, handle_id: int):
+        if handle_id in self.handles:
+            self._send(self._pack_msg(handle_id, 5))
+
+
+# ============================================================================
+# Zarządca okien Wayland (Natywny protokół + opcjonalny fallback wlrctl)
 # ============================================================================
 
 class WindowManager:
-    IGNORED_APP_IDS = {"okay-panel", "okay-dock", "fuzzel", "mako", "waybar", "sfwbar"}
+    IGNORED_APP_IDS = WaylandToplevelClient.IGNORED_APP_IDS
+    _wl_client = None
 
-    @staticmethod
-    def _parse_toplevel_lines(stdout: str) -> list:
-        items = []
-        for line in stdout.strip().split("\n"):
-            if not line.strip():
-                continue
-            if ":" in line:
-                app_id, title = line.split(":", 1)
-            else:
-                app_id, title = line, line
-            app_id_clean = app_id.strip()
-            title_clean = title.strip()
-            if app_id_clean.lower() in WindowManager.IGNORED_APP_IDS:
-                continue
-            items.append({
-                "app_id": app_id_clean,
-                "title": title_clean
-            })
-        return items
+    @classmethod
+    def init_client(cls, on_change_cb):
+        cls._wl_client = WaylandToplevelClient(on_change_cb)
 
-    @staticmethod
-    def get_open_windows() -> list:
+    @classmethod
+    def get_open_windows(cls) -> list:
+        if cls._wl_client and cls._wl_client.connected:
+            return cls._wl_client.get_windows()
         if not shutil.which("wlrctl"):
             return []
         try:
-            res = subprocess.run(
-                ["wlrctl", "toplevel", "list"],
-                capture_output=True, text=True, timeout=0.4, check=False
-            )
+            res = subprocess.run(["wlrctl", "toplevel", "list"], capture_output=True, text=True, timeout=0.4, check=False)
             if res.returncode != 0 or not res.stdout.strip():
                 return []
-            return WindowManager._parse_toplevel_lines(res.stdout)
+            focused = cls._wlrctl_focused()
+            minimized = cls._wlrctl_minimized()
+            items = []
+            for line in res.stdout.strip().split("\n"):
+                if not line.strip():
+                    continue
+                app_id, title = (line.split(":", 1) if ":" in line else (line, line))
+                app_id_c, title_c = app_id.strip(), title.strip()
+                if app_id_c.lower() in cls.IGNORED_APP_IDS:
+                    continue
+                items.append({
+                    "handle_id": 0,
+                    "app_id": app_id_c,
+                    "title": title_c,
+                    "focused": (app_id_c, title_c) == focused,
+                    "minimized": (app_id_c, title_c) in minimized,
+                })
+            return items
         except Exception:
             return []
 
     @staticmethod
-    def get_focused_window() -> tuple:
-        """Zwraca (app_id, title) aktywnego okna lub ('', '')."""
-        if not shutil.which("wlrctl"):
-            return ("", "")
+    def _wlrctl_focused() -> tuple:
         try:
-            res = subprocess.run(
-                ["wlrctl", "toplevel", "list", "state:focused"],
-                capture_output=True, text=True, timeout=0.3, check=False
-            )
+            res = subprocess.run(["wlrctl", "toplevel", "list", "state:focused"], capture_output=True, text=True, timeout=0.3, check=False)
             if res.returncode == 0 and res.stdout.strip():
-                items = WindowManager._parse_toplevel_lines(res.stdout)
-                if items:
-                    return (items[0]["app_id"], items[0]["title"])
+                line = res.stdout.strip().split("\n")[0]
+                a, t = (line.split(":", 1) if ":" in line else (line, line))
+                return (a.strip(), t.strip())
         except Exception:
             pass
         return ("", "")
 
     @staticmethod
-    def get_minimized_windows() -> set:
-        """Zwraca zbiór krotek (app_id, title) zminimalizowanych okien."""
-        if not shutil.which("wlrctl"):
-            return set()
+    def _wlrctl_minimized() -> set:
+        out = set()
         try:
-            res = subprocess.run(
-                ["wlrctl", "toplevel", "list", "state:minimized"],
-                capture_output=True, text=True, timeout=0.3, check=False
-            )
+            res = subprocess.run(["wlrctl", "toplevel", "list", "state:minimized"], capture_output=True, text=True, timeout=0.3, check=False)
             if res.returncode == 0 and res.stdout.strip():
-                items = WindowManager._parse_toplevel_lines(res.stdout)
-                return {(i["app_id"], i["title"]) for i in items}
+                for line in res.stdout.strip().split("\n"):
+                    if line.strip():
+                        a, t = (line.split(":", 1) if ":" in line else (line, line))
+                        out.add((a.strip(), t.strip()))
         except Exception:
             pass
-        return set()
+        return out
 
-    @staticmethod
-    def _build_selector(app_id: str, title: str, multiple: bool) -> list:
-        if multiple and title:
-            return [f"app_id:{app_id}", f"title:{title}"]
-        return [f"app_id:{app_id}"]
-
-    @staticmethod
-    def activate_or_minimize(app_id: str, title: str, is_focused: bool, is_minimized: bool, multiple: bool = False):
+    @classmethod
+    def activate_or_minimize(cls, handle_id: int, app_id: str, title: str, is_focused: bool, is_minimized: bool, multiple: bool = False):
+        if cls._wl_client and cls._wl_client.connected and handle_id:
+            cls._wl_client.activate_or_minimize(handle_id, is_focused, is_minimized)
+            return
         if not shutil.which("wlrctl"):
             return
-        sel = WindowManager._build_selector(app_id, title, multiple)
+        sel = [f"app_id:{app_id}", f"title:{title}"] if (multiple and title) else [f"app_id:{app_id}"]
         try:
             if is_focused:
                 subprocess.Popen(["wlrctl", "toplevel", "minimize", "true"] + sel)
@@ -592,28 +852,32 @@ class WindowManager:
         except Exception:
             pass
 
-    @staticmethod
-    def set_minimized(app_id: str, title: str, minimized: bool, multiple: bool = False):
+    @classmethod
+    def set_minimized(cls, handle_id: int, app_id: str, title: str, minimized: bool, multiple: bool = False):
+        if cls._wl_client and cls._wl_client.connected and handle_id:
+            cls._wl_client.set_minimized(handle_id, minimized)
+            return
         if not shutil.which("wlrctl"):
             return
-        sel = WindowManager._build_selector(app_id, title, multiple)
+        sel = [f"app_id:{app_id}", f"title:{title}"] if (multiple and title) else [f"app_id:{app_id}"]
         try:
-            state = "true" if minimized else "false"
-            subprocess.Popen(["wlrctl", "toplevel", "minimize", state] + sel)
+            subprocess.Popen(["wlrctl", "toplevel", "minimize", "true" if minimized else "false"] + sel)
             if not minimized:
                 subprocess.Popen(["wlrctl", "toplevel", "focus"] + sel)
         except Exception:
             pass
 
-    @staticmethod
-    def close_window(app_id: str, title: str, multiple: bool = False):
-        if not shutil.which("wlrctl"):
+    @classmethod
+    def close_window(cls, handle_id: int, app_id: str, title: str, multiple: bool = False):
+        if cls._wl_client and cls._wl_client.connected and handle_id:
+            cls._wl_client.close_window(handle_id)
             return
-        sel = WindowManager._build_selector(app_id, title, multiple)
-        try:
-            subprocess.Popen(["wlrctl", "toplevel", "close"] + sel)
-        except Exception:
-            pass
+        if shutil.which("wlrctl"):
+            sel = [f"app_id:{app_id}", f"title:{title}"] if (multiple and title) else [f"app_id:{app_id}"]
+            try:
+                subprocess.Popen(["wlrctl", "toplevel", "close"] + sel)
+            except Exception:
+                pass
 
 
 # ============================================================================
@@ -679,13 +943,20 @@ class OkayPanel(Gtk.Window):
         self.panel_config = PanelConfigManager.load()
         self._last_state_key = None
 
-        # Odświeżanie zadań i konfiguracji (co 350ms)
-        GLib.timeout_add(350, self._update_tasks)
+        # Połączenie z natywnym protokołem Wayland wlr-foreign-toplevel-management-v1
+        WindowManager.init_client(self._on_wayland_change)
+
+        # Odświeżanie konfiguracji / fallback (co 500ms)
+        GLib.timeout_add(500, self._update_tasks)
         # Odświeżanie statusów systemowych i zegara (co 1000ms)
         GLib.timeout_add(1000, self._update_status)
 
         self._update_tasks()
         self._update_status()
+
+    def _on_wayland_change(self) -> bool:
+        self._update_tasks()
+        return False
 
     # ------------------------------------------------------------------------
     # Budowa interfejsu
@@ -750,18 +1021,17 @@ class OkayPanel(Gtk.Window):
 
     def _on_desktop_clicked(self, widget):
         windows = WindowManager.get_open_windows()
-        minimized = WindowManager.get_minimized_windows()
-        unminimized = [w for w in windows if (w["app_id"], w["title"]) not in minimized]
+        unminimized = [w for w in windows if not w["minimized"]]
         app_counts = {}
         for w in windows:
             app_counts[w["app_id"]] = app_counts.get(w["app_id"], 0) + 1
 
         if unminimized:
             for w in unminimized:
-                WindowManager.set_minimized(w["app_id"], w["title"], True, app_counts.get(w["app_id"], 1) > 1)
+                WindowManager.set_minimized(w["handle_id"], w["app_id"], w["title"], True, app_counts.get(w["app_id"], 1) > 1)
         elif windows:
             for w in windows:
-                WindowManager.set_minimized(w["app_id"], w["title"], False, app_counts.get(w["app_id"], 1) > 1)
+                WindowManager.set_minimized(w["handle_id"], w["app_id"], w["title"], False, app_counts.get(w["app_id"], 1) > 1)
 
     def _on_volume_press(self, widget, event):
         if event.button == 1:
@@ -841,16 +1111,11 @@ class OkayPanel(Gtk.Window):
             pass
 
         windows = WindowManager.get_open_windows()
-        focused_win = WindowManager.get_focused_window()
-        minimized_wins = WindowManager.get_minimized_windows()
-
         show_labels = bool(self.panel_config.get("show_labels", False))
         pinned_apps = self.panel_config.get("pinned_apps", [])
 
         state_key = (
-            [(w["app_id"], w["title"]) for w in windows],
-            focused_win,
-            tuple(sorted(minimized_wins)),
+            [(w["handle_id"], w["app_id"], w["title"], w["focused"], w["minimized"]) for w in windows],
             show_labels,
             tuple((p.get("app_id", ""), p.get("cmd", ""), p.get("name", "")) for p in pinned_apps)
         )
@@ -886,10 +1151,11 @@ class OkayPanel(Gtk.Window):
                     break
 
             if matched_win is not None:
+                h_id = matched_win["handle_id"]
                 w_id = matched_win["app_id"]
                 w_title = matched_win["title"]
-                is_focused = (w_id, w_title) == focused_win
-                is_minimized = (w_id, w_title) in minimized_wins
+                is_focused = matched_win["focused"]
+                is_minimized = matched_win["minimized"]
                 multiple = app_counts.get(w_id, 1) > 1
                 icon_name = AppHelper.get_icon_name(w_id, pin_icon)
 
@@ -904,6 +1170,7 @@ class OkayPanel(Gtk.Window):
                     is_minimized=is_minimized
                 )
                 btn.connect("button-press-event", self._on_task_press, {
+                    "handle_id": h_id,
                     "app_id": w_id,
                     "title": w_title,
                     "cmd": pin_cmd,
@@ -929,6 +1196,7 @@ class OkayPanel(Gtk.Window):
                     is_minimized=False
                 )
                 btn.connect("button-press-event", self._on_task_press, {
+                    "handle_id": 0,
                     "app_id": pin_app_id,
                     "title": pin_name,
                     "cmd": pin_cmd,
@@ -948,10 +1216,11 @@ class OkayPanel(Gtk.Window):
         for idx, w in enumerate(windows):
             if idx in used_window_indices:
                 continue
+            h_id = w["handle_id"]
             w_id = w["app_id"]
             w_title = w["title"]
-            is_focused = (w_id, w_title) == focused_win
-            is_minimized = (w_id, w_title) in minimized_wins
+            is_focused = w["focused"]
+            is_minimized = w["minimized"]
             multiple = app_counts.get(w_id, 1) > 1
 
             meta = AppHelper.get_app_metadata(w_id)
@@ -968,6 +1237,7 @@ class OkayPanel(Gtk.Window):
                 is_minimized=is_minimized
             )
             btn.connect("button-press-event", self._on_task_press, {
+                "handle_id": h_id,
                 "app_id": w_id,
                 "title": w_title,
                 "cmd": meta.get("cmd", w_id),
@@ -994,6 +1264,7 @@ class OkayPanel(Gtk.Window):
                     pass
             else:
                 WindowManager.activate_or_minimize(
+                    item["handle_id"],
                     item["app_id"],
                     item["title"],
                     item["is_focused"],
@@ -1001,7 +1272,7 @@ class OkayPanel(Gtk.Window):
                     item["multiple"]
                 )
         elif event.button == 2 and item["is_running"]:
-            WindowManager.close_window(item["app_id"], item["title"], item["multiple"])
+            WindowManager.close_window(item["handle_id"], item["app_id"], item["title"], item["multiple"])
         elif event.button == 3:
             self._show_context_menu(widget, event, item)
         return True
@@ -1030,14 +1301,14 @@ class OkayPanel(Gtk.Window):
             menu.append(Gtk.SeparatorMenuItem())
             if item["is_minimized"]:
                 mi_state = Gtk.MenuItem(label="Przywróć okno")
-                mi_state.connect("activate", lambda _: WindowManager.set_minimized(item["app_id"], item["title"], False, item["multiple"]))
+                mi_state.connect("activate", lambda _: WindowManager.set_minimized(item["handle_id"], item["app_id"], item["title"], False, item["multiple"]))
             else:
                 mi_state = Gtk.MenuItem(label="Minimalizuj okno")
-                mi_state.connect("activate", lambda _: WindowManager.set_minimized(item["app_id"], item["title"], True, item["multiple"]))
+                mi_state.connect("activate", lambda _: WindowManager.set_minimized(item["handle_id"], item["app_id"], item["title"], True, item["multiple"]))
             menu.append(mi_state)
 
             mi_close = Gtk.MenuItem(label="Zamknij okno")
-            mi_close.connect("activate", lambda _: WindowManager.close_window(item["app_id"], item["title"], item["multiple"]))
+            mi_close.connect("activate", lambda _: WindowManager.close_window(item["handle_id"], item["app_id"], item["title"], item["multiple"]))
             menu.append(mi_close)
 
         menu.show_all()
