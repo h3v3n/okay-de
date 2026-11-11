@@ -54,17 +54,16 @@ if [ "$MODE" = "--system" ]; then
 
     # Instalacja pakietów systemowych dla pełnej obsługi okien i taskbara
     if command -v pacman >/dev/null 2>&1; then
-        echo "Weryfikacja i instalacja pakietów (wlrctl, python-pyqt6, qt6-wayland)..."
-        pacman -S --needed --noconfirm wlrctl python-pyqt6 qt6-wayland 2>/dev/null || true
+        echo "Weryfikacja i instalacja pakietów (waybar, wlrctl, python-pyqt6, qt6-wayland)..."
+        pacman -S --needed --noconfirm waybar wlrctl python-pyqt6 qt6-wayland 2>/dev/null || true
     fi
     ensure_sfwbar
 
-    # Usunięcie pozostałości starego paska docka (okay-dock) oraz waybar
-    rm -rf /etc/xdg/waybar /etc/okay-dock 2>/dev/null || true
+    # Usunięcie pozostałości starego paska docka (okay-dock)
+    rm -rf /etc/okay-dock 2>/dev/null || true
     rm -f /usr/local/bin/okay-dock /usr/bin/okay-dock 2>/dev/null || true
     rm -f /usr/share/applications/okay-dock.desktop 2>/dev/null || true
     pkill -9 -x okay-dock 2>/dev/null || true
-    pkill -x waybar 2>/dev/null || true
 
     # Dodatkowa instalacja okay-settings w /usr/local/bin
     install -d /usr/local/bin
@@ -100,22 +99,26 @@ if [ "$MODE" = "--system" ]; then
 elif [ "$MODE" = "--user" ]; then
     echo "Instalowanie konfiguracji OKay DE dla bieżącego użytkownika ($HOME/.config)..."
 
-    # Weryfikacja obecności wlrctl
-    if ! command -v wlrctl >/dev/null 2>&1; then
+    # Weryfikacja obecności wlrctl i waybar
+    PKGS_TO_INSTALL=()
+    if ! command -v wlrctl >/dev/null 2>&1; then PKGS_TO_INSTALL+=("wlrctl"); fi
+    if ! command -v waybar >/dev/null 2>&1; then PKGS_TO_INSTALL+=("waybar"); fi
+    if [ ${#PKGS_TO_INSTALL[@]} -gt 0 ]; then
         if command -v pkexec >/dev/null 2>&1; then
-            echo "Wykryto brak wlrctl. Instalowanie pakietu..."
-            pkexec pacman -S --needed --noconfirm wlrctl 2>/dev/null || true
+            echo "Wykryto brak pakietów (${PKGS_TO_INSTALL[*]}). Instalowanie..."
+            pkexec pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" 2>/dev/null || true
         elif command -v sudo >/dev/null 2>&1; then
-            sudo pacman -S --needed --noconfirm wlrctl 2>/dev/null || true
+            sudo pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" 2>/dev/null || true
         fi
     fi
 
-    # Weryfikacja i instalacja sfwbar
+    # Opcjonalna instalacja sfwbar
     ensure_sfwbar
 
     # Tworzenie katalogów docelowych
     mkdir -p "$HOME/.config/labwc"
     mkdir -p "$HOME/.config/sfwbar"
+    mkdir -p "$HOME/.config/waybar"
     mkdir -p "$HOME/.config/foot"
     mkdir -p "$HOME/.config/fuzzel"
     mkdir -p "$HOME/.config/mako"
@@ -131,6 +134,7 @@ elif [ "$MODE" = "--user" ]; then
     # Kopiowanie konfiguracji (w tym masek przycisków XBM i wektorów SVG do labwc)
     cp -r config/labwc/* "$HOME/.config/labwc/" 2>/dev/null || true
     cp -r config/sfwbar/* "$HOME/.config/sfwbar/" 2>/dev/null || true
+    cp -r config/waybar/* "$HOME/.config/waybar/" 2>/dev/null || true
     cp -r config/foot/* "$HOME/.config/foot/" 2>/dev/null || true
     cp -r config/fuzzel/* "$HOME/.config/fuzzel/" 2>/dev/null || true
     cp -r config/mako/* "$HOME/.config/mako/" 2>/dev/null || true
@@ -164,14 +168,16 @@ elif [ "$MODE" = "--user" ]; then
         done
     fi
 
-    # Całkowite usunięcie pozostałości starego paska docka (okay-dock) i waybar
-    rm -rf "$HOME/.config/waybar" "$HOME/.config/okay-dock" 2>/dev/null || true
+    # Całkowite usunięcie pozostałości starego paska docka (okay-dock)
+    rm -rf "$HOME/.config/okay-dock" 2>/dev/null || true
     rm -f "$HOME/.local/bin/okay-dock" "$HOME/.local/share/applications/okay-dock.desktop" 2>/dev/null || true
     pkill -9 -x okay-dock 2>/dev/null || true
-    pkill -x waybar 2>/dev/null || true
-    if pgrep -x sfwbar >/dev/null 2>&1; then
-        echo "Przeładowywanie uruchomionego paska sfwbar (SIGHUP)..."
-        killall -SIGHUP sfwbar 2>/dev/null || true
+
+    # Przeładowanie lub uruchomienie paska zadań OKay DE
+    if command -v okay-panel >/dev/null 2>&1; then
+        okay-panel --restart >/dev/null 2>&1 &
+    elif [ -x "$HOME/.local/bin/okay-panel" ]; then
+        "$HOME/.local/bin/okay-panel" --restart >/dev/null 2>&1 &
     fi
 
     # Inicjalizacja domyślnych ikon na pulpicie użytkownika
@@ -189,7 +195,7 @@ elif [ "$MODE" = "--user" ]; then
     fi
 
     echo "Konfiguracja użytkownika zainstalowana pomyślnie."
-    echo "Wymagane pakiety: sfwbar, python-pyqt6, qt6-wayland, wlrctl."
+    echo "Wymagane pakiety: waybar (lub sfwbar), wlrctl, python-pyqt6, qt6-wayland."
     echo "Sugerowane pakiety narzędzi: swaybg, wdisplays, pavucontrol, papirus-icon-theme."
     echo "Upewnij się, że \$HOME/.local/bin znajduje się w Twojej zmiennej PATH."
 

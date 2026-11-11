@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+# OKay DE - Główny zarządca paska zadań (Panel Supervisor)
+# Wybiera najlepszy dostępny backend paska (sfwbar / waybar) i dba o jego stabilność.
+
+ACTION="${1:-start}"
+
+restart_panel() {
+    pkill -9 -x okay-dock 2>/dev/null || true
+    pkill -x sfwbar 2>/dev/null || true
+    pkill -x waybar 2>/dev/null || true
+    sleep 0.3
+}
+
+if [ "$ACTION" = "--restart" ] || [ "$ACTION" = "restart" ]; then
+    restart_panel
+fi
+
+# 1. Priorytet 1: sfwbar (jeśli zainstalowany i skonfigurowany)
+if command -v sfwbar >/dev/null 2>&1; then
+    CONFIG_FILE="$HOME/.config/sfwbar/sfwbar.config"
+    [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="/etc/xdg/sfwbar/sfwbar.config"
+    if [ -f "$CONFIG_FILE" ]; then
+        exec sfwbar -f "$CONFIG_FILE" > /tmp/sfwbar.log 2>&1
+    fi
+fi
+
+# 2. Priorytet 2: waybar (oficjalny, stabilny pakiet w repozytorium Arch Linux)
+if command -v waybar >/dev/null 2>&1; then
+    CONFIG_FILE="$HOME/.config/waybar/config.jsonc"
+    STYLE_FILE="$HOME/.config/waybar/style.css"
+    [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="/etc/xdg/waybar/config.jsonc"
+    [ ! -f "$STYLE_FILE" ] && STYLE_FILE="/etc/xdg/waybar/style.css"
+
+    if [ -f "$CONFIG_FILE" ] && [ -f "$STYLE_FILE" ]; then
+        exec waybar -c "$CONFIG_FILE" -s "$STYLE_FILE" > /tmp/waybar.log 2>&1
+    else
+        exec waybar > /tmp/waybar.log 2>&1
+    fi
+fi
+
+echo "Błąd: Nie znaleziono żadnego kompatybilnego paska zadań (sfwbar ani waybar)." >&2
+echo "Zainstaluj waybar poleceniem: sudo pacman -S waybar" >&2
+exit 1

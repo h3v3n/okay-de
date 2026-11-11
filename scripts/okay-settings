@@ -342,12 +342,16 @@ class InstallUpdateWorker(QThread):
 
             # Przeładowanie kompozytora i paska zadań
             self.progress.emit("Przeładowywanie kompozytora labwc i paska zadań...")
-            subprocess.run(["pkill", "-x", "waybar"], check=False)
             subprocess.run(["pkill", "-9", "-x", "okay-dock"], check=False)
-            subprocess.run(["pkill", "-x", "sfwbar"], check=False)
             subprocess.run(["labwc", "--reconfigure"], check=False)
-            if shutil.which("sfwbar"):
+            if shutil.which("okay-panel"):
+                subprocess.Popen(["okay-panel", "--restart"])
+            elif shutil.which("sfwbar"):
+                subprocess.run(["pkill", "-x", "sfwbar"], check=False)
                 subprocess.Popen(["sfwbar"])
+            elif shutil.which("waybar"):
+                subprocess.run(["pkill", "-x", "waybar"], check=False)
+                subprocess.Popen(["waybar"])
 
             if shutil.which("notify-send"):
                 subprocess.Popen([
@@ -1021,7 +1025,7 @@ class AboutPage(QWidget):
         card.add_row(PreferenceRow("Wersja jądra Linux", SystemHelper.get_kernel_release()))
         card.add_row(PreferenceRow("Procesor (CPU)", SystemHelper.get_cpu_info()))
         card.add_row(PreferenceRow("Pamięć operacyjna", SystemHelper.get_memory_info()))
-        card.add_row(PreferenceRow("Pasek zadań", "SFWBar (C / wlr-layer-shell)"))
+        card.add_row(PreferenceRow("Pasek zadań", "OKay Panel (wlr-layer-shell)"))
 
         layout.addWidget(card)
         layout.addStretch()

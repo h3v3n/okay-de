@@ -34,7 +34,7 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 | **Kompozytor Wayland** | `labwc` | Stacking compositor zgodny z protokołem wlroots i Openbox XML |
 | **Pulpit z ikonami** | `pcmanfm --desktop` | Interaktywny pulpit z obsługą ikon plików i tła |
 | **Centrum Sterowania** | `okay-settings` | Natywna aplikacja Pythona 3 (PyQt6) |
-| **Pasek zadań (Taskbar)** | `sfwbar` | Pasek w C z obsługą wlr-layer-shell, Catppuccin Mocha i zegarem KDE |
+| **Pasek zadań (Taskbar)** | `okay-panel` | Natywny zarządca paska (`sfwbar` / `waybar`) z obsługą wlr-layer-shell, motywem Catppuccin Mocha i białą kreską statusu |
 | **Launcher aplikacji** | `fuzzel` | Błyskawiczny launcher aplikacji z akceleracją Wayland |
 | **Emulator terminala** | `foot` | Ultra-lekki terminal Wayland z przezroczystością tła `0.95` |
 | **Menedżer plików** | `pcmanfm` | Szybki menedżer plików z ciemnym motywem GTK |
@@ -123,5 +123,5 @@ Kopiuje konfiguracje do `~/.config/`, skrypty do `~/.local/bin/`, ikony na `$HOM
   git pull origin main
   ./install.sh --user   # lub: sudo ./install.sh --system
   labwc --reconfigure
-  killall -SIGHUP sfwbar 2>/dev/null || sfwbar &
+  okay-panel --restart &
   ```

@@ -24,13 +24,14 @@ depends=(
     'papirus-icon-theme'
     'adwaita-icon-theme'
     'xdg-user-dirs'
-    'sfwbar'
+    'waybar'
     'wlrctl'
     'python'
     'python-pyqt6'
     'qt6-wayland'
 )
 optdepends=(
+    'sfwbar: alternatywny lekki pasek zadań C/layer-shell z AUR'
     'util-linux: obsługa zramctl dla zarządcy pamięci oksavi-ghost-runner'
     'wdisplays: graficzna konfiguracja wielu monitorów w Wayland'
     'pavucontrol: zaawansowany mikser dźwięku dla PipeWire'

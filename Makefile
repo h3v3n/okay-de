@@ -15,6 +15,7 @@ install:
 	install -m 755 scripts/okay-lock $(DESTDIR)$(PREFIX)/bin/okay-lock
 	install -m 755 scripts/okay-volume $(DESTDIR)$(PREFIX)/bin/okay-volume
 	install -m 755 scripts/okay-brightness $(DESTDIR)$(PREFIX)/bin/okay-brightness
+	install -m 755 scripts/okay-panel $(DESTDIR)$(PREFIX)/bin/okay-panel
 	install -m 755 scripts/oksavi-ghost-runner $(DESTDIR)$(PREFIX)/bin/oksavi-ghost-runner
 
 	# Usunięcie pozostałości starego paska docka
@@ -82,9 +83,13 @@ install:
 	install -d $(DESTDIR)/etc/xdg/sfwbar
 	install -m 644 config/sfwbar/* $(DESTDIR)/etc/xdg/sfwbar/
 
+	install -d $(DESTDIR)/etc/xdg/waybar
+	install -m 644 config/waybar/* $(DESTDIR)/etc/xdg/waybar/
+
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-session
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-settings
+	rm -f $(DESTDIR)$(PREFIX)/bin/okay-panel
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-dock
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-powermenu
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-clipboard
@@ -109,5 +114,6 @@ uninstall:
 	rm -f $(DESTDIR)/etc/xdg/gtk-4.0/settings.ini
 	rm -rf $(DESTDIR)/etc/xdg/pcmanfm
 	rm -rf $(DESTDIR)/etc/xdg/sfwbar
+	rm -rf $(DESTDIR)/etc/xdg/waybar
 
 .PHONY: all install uninstall
