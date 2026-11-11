@@ -18,6 +18,10 @@ install:
 	install -m 755 scripts/okay-panel $(DESTDIR)$(PREFIX)/bin/okay-panel
 	install -m 755 scripts/oksavi-ghost-runner $(DESTDIR)$(PREFIX)/bin/oksavi-ghost-runner
 
+	# Moduły centrum sterowania OKay Settings (GTK3)
+	install -d $(DESTDIR)$(PREFIX)/share/okay-de/settings
+	install -m 644 scripts/settings/*.py $(DESTDIR)$(PREFIX)/share/okay-de/settings/
+
 	# Usunięcie pozostałości starego paska docka
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-dock
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/okay-dock.desktop
@@ -110,6 +114,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/foot.desktop
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/pcmanfm.desktop
 	rm -rf $(DESTDIR)$(PREFIX)/share/backgrounds/okay-de
+	rm -rf $(DESTDIR)$(PREFIX)/share/okay-de
 	rm -rf $(DESTDIR)$(PREFIX)/share/themes/OKay
 	rm -rf $(DESTDIR)/etc/skel/Desktop
 	rm -rf $(DESTDIR)/etc/xdg/labwc

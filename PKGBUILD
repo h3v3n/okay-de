@@ -28,15 +28,13 @@ depends=(
     'gtk-layer-shell'
     'python'
     'python-gobject'
-    'python-pyqt6'
-    'qt6-wayland'
+    'wlr-randr'
 )
 optdepends=(
     'wlrctl: opcjonalne narzędzie CLI dla wlroots (z AUR)'
     'util-linux: obsługa zramctl dla zarządcy pamięci oksavi-ghost-runner'
-    'wdisplays: graficzna konfiguracja wielu monitorów w Wayland'
     'pavucontrol: zaawansowany mikser dźwięku dla PipeWire'
-    'networkmanager: zarządzanie połączeniami sieciowymi i obsługa nmtui'
+    'networkmanager: zarządzanie połączeniami Wi-Fi i sieciowymi w okay-settings'
     'whitesur-icon-theme: alternatywny minimalistyczny motyw ikon'
 )
 provides=('wayland-desktop-environment')

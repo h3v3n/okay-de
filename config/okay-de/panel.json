@@ -1,6 +1,7 @@
 {
   "icon_only": true,
   "show_labels": false,
+  "position": "bottom",
   "pinned_apps": [
     {
       "app_id": "foot",

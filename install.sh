@@ -13,10 +13,10 @@ if [ "$MODE" = "--system" ]; then
     echo "Instalowanie OKay DE w całym systemie (/etc/xdg, /usr/bin, /usr/local/bin, /usr/share)..."
     make install PREFIX=/usr
 
-    # Instalacja pakietów systemowych dla pełnej obsługi okien i zunifikowanego taskbara
+    # Instalacja pakietów systemowych dla pełnej obsługi panelu i ustawień GTK3
     if command -v pacman >/dev/null 2>&1; then
-        echo "Weryfikacja i instalacja pakietów systemowych (gtk3, gtk-layer-shell, python-gobject, python-pyqt6, qt6-wayland)..."
-        pacman -S --needed --noconfirm gtk3 gtk-layer-shell python-gobject python-pyqt6 qt6-wayland
+        echo "Weryfikacja i instalacja pakietów systemowych (gtk3, gtk-layer-shell, python-gobject, wlr-randr)..."
+        pacman -S --needed --noconfirm gtk3 gtk-layer-shell python-gobject wlr-randr
     fi
 
     # Instalacja reguł uprawnień Polkit i Sudoers dla okay-settings
@@ -38,10 +38,13 @@ if [ "$MODE" = "--system" ]; then
     pkill -9 -x waybar 2>/dev/null || true
     pkill -9 -x sfwbar 2>/dev/null || true
 
-    # Dodatkowa instalacja okay-settings i okay-panel w /usr/local/bin
-    install -d /usr/local/bin
+    # Dodatkowa instalacja okay-settings, jego modułów i okay-panel w /usr/local
+    install -d /usr/local/bin /usr/local/share/okay-de/settings
     install -m 755 scripts/okay-settings /usr/local/bin/okay-settings
     install -m 755 scripts/okay-panel /usr/local/bin/okay-panel
+    if [ -d scripts/settings ]; then
+        install -m 644 scripts/settings/*.py /usr/local/share/okay-de/settings/
+    fi
 
     # Instalacja domyślnej konfiguracji panelu w /etc/xdg/okay-de/panel.json
     install -d /etc/xdg/okay-de
@@ -82,6 +85,7 @@ elif [ "$MODE" = "--user" ]; then
     if ! pacman -Qi gtk-layer-shell >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk-layer-shell"); fi
     if ! pacman -Qi python-gobject >/dev/null 2>&1; then PKGS_TO_INSTALL+=("python-gobject"); fi
     if ! pacman -Qi gtk3 >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk3"); fi
+    if ! pacman -Qi wlr-randr >/dev/null 2>&1; then PKGS_TO_INSTALL+=("wlr-randr"); fi
     if [ ${#PKGS_TO_INSTALL[@]} -gt 0 ] && command -v pacman >/dev/null 2>&1; then
         echo "Wykryto brak pakietów dla paska zadań: ${PKGS_TO_INSTALL[*]}"
         INSTALLED=0
@@ -139,7 +143,7 @@ elif [ "$MODE" = "--user" ]; then
         cp backgrounds/default.png "$HOME/.config/okay-de/wallpaper.png"
     fi
 
-    # Bezpieczne kopiowanie skryptów i aplikacji do ~/.local/bin
+    # Bezpieczne kopiowanie skryptów i aplikacji do ~/.local/bin oraz modułów settings
     if [ -d scripts ]; then
         for s in scripts/*; do
             if [ -f "$s" ]; then
@@ -147,6 +151,10 @@ elif [ "$MODE" = "--user" ]; then
                 chmod +x "$HOME/.local/bin/$(basename "$s")"
             fi
         done
+        if [ -d scripts/settings ]; then
+            mkdir -p "$HOME/.local/share/okay-de/settings"
+            cp scripts/settings/*.py "$HOME/.local/share/okay-de/settings/"
+        fi
     fi
     chmod +x "$HOME/.config/labwc/autostart" 2>/dev/null || true
 
@@ -190,8 +198,8 @@ elif [ "$MODE" = "--user" ]; then
     fi
 
     echo "Konfiguracja użytkownika zainstalowana pomyślnie."
-    echo "Wymagane pakiety: gtk3, gtk-layer-shell, python-gobject, python-pyqt6, qt6-wayland."
-    echo "Sugerowane pakiety narzędzi: swaybg, wdisplays, pavucontrol, papirus-icon-theme."
+    echo "Wymagane pakiety: gtk3, gtk-layer-shell, python-gobject, wlr-randr, wireplumber."
+    echo "Sugerowane pakiety narzędzi: swaybg, networkmanager, pavucontrol, papirus-icon-theme."
     echo "Upewnij się, że \$HOME/.local/bin znajduje się w Twojej zmiennej PATH."
 
     if [ -f /usr/bin/okay-settings ] || [ -f /usr/local/bin/okay-settings ]; then

@@ -284,6 +284,7 @@ class PanelConfigManager:
     DEFAULT_CONFIG = {
         "icon_only": True,
         "show_labels": False,
+        "position": "bottom",
         "pinned_apps": [
             {
                 "app_id": "foot",
@@ -352,6 +353,8 @@ class PanelConfigManager:
 
             data["show_labels"] = show_labels
             data["icon_only"] = not show_labels
+            pos = str(data.get("position", "bottom")).lower()
+            data["position"] = "top" if pos == "top" else "bottom"
             if "pinned_apps" not in data or not isinstance(data["pinned_apps"], list):
                 data["pinned_apps"] = list(cls.DEFAULT_CONFIG["pinned_apps"])
             return data
@@ -364,6 +367,8 @@ class PanelConfigManager:
         show_labels = bool(data.get("show_labels", not data.get("icon_only", True)))
         data["show_labels"] = show_labels
         data["icon_only"] = not show_labels
+        pos = str(data.get("position", "bottom")).lower()
+        data["position"] = "top" if pos == "top" else "bottom"
         with open(cls.CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -1022,6 +1027,7 @@ class OkayPanel(Gtk.Window):
         self._config_mtime = -1
         self.panel_config = PanelConfigManager.load()
         self._last_state_key = None
+        self._apply_position()
 
         # Połączenie z natywnym protokołem Wayland wlr-foreign-toplevel-management-v1
         WindowManager.init_client(self._on_wayland_change)
@@ -1179,6 +1185,12 @@ class OkayPanel(Gtk.Window):
         btn.add(box)
         return btn
 
+    def _apply_position(self):
+        pos = str(self.panel_config.get("position", "bottom")).lower()
+        is_top = (pos == "top")
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.TOP, is_top)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, not is_top)
+
     def _update_tasks(self) -> bool:
         # 1. Sprawdzenie zmian w ~/.config/okay-de/panel.json
         try:
@@ -1186,6 +1198,7 @@ class OkayPanel(Gtk.Window):
             if mtime != self._config_mtime:
                 self._config_mtime = mtime
                 self.panel_config = PanelConfigManager.load()
+                self._apply_position()
                 self._last_state_key = None
         except Exception:
             pass
