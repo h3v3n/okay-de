@@ -26,10 +26,10 @@ mako &
         /usr/bin/okay-panel > /tmp/okay-panel.log 2>&1
     elif [ -x /usr/local/bin/okay-panel ]; then
         /usr/local/bin/okay-panel > /tmp/okay-panel.log 2>&1
-    elif command -v sfwbar >/dev/null 2>&1; then
-        sfwbar > /tmp/sfwbar.log 2>&1
     elif command -v waybar >/dev/null 2>&1; then
         waybar > /tmp/waybar.log 2>&1
+    elif command -v sfwbar >/dev/null 2>&1; then
+        sfwbar > /tmp/sfwbar.log 2>&1
     fi
 ) &
 

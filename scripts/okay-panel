@@ -16,17 +16,8 @@ if [ "$ACTION" = "--restart" ] || [ "$ACTION" = "restart" ]; then
     restart_panel
 fi
 
-# 1. Priorytet 1: sfwbar (jeśli zainstalowany i skonfigurowany)
-if command -v sfwbar >/dev/null 2>&1; then
-    CONFIG_FILE="$HOME/.config/sfwbar/sfwbar.config"
-    [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="/etc/xdg/sfwbar/sfwbar.config"
-    if [ -f "$CONFIG_FILE" ]; then
-        exec sfwbar -f "$CONFIG_FILE" > /tmp/sfwbar.log 2>&1
-    fi
-fi
-
-# 2. Priorytet 2: waybar (oficjalny, stabilny pakiet w repozytorium Arch Linux)
-if command -v waybar >/dev/null 2>&1; then
+# 1. Domyślny stabilny backend: waybar (oficjalny pakiet w repozytorium Arch Linux)
+if [ "${OKAY_PANEL_BACKEND:-waybar}" = "waybar" ] && command -v waybar >/dev/null 2>&1; then
     CONFIG_FILE="$HOME/.config/waybar/config.jsonc"
     STYLE_FILE="$HOME/.config/waybar/style.css"
     [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="/etc/xdg/waybar/config.jsonc"
@@ -37,6 +28,20 @@ if command -v waybar >/dev/null 2>&1; then
     else
         exec waybar > /tmp/waybar.log 2>&1
     fi
+fi
+
+# 2. Alternatywny backend: sfwbar (opcjonalny, lekki pasek z AUR)
+if command -v sfwbar >/dev/null 2>&1; then
+    CONFIG_FILE="$HOME/.config/sfwbar/sfwbar.config"
+    [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="/etc/xdg/sfwbar/sfwbar.config"
+    if [ -f "$CONFIG_FILE" ]; then
+        exec sfwbar -f "$CONFIG_FILE" > /tmp/sfwbar.log 2>&1
+    fi
+fi
+
+# 3. Awaryjny fallback do waybar
+if command -v waybar >/dev/null 2>&1; then
+    exec waybar > /tmp/waybar.log 2>&1
 fi
 
 echo "Błąd: Nie znaleziono żadnego kompatybilnego paska zadań (sfwbar ani waybar)." >&2
