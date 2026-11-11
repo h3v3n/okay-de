@@ -10,6 +10,18 @@ Motyw: Catppuccin Mocha | Styl: KDE Plasma (0px radius, ostre krawędzie, biała
 
 import os
 import sys
+
+# Wymuszenie natywnego backendu Wayland dla GTK3
+os.environ["GDK_BACKEND"] = "wayland"
+
+# Ustawienie nazwy procesu w jądrze Linux dla pkill / pgrep
+try:
+    import ctypes
+    libc = ctypes.CDLL(None)
+    libc.prctl(15, b"okay-panel", 0, 0, 0)
+except Exception:
+    pass
+
 import glob
 import json
 import time
@@ -28,12 +40,33 @@ except (ImportError, ValueError) as err:
     print("Zainstaluj wymagane pakiety: sudo pacman -S --needed gtk3 gtk-layer-shell python-gobject wlrctl", file=sys.stderr)
     sys.exit(1)
 
+# Weryfikacja obecności biblioteki GtkLayerShell (wymagana dla paska Wayland)
+HAS_LAYER_SHELL = False
 try:
     gi.require_version('GtkLayerShell', '0.1')
     from gi.repository import GtkLayerShell
     HAS_LAYER_SHELL = True
 except (ValueError, ImportError):
-    HAS_LAYER_SHELL = False
+    # Próba automatycznej instalacji pakietu systemowego
+    print("Brak biblioteki gtk-layer-shell. Próba automatycznej instalacji...", file=sys.stderr)
+    if shutil.which("sudo") and shutil.which("pacman"):
+        subprocess.run(["sudo", "pacman", "-S", "--needed", "--noconfirm", "gtk-layer-shell"], check=False)
+    elif shutil.which("pkexec") and shutil.which("pacman"):
+        subprocess.run(["pkexec", "pacman", "-S", "--needed", "--noconfirm", "gtk-layer-shell"], check=False)
+
+    try:
+        gi.require_version('GtkLayerShell', '0.1')
+        from gi.repository import GtkLayerShell
+        HAS_LAYER_SHELL = True
+    except (ValueError, ImportError):
+        HAS_LAYER_SHELL = False
+
+if not HAS_LAYER_SHELL:
+    err_msg = "KRYTYCZNY BŁĄD: okay-panel wymaga pakietu 'gtk-layer-shell' do działania jako pasek zadań w Wayland!\nZainstaluj go poleceniem: sudo pacman -S gtk-layer-shell"
+    print(err_msg, file=sys.stderr)
+    if shutil.which("notify-send"):
+        subprocess.run(["notify-send", "-u", "critical", "OKay DE", "Brak biblioteki gtk-layer-shell!\nZainstaluj: sudo pacman -S gtk-layer-shell"], check=False)
+    sys.exit(1)
 
 # ============================================================================
 # Style CSS (Catppuccin Mocha - 0px radius, ostry design)
@@ -201,20 +234,24 @@ class WindowManager:
             if res.returncode != 0 or not res.stdout.strip():
                 return []
             windows = []
+            ignored_ids = {"okay-panel", "okay-dock", "desktop", "fuzzel", "mako"}
             for line in res.stdout.strip().split("\n"):
                 if not line.strip():
                     continue
                 if ":" in line:
                     app_id, title = line.split(":", 1)
-                    windows.append({
-                        "app_id": app_id.strip(),
-                        "title": title.strip()
-                    })
                 else:
-                    windows.append({
-                        "app_id": line.strip(),
-                        "title": line.strip()
-                    })
+                    app_id, title = line, line
+
+                app_id_clean = app_id.strip()
+                title_clean = title.strip()
+                if app_id_clean.lower() in ignored_ids or any(ign in app_id_clean.lower() for ign in ignored_ids):
+                    continue
+
+                windows.append({
+                    "app_id": app_id_clean,
+                    "title": title_clean
+                })
             return windows
         except Exception:
             return []
@@ -292,20 +329,19 @@ class OkayPanel(Gtk.Window):
         self.set_name("okay-panel")
         self.set_title("okay-panel")
 
-        # Konfiguracja Wayland Layer-Shell
-        if HAS_LAYER_SHELL:
-            GtkLayerShell.init_for_window(self)
-            GtkLayerShell.set_layer(self, GtkLayerShell.Layer.TOP)
-            GtkLayerShell.auto_exclusive_zone_enable(self)
-            GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, True)
-            GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.LEFT, True)
-            GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.RIGHT, True)
-        else:
-            self.set_type_hint(Gdk.WindowTypeHint.DOCK)
-            self.set_decorated(False)
-            self.set_keep_above(True)
+        # Konfiguracja Wayland Layer-Shell (Natywny pasek środowiska graficznego OKay DE)
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.TOP)
+        GtkLayerShell.set_namespace(self, "okay-panel")
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.NONE)
+        GtkLayerShell.auto_exclusive_zone_enable(self)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, True)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.LEFT, True)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.RIGHT, True)
 
-        self.set_default_size(1920, 38)
+        self.set_decorated(False)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
         self.set_size_request(-1, 38)
 
         # Załadowanie stylów CSS Catppuccin Mocha

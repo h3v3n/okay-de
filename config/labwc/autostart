@@ -17,16 +17,24 @@ mako &
 
 # 3. Pasek zadań OKay DE (Natywny okay-panel)
 (
-    sleep 0.5
-    pkill -x okay-panel 2>/dev/null || true
+    sleep 0.8
+    PANEL_BIN=""
     if [ -x "$HOME/.local/bin/okay-panel" ]; then
-        "$HOME/.local/bin/okay-panel" > /tmp/okay-panel.log 2>&1
+        PANEL_BIN="$HOME/.local/bin/okay-panel"
     elif [ -x /usr/local/bin/okay-panel ]; then
-        /usr/local/bin/okay-panel > /tmp/okay-panel.log 2>&1
+        PANEL_BIN="/usr/local/bin/okay-panel"
     elif [ -x /usr/bin/okay-panel ]; then
-        /usr/bin/okay-panel > /tmp/okay-panel.log 2>&1
+        PANEL_BIN="/usr/bin/okay-panel"
     elif command -v okay-panel >/dev/null 2>&1; then
-        okay-panel > /tmp/okay-panel.log 2>&1
+        PANEL_BIN="$(command -v okay-panel)"
+    fi
+
+    if [ -n "$PANEL_BIN" ]; then
+        pkill -f okay-panel 2>/dev/null || true
+        while true; do
+            "$PANEL_BIN" > /tmp/okay-panel.log 2>&1
+            sleep 2
+        done
     fi
 ) &
 

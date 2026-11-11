@@ -69,11 +69,19 @@ elif [ "$MODE" = "--user" ]; then
     if ! pacman -Qi python-gobject >/dev/null 2>&1; then PKGS_TO_INSTALL+=("python-gobject"); fi
     if ! pacman -Qi gtk3 >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk3"); fi
     if [ ${#PKGS_TO_INSTALL[@]} -gt 0 ] && command -v pacman >/dev/null 2>&1; then
-        if command -v pkexec >/dev/null 2>&1; then
-            echo "Wykryto brak pakietów (${PKGS_TO_INSTALL[*]}). Instalowanie..."
-            pkexec pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" 2>/dev/null || true
-        elif command -v sudo >/dev/null 2>&1; then
-            sudo pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" 2>/dev/null || true
+        echo "Wykryto brak pakietów dla nowego paska zadań: ${PKGS_TO_INSTALL[*]}"
+        INSTALLED=0
+        if command -v sudo >/dev/null 2>&1; then
+            echo "Instalowanie pakietów przez sudo pacman..."
+            sudo pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" && INSTALLED=1 || true
+        fi
+        if [ "$INSTALLED" -eq 0 ] && command -v pkexec >/dev/null 2>&1; then
+            echo "Instalowanie pakietów przez pkexec pacman..."
+            pkexec pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" && INSTALLED=1 || true
+        fi
+        if [ "$INSTALLED" -eq 0 ]; then
+            echo "UWAGA: Nie udało się zainstalować pakietów automatycznie." >&2
+            echo "Wykonaj ręcznie: sudo pacman -S --needed ${PKGS_TO_INSTALL[*]}" >&2
         fi
     fi
 

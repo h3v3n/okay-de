@@ -35,5 +35,9 @@ fi
 command -v xdg-user-dirs-update >/dev/null 2>&1 && xdg-user-dirs-update
 mkdir -p "$HOME/Desktop"
 
+# Zapewnienie uprawnień wykonywalności dla autostartu
+[ -f "$HOME/.config/labwc/autostart" ] && chmod +x "$HOME/.config/labwc/autostart" 2>/dev/null || true
+[ -f "/etc/xdg/labwc/autostart" ] && chmod +x "/etc/xdg/labwc/autostart" 2>/dev/null || true
+
 # Uruchomienie kompozytora labwc
 exec labwc

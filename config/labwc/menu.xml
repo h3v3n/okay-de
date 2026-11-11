@@ -30,6 +30,9 @@
 
     <separator />
 
+    <item label="Przeładuj pasek zadań">
+      <action name="Execute" command="okay-panel --restart" />
+    </item>
     <item label="Przeładuj konfigurację">
       <action name="Reconfigure" />
     </item>

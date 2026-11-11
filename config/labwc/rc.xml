@@ -32,6 +32,7 @@
     <windowRule identifier="*" serverDecoration="yes" />
     <windowRule identifier="fuzzel" serverDecoration="no" />
     <windowRule identifier="pcmanfm" type="desktop" serverDecoration="no" />
+    <windowRule identifier="okay-panel" serverDecoration="no" />
   </windowRules>
 
   <mouse>
