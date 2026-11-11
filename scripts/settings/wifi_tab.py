@@ -134,12 +134,15 @@ class WifiTab(Gtk.Box):
     def _set_busy(self, busy: bool, message: str = ""):
         self._busy = busy
         self.btn_scan.set_sensitive(not busy)
+        self.wifi_switch.set_sensitive(not busy and bool(shutil.which("nmcli")))
         if busy:
+            self.btn_connect_toggle.set_sensitive(False)
             self.spinner.show()
             self.spinner.start()
         else:
             self.spinner.stop()
             self.spinner.hide()
+            self._update_bottom_action_button()
         if message:
             self.lbl_status.set_text(message)
 
@@ -166,19 +169,15 @@ class WifiTab(Gtk.Box):
                         active_conns.append((parts[0], parts[1], parts[2]))
 
             rc_saved, out_saved, _ = run_cmd(["nmcli", "-t", "-f", "NAME,TYPE", "con", "show"], timeout=5)
+            wireless_profiles = []
             saved_wifi = {}  # ssid -> profile_name
             if rc_saved == 0:
                 for ln in out_saved.splitlines():
                     parts = _split_nmcli_terse(ln)
-                    if len(parts) >= 2 and "wireless" in parts[1]:
+                    if len(parts) >= 2 and "wireless" in parts[1] and parts[0]:
                         prof_name = parts[0]
                         saved_wifi[prof_name] = prof_name
-                        rc_ssid, out_ssid, _ = run_cmd(
-                            ["nmcli", "-t", "-g", "802-11-wireless.ssid", "con", "show", "id", prof_name],
-                            timeout=3
-                        )
-                        if rc_ssid == 0 and out_ssid.strip():
-                            saved_wifi[out_ssid.strip()] = prof_name
+                        wireless_profiles.append(prof_name)
 
             networks = []
             scan_err = ""
@@ -222,6 +221,18 @@ class WifiTab(Gtk.Box):
                 else:
                     scan_err = err_wifi.strip() or err_radio.strip()
 
+            # Sprawdź powiązanie `802-11-wireless.ssid` tylko dla profili o niestandardowej nazwie
+            visible_ssids = {n["ssid"] for n in networks}
+            for prof_name in wireless_profiles[:50]:
+                if prof_name in visible_ssids:
+                    continue
+                rc_ssid, out_ssid, _ = run_cmd(
+                    ["nmcli", "-t", "-g", "802-11-wireless.ssid", "con", "show", "id", prof_name],
+                    timeout=3
+                )
+                if rc_ssid == 0 and out_ssid.strip():
+                    saved_wifi.setdefault(out_ssid.strip(), prof_name)
+
             return {
                 "rc_radio": rc_radio,
                 "err_radio": err_radio.strip(),
@@ -233,12 +244,10 @@ class WifiTab(Gtk.Box):
             }
 
         def _on_done(res: dict):
-            self._set_busy(False)
             self._saved_profiles = res["saved_wifi"]
             self._networks = res["networks"]
 
             self._updating_ui = True
-            self.wifi_switch.set_sensitive(res["rc_radio"] == 0)
             self.wifi_switch.set_active(res["wifi_enabled"])
             self._updating_ui = False
 
@@ -249,6 +258,8 @@ class WifiTab(Gtk.Box):
                 self.lbl_active_net.set_text("Brak aktywnych połączeń sieciowych.")
 
             self._populate_networks(res["wifi_enabled"], res["scan_err"] or res["err_radio"])
+            self._set_busy(False)
+            self.wifi_switch.set_sensitive(res["rc_radio"] == 0)
 
         def _on_err(exc):
             self._set_busy(False, f"Błąd NetworkManager: {exc}")
@@ -388,7 +399,8 @@ class WifiTab(Gtk.Box):
         self._set_busy(True, f"Rozłączanie sieci {ssid}...")
 
         def _worker():
-            rc, out, err = run_cmd(["nmcli", "con", "down", "id", ssid], timeout=8)
+            profile_id = self._saved_profiles.get(ssid, ssid)
+            rc, out, err = run_cmd(["nmcli", "con", "down", "id", profile_id], timeout=8)
             if rc != 0:
                 # Fallback po aktywnym interfejsie wifi
                 rc2, devs, _ = run_cmd(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "dev"], timeout=5)

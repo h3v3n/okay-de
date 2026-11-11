@@ -123,10 +123,12 @@ class InputTab(Gtk.Box):
         libinput = root.find("libinput")
         if libinput is None:
             return None, None
-        for dev in libinput.findall("device"):
-            cat = (dev.get("category") or "").strip().lower()
-            if cat in ("default", "touchpad", "touch"):
-                return libinput, dev
+        devices = libinput.findall("device")
+        for wanted in ("default", "touchpad", "touch"):
+            for dev in devices:
+                cat = (dev.get("category") or "").strip().lower()
+                if cat == wanted:
+                    return libinput, dev
         first = libinput.find("device")
         return libinput, first
 
@@ -175,10 +177,21 @@ class InputTab(Gtk.Box):
         try:
             os.makedirs(os.path.dirname(USER_RC_XML), exist_ok=True)
             src = self._resolve_source_xml()
+            root = None
             if src:
-                tree = ET.parse(src)
-                root = tree.getroot()
-            else:
+                try:
+                    tree = ET.parse(src)
+                    root = tree.getroot()
+                except ET.ParseError:
+                    if src == USER_RC_XML:
+                        shutil.copyfile(USER_RC_XML, USER_RC_XML + ".bak")
+                    if os.path.exists(SYSTEM_RC_XML):
+                        try:
+                            tree = ET.parse(SYSTEM_RC_XML)
+                            root = tree.getroot()
+                        except ET.ParseError:
+                            root = None
+            if root is None:
                 root = ET.Element("labwc_config")
                 tree = ET.ElementTree(root)
 
@@ -203,7 +216,9 @@ class InputTab(Gtk.Box):
             if hasattr(ET, "indent"):
                 ET.indent(tree, space="  ")
 
-            tree.write(USER_RC_XML, encoding="utf-8", xml_declaration=True)
+            tmp_rc = USER_RC_XML + ".tmp"
+            tree.write(tmp_rc, encoding="utf-8", xml_declaration=True)
+            os.replace(tmp_rc, USER_RC_XML)
         except Exception as exc:
             self.lbl_status.set_text(f"Błąd zapisu {USER_RC_XML}: {exc}")
             return

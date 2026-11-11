@@ -29,11 +29,11 @@ def _parse_wpctl_status(raw: str) -> dict:
 
     for line in raw.splitlines():
         stripped = line.strip()
-        if stripped in ("Audio", "Video", "Settings"):
-            section = stripped
+        if not stripped:
             subsection = ""
             continue
-        if not stripped:
+        if not line[0].isspace():
+            section = stripped
             subsection = ""
             continue
 
@@ -41,14 +41,13 @@ def _parse_wpctl_status(raw: str) -> dict:
             continue
 
         clean = line.lstrip(" │├└─|+`\\-\t")
-        if clean.startswith("Sinks:"):
-            subsection = "Sinks"
-            continue
-        if clean.startswith("Sources:"):
-            subsection = "Sources"
-            continue
-        if clean.startswith(("Devices:", "Filters:", "Streams:")):
-            subsection = ""
+        if clean.endswith(":") and not re.match(r"^\d+\.", clean):
+            if clean.startswith("Sinks:"):
+                subsection = "Sinks"
+            elif clean.startswith("Sources:"):
+                subsection = "Sources"
+            else:
+                subsection = ""
             continue
 
         if subsection in ("Sinks", "Sources"):
@@ -92,6 +91,7 @@ class SoundTab(Gtk.Box):
         self._updating_ui = False
         self._vol_debounce_id = 0
         self._mic_debounce_id = 0
+        self.connect("destroy", self._on_destroy)
 
         sw, self.content = make_scrolled_page()
         self.pack_start(sw, True, True, 0)
@@ -284,6 +284,14 @@ class SoundTab(Gtk.Box):
             lambda: run_cmd(["wpctl", "set-default", str(node_id)], timeout=4),
             lambda _r: self.refresh_sound()
         )
+
+    def _on_destroy(self, _widget):
+        if self._vol_debounce_id:
+            GLib.source_remove(self._vol_debounce_id)
+            self._vol_debounce_id = 0
+        if self._mic_debounce_id:
+            GLib.source_remove(self._mic_debounce_id)
+            self._mic_debounce_id = 0
 
     def _on_out_volume_changed(self, scale):
         if self._updating_ui or not shutil.which("wpctl"):

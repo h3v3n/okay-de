@@ -96,21 +96,23 @@ elif [ "$MODE" = "--user" ]; then
     echo "Instalowanie konfiguracji OKay DE dla bieżącego użytkownika ($HOME/.config)..."
 
     # Weryfikacja obecności oficjalnych bibliotek GTK3 / Layer-Shell
-    PKGS_TO_INSTALL=()
-    if ! pacman -Qi gtk-layer-shell >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk-layer-shell"); fi
-    if ! pacman -Qi python-gobject >/dev/null 2>&1; then PKGS_TO_INSTALL+=("python-gobject"); fi
-    if ! pacman -Qi gtk3 >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk3"); fi
-    if ! pacman -Qi wlr-randr >/dev/null 2>&1; then PKGS_TO_INSTALL+=("wlr-randr"); fi
-    if [ ${#PKGS_TO_INSTALL[@]} -gt 0 ] && command -v pacman >/dev/null 2>&1; then
-        echo "Wykryto brak pakietów dla paska zadań: ${PKGS_TO_INSTALL[*]}"
-        INSTALLED=0
-        if command -v sudo >/dev/null 2>&1; then
-            echo "Instalowanie pakietów przez sudo pacman..."
-            sudo pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" && INSTALLED=1 || true
-        fi
-        if [ "$INSTALLED" -eq 0 ] && command -v pkexec >/dev/null 2>&1; then
-            echo "Instalowanie pakietów przez pkexec pacman..."
-            pkexec pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" && INSTALLED=1 || true
+    if command -v pacman >/dev/null 2>&1; then
+        PKGS_TO_INSTALL=()
+        if ! pacman -Qi gtk-layer-shell >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk-layer-shell"); fi
+        if ! pacman -Qi python-gobject >/dev/null 2>&1; then PKGS_TO_INSTALL+=("python-gobject"); fi
+        if ! pacman -Qi gtk3 >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk3"); fi
+        if ! pacman -Qi wlr-randr >/dev/null 2>&1; then PKGS_TO_INSTALL+=("wlr-randr"); fi
+        if [ ${#PKGS_TO_INSTALL[@]} -gt 0 ]; then
+            echo "Wykryto brak pakietów dla paska zadań i ustawień: ${PKGS_TO_INSTALL[*]}"
+            INSTALLED=0
+            if command -v sudo >/dev/null 2>&1; then
+                echo "Instalowanie pakietów przez sudo pacman..."
+                sudo -n pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" && INSTALLED=1 || true
+            fi
+            if [ "$INSTALLED" -eq 0 ] && command -v pkexec >/dev/null 2>&1; then
+                echo "Instalowanie pakietów przez pkexec pacman..."
+                pkexec pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" && INSTALLED=1 || true
+            fi
         fi
     fi
 
@@ -143,8 +145,16 @@ elif [ "$MODE" = "--user" ]; then
         cp config/okay-de/panel.json "$HOME/.config/okay-de/panel.json"
     fi
 
-    # Kopiowanie konfiguracji (w tym masek przycisków XBM i wektorów SVG do labwc)
+    # Kopiowanie konfiguracji (zachowujemy rc.xml użytkownika, jeśli zawiera spersonalizowaną sekcję <libinput>)
+    RC_BACKUP=""
+    if [ -f "$HOME/.config/labwc/rc.xml" ] && grep -q '<libinput>' "$HOME/.config/labwc/rc.xml" 2>/dev/null; then
+        RC_BACKUP=$(mktemp)
+        cp "$HOME/.config/labwc/rc.xml" "$RC_BACKUP"
+    fi
     cp -r config/labwc/* "$HOME/.config/labwc/" 2>/dev/null || true
+    if [ -n "$RC_BACKUP" ] && [ -f "$RC_BACKUP" ]; then
+        mv "$RC_BACKUP" "$HOME/.config/labwc/rc.xml"
+    fi
     cp -r config/foot/* "$HOME/.config/foot/" 2>/dev/null || true
     cp -r config/fuzzel/* "$HOME/.config/fuzzel/" 2>/dev/null || true
     cp -r config/mako/* "$HOME/.config/mako/" 2>/dev/null || true
@@ -209,15 +219,17 @@ elif [ "$MODE" = "--user" ]; then
     pkill -9 -x okay-dock 2>/dev/null || true
     pkill -9 -x okay-settings 2>/dev/null || true
 
-    # Przeładowanie lub uruchomienie paska zadań OKay DE
-    if [ -x "$HOME/.local/bin/okay-panel" ]; then
-        "$HOME/.local/bin/okay-panel" --restart >/dev/null 2>&1 &
-    elif [ -x /usr/local/bin/okay-panel ]; then
-        /usr/local/bin/okay-panel --restart >/dev/null 2>&1 &
-    elif [ -x /usr/bin/okay-panel ]; then
-        /usr/bin/okay-panel --restart >/dev/null 2>&1 &
-    elif command -v okay-panel >/dev/null 2>&1; then
-        okay-panel --restart >/dev/null 2>&1 &
+    # Przeładowanie lub uruchomienie paska zadań OKay DE (tylko w aktywnej sesji Wayland)
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        if [ -x "$HOME/.local/bin/okay-panel" ]; then
+            "$HOME/.local/bin/okay-panel" --restart >/dev/null 2>&1 &
+        elif [ -x /usr/local/bin/okay-panel ]; then
+            /usr/local/bin/okay-panel --restart >/dev/null 2>&1 &
+        elif [ -x /usr/bin/okay-panel ]; then
+            /usr/bin/okay-panel --restart >/dev/null 2>&1 &
+        elif command -v okay-panel >/dev/null 2>&1; then
+            okay-panel --restart >/dev/null 2>&1 &
+        fi
     fi
 
     # Inicjalizacja domyślnych ikon na pulpicie użytkownika
@@ -239,10 +251,17 @@ elif [ "$MODE" = "--user" ]; then
     echo "Sugerowane pakiety narzędzi: swaybg, networkmanager, pavucontrol, papirus-icon-theme."
     echo "Upewnij się, że \$HOME/.local/bin znajduje się w Twojej zmiennej PATH."
 
-    if [ -f /usr/bin/okay-settings ] || [ -f /usr/local/bin/okay-settings ]; then
+    STALE_SYS=0
+    if [ -f /usr/bin/okay-settings ] && ! cmp -s scripts/okay-settings /usr/bin/okay-settings 2>/dev/null; then
+        STALE_SYS=1
+    fi
+    if [ -f /usr/local/bin/okay-settings ] && ! cmp -s scripts/okay-settings /usr/local/bin/okay-settings 2>/dev/null; then
+        STALE_SYS=1
+    fi
+    if [ "$STALE_SYS" -eq 1 ]; then
         echo ""
         echo "======================================================================"
-        echo "UWAGA: Wykryto starszą instalację systemową (/usr/bin/okay-settings)."
+        echo "UWAGA: Wykryto starszą instalację systemową okay-settings (/usr/bin lub /usr/local/bin)."
         echo "Aby upewnić się, że całe środowisko korzysta z najnowszej wersji:"
         echo "uruchom: sudo ./install.sh --system"
         echo "======================================================================"

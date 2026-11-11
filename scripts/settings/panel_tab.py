@@ -164,8 +164,10 @@ class PanelTab(Gtk.Box):
 
         try:
             os.makedirs(PANEL_CONFIG_DIR, exist_ok=True)
-            with open(PANEL_CONFIG_FILE, "w", encoding="utf-8") as f:
+            tmp_file = PANEL_CONFIG_FILE + ".tmp"
+            with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_file, PANEL_CONFIG_FILE)
             self.lbl_status.set_text(
                 f"Zapisano panel.json (tylko ikony={icon_only}, pozycja={pos}). Pasek odświeży się automatycznie."
             )
@@ -193,10 +195,10 @@ class PanelTab(Gtk.Box):
             os.makedirs(PANEL_CONFIG_DIR, exist_ok=True)
             if os.path.abspath(img_path) != os.path.abspath(USER_WALLPAPER):
                 shutil.copyfile(img_path, USER_WALLPAPER)
-            subprocess.run(["pkill", "-x", "swaybg"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if shutil.which("swaybg"):
+                subprocess.run(["pkill", "-x", "swaybg"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.Popen(
-                    ["swaybg", "-i", USER_WALLPAPER, "-m", "fill"],
+                    ["swaybg", "-c", "#1e1e2e", "-i", USER_WALLPAPER, "-m", "fill"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     start_new_session=True

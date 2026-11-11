@@ -36,10 +36,12 @@ def _parse_wlr_randr_json(raw: str) -> list:
         ).strip()
         modes = []
         current_mode = None
-        for m in item.get("modes", []):
-            w = int(m.get("width", 0))
-            h = int(m.get("height", 0))
-            hz = float(m.get("refresh", 60.0))
+        for m in item.get("modes") or []:
+            w = int(m.get("width") or 0)
+            h = int(m.get("height") or 0)
+            if w <= 0 or h <= 0:
+                continue
+            hz = float(m.get("refresh") or 60.0)
             cur = bool(m.get("current", False))
             pref = bool(m.get("preferred", False))
             entry = {
@@ -179,6 +181,7 @@ class DisplayTab(Gtk.Box):
 
         self.switch_enabled = Gtk.Switch()
         self.switch_enabled.set_active(True)
+        self.switch_enabled.connect("notify::active", self._on_enabled_toggled)
         box_cfg.pack_start(
             make_setting_row(
                 "Wyjście aktywne",
@@ -220,7 +223,7 @@ class DisplayTab(Gtk.Box):
             pills_box.pack_start(tb, False, False, 0)
             self._scale_pills[s] = tb
 
-        self.scale_slider = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.75, 2.5, 0.05)
+        self.scale_slider = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.5, 3.0, 0.05)
         self.scale_slider.set_digits(2)
         self.scale_slider.set_size_request(220, -1)
         self.scale_slider.set_value(1.0)
@@ -366,11 +369,14 @@ class DisplayTab(Gtk.Box):
         for m in out.get("modes", []):
             self._res_map.setdefault(m["res"], []).append(m)
 
-        sorted_res = sorted(
-            self._res_map.keys(),
-            key=lambda r: tuple(int(x) for x in r.split("x")),
-            reverse=True
-        )
+        def _res_sort_key(r: str):
+            try:
+                w_s, h_s = r.split("x", 1)
+                return (int(w_s), int(h_s))
+            except Exception:
+                return (0, 0)
+
+        sorted_res = sorted(self._res_map.keys(), key=_res_sort_key, reverse=True)
 
         self.combo_res.remove_all()
         for r in sorted_res:
@@ -387,6 +393,20 @@ class DisplayTab(Gtk.Box):
 
         scale = float(out.get("scale", 1.0) or 1.0)
         self._sync_scale_widgets(scale)
+        self._update_controls_sensitivity()
+
+    def _update_controls_sensitivity(self):
+        active = bool(self.switch_enabled.get_active())
+        self.combo_res.set_sensitive(active)
+        self.combo_rate.set_sensitive(active)
+        self.scale_slider.set_sensitive(active)
+        for tb in self._scale_pills.values():
+            tb.set_sensitive(active)
+
+    def _on_enabled_toggled(self, _switch, _pspec):
+        if self._updating_ui:
+            return
+        self._update_controls_sensitivity()
 
     def _on_resolution_changed(self, _combo):
         if self._updating_ui:

@@ -9,6 +9,7 @@ Stos technologiczny: Python 3, GTK3 (PyGObject), Wayland.
 
 import os
 import sys
+import signal
 import shutil
 import subprocess
 
@@ -36,7 +37,7 @@ for _candidate in (
 try:
     import gi
     gi.require_version("Gtk", "3.0")
-    from gi.repository import Gtk, GLib
+    from gi.repository import Gtk, Gio, GLib
 except ImportError as err:
     print(
         f"Błąd krytyczny: Brak wymaganych bibliotek GTK3 / PyGObject: {err}\n"
@@ -125,30 +126,44 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
 
 
 class OkaySettingsApp(Gtk.Application):
-    def __init__(self, initial_tab: str = ""):
-        super().__init__(application_id="org.oksavi.okay_settings")
-        self.initial_tab = initial_tab
+    def __init__(self):
+        super().__init__(
+            application_id="org.oksavi.okay_settings",
+            flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE
+        )
+        self.initial_tab = ""
         self._window = None
+
+    @staticmethod
+    def _parse_tab_arg(argv: list) -> str:
+        for i, arg in enumerate(argv[1:], start=1):
+            if arg in ("--tab", "-t") and i + 1 < len(argv):
+                return argv[i + 1].strip()
+            if arg.startswith("--tab="):
+                return arg.split("=", 1)[1].strip()
+        return ""
+
+    def do_command_line(self, command_line):
+        tab = self._parse_tab_arg(command_line.get_arguments())
+        if tab:
+            self.initial_tab = tab
+        self.activate()
+        return 0
 
     def do_activate(self):
         if self._window is None:
             self._window = OkaySettingsWindow(self, self.initial_tab)
-        else:
-            if self.initial_tab and self._window.stack.get_child_by_name(self.initial_tab):
-                self._window.stack.set_visible_child_name(self.initial_tab)
+        elif self.initial_tab and self._window.stack.get_child_by_name(self.initial_tab):
+            self._window.stack.set_visible_child_name(self.initial_tab)
         self._window.present()
 
 
 def main():
-    initial_tab = ""
-    if len(sys.argv) >= 3 and sys.argv[1] in ("--tab", "-t"):
-        initial_tab = sys.argv[2].strip()
-    elif len(sys.argv) >= 2 and sys.argv[1].startswith("--tab="):
-        initial_tab = sys.argv[1].split("=", 1)[1].strip()
-
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
     GLib.set_prgname("okay-settings")
-    app = OkaySettingsApp(initial_tab=initial_tab)
-    sys.exit(app.run([]))
+    app = OkaySettingsApp()
+    sys.exit(app.run(sys.argv))
 
 
 if __name__ == "__main__":

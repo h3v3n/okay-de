@@ -446,7 +446,8 @@ class SystemHelper:
             try:
                 with open("/proc/cpuinfo", "r", encoding="utf-8") as f:
                     for line in f:
-                        if "model name" in line or "Hardware" in line:
+                        low = line.lower()
+                        if low.startswith(("model name", "hardware", "model\t", "model :")) and ":" in line:
                             return line.split(":", 1)[1].strip()
             except Exception:
                 pass

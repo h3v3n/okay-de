@@ -14,6 +14,7 @@ Funkcje:
 
 import os
 import sys
+import copy
 import fcntl
 import glob
 import json
@@ -39,6 +40,29 @@ except Exception:
     pass
 
 
+def _runtime_state_dir() -> str:
+    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+    if xdg_runtime and os.path.isdir(xdg_runtime) and os.access(xdg_runtime, os.W_OK):
+        return xdg_runtime
+    return "/tmp"
+
+
+def _pid_file_path() -> str:
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    rdir = _runtime_state_dir()
+    if rdir != "/tmp":
+        return os.path.join(rdir, "okay-panel.pid")
+    return f"/tmp/okay-panel-{uid}.pid"
+
+
+def _lock_file_path() -> str:
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    rdir = _runtime_state_dir()
+    if rdir != "/tmp":
+        return os.path.join(rdir, "okay-panel.lock")
+    return f"/tmp/okay-panel-{uid}.lock"
+
+
 def cleanup_other_panels():
     """Zamyka wszystkie starsze/konfliktowe paski (waybar, sfwbar, okay-dock, starszy okay-panel)."""
     for proc_name in ("waybar", "sfwbar", "okay-dock"):
@@ -49,15 +73,15 @@ def cleanup_other_panels():
 
     my_pid = os.getpid()
     parent_pid = os.getppid()
-    pid_file = "/tmp/okay-panel.pid"
-    if os.path.exists(pid_file):
-        try:
-            with open(pid_file, "r", encoding="utf-8") as f:
-                old_pid = int(f.read().strip())
-            if old_pid not in (my_pid, parent_pid):
-                os.kill(old_pid, signal.SIGKILL)
-        except Exception:
-            pass
+    for pid_file in (_pid_file_path(), "/tmp/okay-panel.pid"):
+        if os.path.exists(pid_file):
+            try:
+                with open(pid_file, "r", encoding="utf-8") as f:
+                    old_pid = int(f.read().strip())
+                if old_pid not in (my_pid, parent_pid):
+                    os.kill(old_pid, signal.SIGKILL)
+            except Exception:
+                pass
 
     try:
         # Używamy -x (dokładna nazwa procesu z prctl) zamiast -f, aby nie zabić powłoki rodzica
@@ -78,19 +102,26 @@ def cleanup_other_panels():
 # Natychmiastowe czyszczenie starych instancji i blokada pojedynczej instancji
 cleanup_other_panels()
 
-_LOCK_FILE = open("/tmp/okay-panel.lock", "w", encoding="utf-8")
+_LOCK_FILE = None
 try:
-    fcntl.flock(_LOCK_FILE.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-except BlockingIOError:
-    # Jeśli lock nadal jest trzymany, odczekaj chwilę i spróbuj ponownie
-    time.sleep(0.3)
+    _LOCK_FILE = open(_lock_file_path(), "w", encoding="utf-8")
     try:
         fcntl.flock(_LOCK_FILE.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        sys.exit(0)
+        # Jeśli lock nadal jest trzymany, odczekaj chwilę i spróbuj ponownie
+        time.sleep(0.3)
+        try:
+            fcntl.flock(_LOCK_FILE.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            sys.exit(0)
+except OSError:
+    _LOCK_FILE = None
 
-with open("/tmp/okay-panel.pid", "w", encoding="utf-8") as _pf:
-    _pf.write(str(os.getpid()))
+try:
+    with open(_pid_file_path(), "w", encoding="utf-8") as _pf:
+        _pf.write(str(os.getpid()))
+except OSError:
+    pass
 
 
 # 3. Inicjalizacja GTK3 i GtkLayerShell
@@ -108,10 +139,13 @@ try:
     from gi.repository import GtkLayerShell
     HAS_LAYER_SHELL = True
 except (ValueError, ImportError):
-    if shutil.which("sudo") and shutil.which("pacman"):
-        subprocess.run(["sudo", "pacman", "-S", "--needed", "--noconfirm", "gtk-layer-shell"], check=False)
-    elif shutil.which("pkexec") and shutil.which("pacman"):
-        subprocess.run(["pkexec", "pacman", "-S", "--needed", "--noconfirm", "gtk-layer-shell"], check=False)
+    if shutil.which("pacman"):
+        installed = False
+        if shutil.which("sudo"):
+            res = subprocess.run(["sudo", "-n", "pacman", "-S", "--needed", "--noconfirm", "gtk-layer-shell"], check=False)
+            installed = (res.returncode == 0)
+        if not installed and shutil.which("pkexec"):
+            subprocess.run(["pkexec", "pacman", "-S", "--needed", "--noconfirm", "gtk-layer-shell"], check=False)
     try:
         gi.require_version("GtkLayerShell", "0.1")
         from gi.repository import GtkLayerShell
@@ -316,11 +350,13 @@ class PanelConfigManager:
         os.makedirs(cls.CONFIG_DIR, exist_ok=True)
         if not os.path.exists(cls.CONFIG_FILE):
             # Sprawdź konfigurację systemową lub migruj ze starszego pinned_apps.json
-            initial = dict(cls.DEFAULT_CONFIG)
+            initial = copy.deepcopy(cls.DEFAULT_CONFIG)
             if os.path.exists(cls.SYSTEM_CONFIG_FILE):
                 try:
                     with open(cls.SYSTEM_CONFIG_FILE, "r", encoding="utf-8") as f:
-                        initial = json.load(f)
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        initial = loaded
                 except Exception:
                     pass
             elif os.path.exists(cls.LEGACY_PINS_FILE):
@@ -347,6 +383,8 @@ class PanelConfigManager:
         try:
             with open(cls.CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                return copy.deepcopy(cls.DEFAULT_CONFIG)
             # Synchronizacja obu flag: show_labels vs icon_only
             if "show_labels" in data:
                 show_labels = bool(data["show_labels"])
@@ -360,10 +398,10 @@ class PanelConfigManager:
             pos = str(data.get("position", "bottom")).lower()
             data["position"] = "top" if pos == "top" else "bottom"
             if "pinned_apps" not in data or not isinstance(data["pinned_apps"], list):
-                data["pinned_apps"] = list(cls.DEFAULT_CONFIG["pinned_apps"])
+                data["pinned_apps"] = copy.deepcopy(cls.DEFAULT_CONFIG["pinned_apps"])
             return data
         except Exception:
-            return dict(cls.DEFAULT_CONFIG)
+            return copy.deepcopy(cls.DEFAULT_CONFIG)
 
     @classmethod
     def save(cls, data: dict):
@@ -373,8 +411,10 @@ class PanelConfigManager:
         data["icon_only"] = not show_labels
         pos = str(data.get("position", "bottom")).lower()
         data["position"] = "top" if pos == "top" else "bottom"
-        with open(cls.CONFIG_FILE, "w", encoding="utf-8") as f:
+        tmp_path = cls.CONFIG_FILE + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, cls.CONFIG_FILE)
 
 
 # ============================================================================
@@ -384,6 +424,14 @@ class PanelConfigManager:
 class AppHelper:
     ICON_THEME = Gtk.IconTheme.get_default()
     _desktop_cache = None
+
+    @classmethod
+    def _has_icon(cls, name: str) -> bool:
+        if not name:
+            return False
+        if cls.ICON_THEME is None:
+            cls.ICON_THEME = Gtk.IconTheme.get_default()
+        return bool(cls.ICON_THEME and cls.ICON_THEME.has_icon(name))
 
     STATIC_ICON_MAP = {
         "foot": "utilities-terminal",
@@ -437,9 +485,13 @@ class AppHelper:
                                 icon = line[5:].strip()
                             elif line.startswith("Exec=") and not exec_cmd:
                                 raw_exec = line[5:].strip()
+                                try:
+                                    parts = shlex.split(raw_exec)
+                                except ValueError:
+                                    parts = raw_exec.split()
                                 # Usuń placeholdery %u %U %f %F %i %c %k
-                                parts = [p for p in raw_exec.split() if not p.startswith("%")]
-                                exec_cmd = " ".join(parts)
+                                clean_parts = [p for p in parts if not p.startswith("%")]
+                                exec_cmd = " ".join(shlex.quote(p) for p in clean_parts)
                             elif line.startswith("StartupWMClass=") and not wm_class:
                                 wm_class = line[15:].strip().lower()
 
@@ -481,24 +533,24 @@ class AppHelper:
         if hint_icon:
             if os.path.isabs(hint_icon) and os.path.exists(hint_icon):
                 return hint_icon
-            if cls.ICON_THEME.has_icon(hint_icon):
+            if cls._has_icon(hint_icon):
                 return hint_icon
 
         clean_id = app_id.lower().strip()
-        if clean_id in cls.STATIC_ICON_MAP and cls.ICON_THEME.has_icon(cls.STATIC_ICON_MAP[clean_id]):
+        if clean_id in cls.STATIC_ICON_MAP and cls._has_icon(cls.STATIC_ICON_MAP[clean_id]):
             return cls.STATIC_ICON_MAP[clean_id]
 
         cache = cls._build_desktop_cache()
         if clean_id in cache and cache[clean_id].get("icon"):
             ic = cache[clean_id]["icon"]
-            if cls.ICON_THEME.has_icon(ic):
+            if cls._has_icon(ic):
                 return ic
 
-        if cls.ICON_THEME.has_icon(clean_id):
+        if cls._has_icon(clean_id):
             return clean_id
 
         parts = clean_id.split(".")
-        if parts and cls.ICON_THEME.has_icon(parts[-1]):
+        if parts and cls._has_icon(parts[-1]):
             return parts[-1]
 
         return cls.STATIC_ICON_MAP.get(clean_id, "application-x-executable")
@@ -558,14 +610,15 @@ class WaylandToplevelClient:
     @staticmethod
     def _unpack_string(payload: bytes, offset: int = 0) -> tuple:
         if offset + 4 > len(payload):
-            return "", offset
+            return "", len(payload)
         (length,) = struct.unpack_from("<I", payload, offset)
         offset += 4
         if length == 0:
             return "", offset
-        raw = payload[offset : offset + max(0, length - 1)]
+        end = min(len(payload), offset + max(0, length - 1))
+        raw = payload[offset:end]
         pad = (4 - (length % 4)) % 4
-        offset += length + pad
+        offset = min(len(payload), offset + length + pad)
         return raw.decode("utf-8", errors="replace"), offset
 
     @staticmethod
@@ -635,12 +688,19 @@ class WaylandToplevelClient:
                 self._close_socket()
                 return
 
-            if self.manager_bound:
-                self.connected = True
-                print(f"[okay-panel] Połączono z protokołem wlr-foreign-toplevel (okien: {len(self.handles)})", file=sys.stderr)
+            if not self.manager_bound:
+                self._close_socket()
+                return
+
+            self.connected = True
+            print(f"[okay-panel] Połączono z protokołem wlr-foreign-toplevel (okien: {len(self.handles)})", file=sys.stderr)
 
             self.sock.setblocking(False)
-            GLib.io_add_watch(self.sock.fileno(), GLib.IO_IN, self._on_socket_ready)
+            GLib.io_add_watch(
+                self.sock.fileno(),
+                GLib.IO_IN | GLib.IO_HUP | GLib.IO_ERR,
+                self._on_socket_ready
+            )
         except Exception as e:
             print(f"[okay-panel] Błąd inicjalizacji wlr-foreign-toplevel (tryb fallback): {e}", file=sys.stderr)
             self._close_socket()
@@ -706,7 +766,12 @@ class WaylandToplevelClient:
             obj_id, word1 = struct.unpack_from("<II", self.recv_buf, 0)
             size = word1 >> 16
             opcode = word1 & 0xFFFF
-            if size < 8 or len(self.recv_buf) < size:
+            if size < 8:
+                print(f"[okay-panel] Nieprawidłowy rozmiar ramki Wayland: {size}", file=sys.stderr)
+                self._protocol_error = True
+                self.connected = False
+                break
+            if len(self.recv_buf) < size:
                 break
             payload = self.recv_buf[8:size]
             self.recv_buf = self.recv_buf[size:]
@@ -773,6 +838,9 @@ class WaylandToplevelClient:
                         }
                     elif opcode == 1:
                         self.manager_bound = False
+                        self.connected = False
+                        self.handles.clear()
+                        changed = True
                 elif obj_id in self.handles:
                     h = self.handles[obj_id]
                     if opcode == 0:
@@ -1145,13 +1213,16 @@ class OkayPanel(Gtk.Window):
                 self._launch_cmd("okay-settings --tab sound")
         elif event.button == 3:
             self._launch_cmd("okay-volume mute")
+            GLib.timeout_add(150, lambda: (self._update_status(), False)[1])
         return True
 
     def _on_volume_scroll(self, widget, event):
         if event.direction == Gdk.ScrollDirection.UP:
             self._launch_cmd("okay-volume raise")
+            GLib.timeout_add(150, lambda: (self._update_status(), False)[1])
         elif event.direction == Gdk.ScrollDirection.DOWN:
             self._launch_cmd("okay-volume lower")
+            GLib.timeout_add(150, lambda: (self._update_status(), False)[1])
         return True
 
     # ------------------------------------------------------------------------
@@ -1243,9 +1314,10 @@ class OkayPanel(Gtk.Window):
             return True
         self._last_state_key = state_key
 
-        # Wyczyść obecne przyciski
+        # Wyczyść obecne przyciski (wraz ze zwolnieniem zasobów GTK3)
         for child in self.tasks_box.get_children():
             self.tasks_box.remove(child)
+            child.destroy()
 
         app_counts = {}
         for w in windows:
@@ -1454,7 +1526,7 @@ class OkayPanel(Gtk.Window):
         cfg = PanelConfigManager.load()
         pins = cfg.get("pinned_apps", [])
         idx = item.get("pin_index", -1)
-        if 0 <= idx < len(pins):
+        if 0 <= idx < len(pins) and self._matches_pin(item["app_id"], pins[idx]):
             pins.pop(idx)
         else:
             pins = [p for p in pins if not self._matches_pin(item["app_id"], p)]
@@ -1490,7 +1562,7 @@ class OkayPanel(Gtk.Window):
                         vol = 100
                         if len(parts) >= 2:
                             try:
-                                vol = int(float(parts[1]) * 100)
+                                vol = max(0, int(round(float(parts[1]) * 100)))
                             except ValueError:
                                 pass
                         vol_data = (is_muted, vol)
@@ -1518,7 +1590,7 @@ class OkayPanel(Gtk.Window):
             threading.Thread(target=_probe_volume, daemon=True).start()
 
         # Bateria
-        bat_dirs = glob.glob("/sys/class/power_supply/BAT*")
+        bat_dirs = sorted(glob.glob("/sys/class/power_supply/BAT*"))
         if bat_dirs:
             try:
                 bat_dir = bat_dirs[0]

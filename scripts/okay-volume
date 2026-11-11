@@ -30,7 +30,7 @@ VOL_INFO=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null || echo "Volume: 0.
 IS_MUTED=$(echo "$VOL_INFO" | grep -o "\[MUTED\]" || true)
 RAW_VOL=$(echo "$VOL_INFO" | awk '{print $2}')
 RAW_VOL="${RAW_VOL:-0.0}"
-VOL_PCT=$(awk -v v="$RAW_VOL" 'BEGIN { printf "%d", (v * 100) }')
+VOL_PCT=$(awk -v v="$RAW_VOL" 'BEGIN { printf "%.0f", (v * 100) }')
 
 if [ -n "$IS_MUTED" ]; then
     if command -v notify-send >/dev/null 2>&1; then

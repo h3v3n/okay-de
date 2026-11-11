@@ -1,6 +1,6 @@
 # OKay DE
 
-Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi Linux**, oparte na kompozytorze `labwc` z minimalistycznym pływającym dockiem w stylu macOS / GNOME, interaktywnym pulpitem z ikonami plików (`pcmanfm --desktop`) oraz natywnym centrum sterowania **OKay Settings** (PyQt6).
+Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi Linux**, oparte na kompozytorze `labwc`, natywnym zunifikowanym pasku zadań `okay-panel` (GTK3 + GtkLayerShell), pulpicie z ikonami (`pcmanfm`) oraz modularnym centrum sterowania **OKay Settings** (GTK3).
 
 ---
 
@@ -11,13 +11,13 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
   - Terminal (`foot`)
   - Przeglądarka plików (`pcmanfm`)
   - Centrum sterowania (`okay-settings`)
-- **Centrum Sterowania (OKay Settings):** Nowoczesna aplikacja w Pythonie 3 oparta o PyQt6 (Qt 6), umożliwiająca:
-  - Zmianę tapety pulpitu i stylu paska zadań (pływająca wyspa vs pełna belka).
-  - Zarządzanie przypiętymi aplikacjami w docku (Taskbar).
-  - Dynamiczną zmianę kolorów prostokątnych przycisków okien (zamknij, maksymalizuj, minimalizuj) z natychmiastowym przeładowaniem kompozytora `labwc`.
-  - Szybki dostęp do konfiguracji ekranów (`wdisplays`) i miksera (`pavucontrol`).
-  - Sprawdzanie i instalację aktualizacji bezpośrednio z repozytorium GitHub (`h3v3n/okay-de`).
-  - Szczegółowe informacje o systemie (CPU, RAM, kernel, dystrybucja, wersja commita).
+- **Centrum Sterowania (OKay Settings):** Modularna aplikacja GTK3 (`Gtk.StackSidebar` + `Gtk.Stack`) z natywnymi zakładkami:
+  - **Wi-Fi i Sieć:** Skanowanie i łączenie z sieciami bezprzewodowymi (`nmcli`, nieblokujący wątek roboczy).
+  - **Monitory:** Konfiguracja ekranów, rozdzielczości, odświeżania (Hz) i skalowania (`wlr-randr`).
+  - **Mysz i Touchpad:** Prędkość wskaźnika, tap-to-click i naturalne przewijanie w `~/.config/labwc/rc.xml` (`labwc --reconfigure`).
+  - **Dźwięk:** Regulacja głośności i wybór urządzeń wejścia/wyjścia PipeWire (`wpctl`).
+  - **Pulpit i Panel:** Tryb „Tylko ikony”, pozycja panelu (`~/.config/okay-de/panel.json`) oraz tapeta pulpitu (`swaybg`).
+  - **System i Aktualizacje:** Specyfikacja sprzętu / zRAM i aktualizacje OKay DE bezpośrednio z GitHub (`h3v3n/okay-de`).
 - **Architektura Server-Side Decorations (SSD):** Belka kompozytora `labwc` o wysokości 30px (`titlebar.height: 30`) stanowi nadrzędną ramkę na zewnątrz każdego okna. Dzięki zmiennym sesyjnym `GTK_CSD=0` oraz `QT_WAYLAND_DISABLE_WINDOWDECORATION=0` aplikacje GTK3/GTK4 i Qt nie wstrzykują przycisków sterowania do pasków zakładek i nagłówków.
 - **Dekoracje okien:** Trzy spłaszczone, panoramiczne prostokąty (48x10px) w układzie `:iconify,max,close` z zaokrągleniem narożników `8px` (`cornerRadius: 8`) bez wyświetlania nazwy okna (`showTitle: no`). Lewy przycisk minimalizuje okno, środkowy maksymalizuje, a prawy zamyka program.
 - **Tapeta i tło pulpitu (`swaybg`):** Demon tapety Wayland z bezpieczną kaskadą: tapeta użytkownika (`~/.config/okay-de/wallpaper.png`) -> tapeta systemowa (`/usr/share/backgrounds/okay-de/default.png`) -> awaryjny kolor bazowy Catppuccin Mocha (`#1e1e2e`).
@@ -33,7 +33,7 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 | :--- | :--- | :--- |
 | **Kompozytor Wayland** | `labwc` | Stacking compositor zgodny z protokołem wlroots i Openbox XML |
 | **Pulpit z ikonami** | `pcmanfm --desktop` | Interaktywny pulpit z obsługą ikon plików i tła |
-| **Centrum Sterowania** | `okay-settings` | Natywna aplikacja Pythona 3 (PyQt6) |
+| **Centrum Sterowania** | `okay-settings` | Modularna aplikacja Python 3 (GTK3 + PyGObject) |
 | **Pasek zadań (Taskbar)** | `okay-panel` | Zunifikowany panel GTK 3 + GtkLayerShell z przypinaniem aplikacji i kontrolą okien (`panel.json`) |
 | **Launcher aplikacji** | `fuzzel` | Błyskawiczny launcher aplikacji z akceleracją Wayland |
 | **Emulator terminala** | `foot` | Ultra-lekki terminal Wayland z przezroczystością tła `0.95` |
@@ -79,17 +79,17 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 
 ### Pakiety bazowe (OKsavi / Arch Linux):
 ```bash
-sudo pacman -S labwc pcmanfm fuzzel foot mako swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber papirus-icon-theme xdg-user-dirs python python-pyqt6 qt6-wayland
+sudo pacman -S labwc pcmanfm fuzzel foot mako swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber papirus-icon-theme xdg-user-dirs gtk3 gtk-layer-shell python python-gobject wlr-randr
 ```
 
-### Pakiety dla OKay Settings:
+### Pakiety dla OKay Settings i panelu:
 ```bash
-sudo pacman -S python python-pyqt6 qt6-wayland
+sudo pacman -S gtk3 gtk-layer-shell python python-gobject wlr-randr
 ```
 
 ### Sugerowane pakiety opcjonalne:
 ```bash
-sudo pacman -S wdisplays pavucontrol networkmanager
+sudo pacman -S swaybg networkmanager pavucontrol
 ```
 
 ---
@@ -117,7 +117,7 @@ Kopiuje konfiguracje do `~/.config/`, skrypty do `~/.local/bin/`, ikony na `$HOM
 ## Aktualizacje
 
 Środowisko OKay DE można aktualizować bezpośrednio z oficjalnego repozytorium GitHub:
-- **Graficznie:** Otwórz `OKay Settings` (skrót `Super + I`), przejdź do zakładki **Aktualizacje** i kliknij **Sprawdź teraz**. Jeśli dostępna jest nowa wersja, pojawi się lista zmian oraz przycisk **Zainstaluj teraz** z wyborem trybu (użytkownik lub system).
+- **Graficznie:** Otwórz `OKay Settings` (skrót `Super + I`), przejdź do zakładki **System i Aktualizacje** i kliknij **Sprawdź aktualizacje**. Jeśli pojawi się nowszy commit na gałęzi `main`, kliknij **Pobierz i zainstaluj**.
 - **Z wiersza poleceń:**
   ```bash
   git pull origin main

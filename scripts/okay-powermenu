@@ -5,6 +5,11 @@
 
 set -euo pipefail
 
+if ! command -v fuzzel >/dev/null 2>&1; then
+    echo "Błąd: wymagany pakiet fuzzel." >&2
+    exit 1
+fi
+
 LOCK="  Zablokuj"
 LOGOUT="󰗽  Wyloguj"
 REBOOT="󰑓  Uruchom ponownie"
@@ -25,13 +30,14 @@ case "$CHOICE" in
         ;;
     *"Wyloguj"*)
         # Bezpieczne zakończenie procesu kompozytora labwc
-        pkill -TERM -u "$USER" -x labwc || killall labwc
+        CUR_USER="$(id -un)"
+        pkill -TERM -u "$CUR_USER" -x labwc || killall labwc || true
         ;;
     *"Uruchom ponownie"*)
-        systemctl reboot
+        systemctl reboot || loginctl reboot
         ;;
     *"Wyłącz"*)
-        systemctl poweroff
+        systemctl poweroff || loginctl poweroff
         ;;
     *)
         exit 0

@@ -28,8 +28,8 @@ start() {
         fi
     fi
 
-    # Obsługa sygnałów i czyszczenie pidfile
-    trap 'rm -f "$PIDFILE"; exit 0' SIGTERM SIGINT SIGHUP
+    # Obsługa sygnałów i czyszczenie pidfile wraz z procesem potomnym sleep
+    trap 'kill $(jobs -p) 2>/dev/null || true; rm -f "$PIDFILE"; exit 0' SIGTERM SIGINT SIGHUP
 
     # Lekka pętla optymalizacji zasobów (cgroups v2 background tasks)
     while true; do
