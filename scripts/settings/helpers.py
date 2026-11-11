@@ -527,7 +527,10 @@ class UpdateManager:
                 shutil.copyfileobj(resp, out)
 
             with tarfile.open(tar_path, "r:gz") as tf:
-                tf.extractall(tmpdir)
+                if sys.version_info >= (3, 12):
+                    tf.extractall(tmpdir, filter="data")
+                else:
+                    tf.extractall(tmpdir)
 
             src_dir = None
             for entry in os.listdir(tmpdir):

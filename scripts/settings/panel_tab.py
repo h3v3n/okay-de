@@ -176,7 +176,12 @@ class PanelTab(Gtk.Box):
         try:
             panel_bin = shutil.which("okay-panel") or os.path.expanduser("~/.local/bin/okay-panel")
             if os.path.exists(panel_bin):
-                subprocess.Popen([panel_bin, "--restart"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(
+                    [panel_bin, "--restart"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True
+                )
                 self.lbl_status.set_text("Wysłano polecenie przeładowania do okay-panel.")
             else:
                 self.lbl_status.set_text("Nie znaleziono pliku wykonywalnego okay-panel.")
@@ -190,7 +195,12 @@ class PanelTab(Gtk.Box):
                 shutil.copyfile(img_path, USER_WALLPAPER)
             subprocess.run(["pkill", "-x", "swaybg"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if shutil.which("swaybg"):
-                subprocess.Popen(["swaybg", "-i", USER_WALLPAPER, "-m", "fill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(
+                    ["swaybg", "-i", USER_WALLPAPER, "-m", "fill"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True
+                )
             self.lbl_status.set_text(f"Ustawiono nową tapetę: {os.path.basename(img_path)}")
         except Exception as exc:
             self.lbl_status.set_text(f"Błąd zmiany tapety: {exc}")

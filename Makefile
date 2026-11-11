@@ -30,10 +30,10 @@ install:
 	install -d $(DESTDIR)$(PREFIX)/share/wayland-sessions
 	install -m 644 sessions/okay-de.desktop $(DESTDIR)$(PREFIX)/share/wayland-sessions/okay-de.desktop
 
-	# Rejestracja plików .desktop aplikacji
+	# Rejestracja plików .desktop aplikacji (bez pliku sesji okay-de.desktop)
 	install -d $(DESTDIR)$(PREFIX)/share/applications
 	for f in sessions/*.desktop; do \
-		if [ -f "$$f" ]; then \
+		if [ -f "$$f" ] && [ "$$(basename "$$f")" != "okay-de.desktop" ]; then \
 			install -m 644 "$$f" $(DESTDIR)$(PREFIX)/share/applications/; \
 		fi \
 	done
@@ -124,6 +124,7 @@ uninstall:
 	rm -f $(DESTDIR)/etc/xdg/gtk-3.0/settings.ini
 	rm -f $(DESTDIR)/etc/xdg/gtk-4.0/settings.ini
 	rm -rf $(DESTDIR)/etc/xdg/pcmanfm
+	rm -rf $(DESTDIR)/etc/xdg/okay-de
 	rm -rf $(DESTDIR)/etc/xdg/sfwbar
 	rm -rf $(DESTDIR)/etc/xdg/waybar
 

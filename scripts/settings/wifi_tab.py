@@ -5,6 +5,7 @@ Zakładka „Wi-Fi i Sieć” (NetworkManager / nmcli) w GTK3.
 Wszystkie operacje skanowania i łączenia wykonuje asynchronicznie w wątku roboczym.
 """
 
+import time
 import shutil
 from gi.repository import Gtk
 
@@ -59,7 +60,7 @@ class WifiTab(Gtk.Box):
         self._updating_ui = False
         self._busy = False
         self._networks = []
-        self._saved_profiles = set()
+        self._saved_profiles = {}
 
         sw, self.content = make_scrolled_page()
         self.pack_start(sw, True, True, 0)
@@ -165,12 +166,19 @@ class WifiTab(Gtk.Box):
                         active_conns.append((parts[0], parts[1], parts[2]))
 
             rc_saved, out_saved, _ = run_cmd(["nmcli", "-t", "-f", "NAME,TYPE", "con", "show"], timeout=5)
-            saved_wifi = set()
+            saved_wifi = {}  # ssid -> profile_name
             if rc_saved == 0:
                 for ln in out_saved.splitlines():
                     parts = _split_nmcli_terse(ln)
                     if len(parts) >= 2 and "wireless" in parts[1]:
-                        saved_wifi.add(parts[0])
+                        prof_name = parts[0]
+                        saved_wifi[prof_name] = prof_name
+                        rc_ssid, out_ssid, _ = run_cmd(
+                            ["nmcli", "-t", "-g", "802-11-wireless.ssid", "con", "show", "id", prof_name],
+                            timeout=3
+                        )
+                        if rc_ssid == 0 and out_ssid.strip():
+                            saved_wifi[out_ssid.strip()] = prof_name
 
             networks = []
             scan_err = ""
@@ -350,7 +358,10 @@ class WifiTab(Gtk.Box):
         self._set_busy(True, "Włączanie Wi-Fi..." if enabled else "Wyłączanie Wi-Fi...")
 
         def _worker():
-            return run_cmd(["nmcli", "radio", "wifi", "on" if enabled else "off"], timeout=6)
+            res = run_cmd(["nmcli", "radio", "wifi", "on" if enabled else "off"], timeout=6)
+            if enabled:
+                time.sleep(0.8)
+            return res
 
         def _done(_res):
             self.refresh_state(rescan=enabled)
@@ -401,7 +412,8 @@ class WifiTab(Gtk.Box):
 
         def _worker():
             if password is None and ssid in self._saved_profiles:
-                return run_cmd(["nmcli", "con", "up", "id", ssid], timeout=20)
+                profile_id = self._saved_profiles[ssid]
+                return run_cmd(["nmcli", "con", "up", "id", profile_id], timeout=20)
             cmd = ["nmcli", "dev", "wifi", "connect", ssid]
             if password:
                 cmd += ["password", password]

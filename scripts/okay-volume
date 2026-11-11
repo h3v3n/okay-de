@@ -16,11 +16,11 @@ case "$ACTION" in
     lower)
         wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-
         ;;
-    mute)
+    mute|toggle)
         wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
         ;;
     *)
-        echo "Użycie: $0 {raise|lower|mute}" >&2
+        echo "Użycie: $0 {raise|lower|mute|toggle}" >&2
         exit 1
         ;;
 esac
@@ -29,6 +29,7 @@ esac
 VOL_INFO=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null || echo "Volume: 0.0")
 IS_MUTED=$(echo "$VOL_INFO" | grep -o "\[MUTED\]" || true)
 RAW_VOL=$(echo "$VOL_INFO" | awk '{print $2}')
+RAW_VOL="${RAW_VOL:-0.0}"
 VOL_PCT=$(awk -v v="$RAW_VOL" 'BEGIN { printf "%d", (v * 100) }')
 
 if [ -n "$IS_MUTED" ]; then

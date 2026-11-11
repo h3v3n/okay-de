@@ -25,7 +25,7 @@ def _parse_wpctl_status(raw: str) -> dict:
 
     section = ""
     subsection = ""
-    node_re = re.compile(r"^[\s│├└─]*(\*)?\s*(\d+)\.\s+(.+?)(?:\s+\[vol:\s*([0-9.]+)(\s+MUTED)?\])?\s*$")
+    node_re = re.compile(r"^[\s│├└─|+`\\-]*(\*)?\s*(\d+)\.\s+(.+?)(?:\s+\[vol:\s*([0-9.]+)(\s+MUTED)?\])?\s*$")
 
     for line in raw.splitlines():
         stripped = line.strip()
@@ -40,7 +40,7 @@ def _parse_wpctl_status(raw: str) -> dict:
         if section != "Audio":
             continue
 
-        clean = line.lstrip(" │├└─\t")
+        clean = line.lstrip(" │├└─|+`\\-\t")
         if clean.startswith("Sinks:"):
             subsection = "Sinks"
             continue
@@ -114,6 +114,7 @@ class SoundTab(Gtk.Box):
 
         out_ctrl = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         self.out_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.out_scale.set_digits(0)
         self.out_scale.set_size_request(220, -1)
         self.out_scale.set_value_pos(Gtk.PositionType.RIGHT)
         self.out_scale.connect("value-changed", self._on_out_volume_changed)
@@ -138,6 +139,7 @@ class SoundTab(Gtk.Box):
 
         mic_ctrl = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         self.mic_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.mic_scale.set_digits(0)
         self.mic_scale.set_size_request(220, -1)
         self.mic_scale.set_value_pos(Gtk.PositionType.RIGHT)
         self.mic_scale.connect("value-changed", self._on_mic_volume_changed)

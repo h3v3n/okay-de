@@ -221,6 +221,7 @@ class DisplayTab(Gtk.Box):
             self._scale_pills[s] = tb
 
         self.scale_slider = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.75, 2.5, 0.05)
+        self.scale_slider.set_digits(2)
         self.scale_slider.set_size_request(220, -1)
         self.scale_slider.set_value(1.0)
         self.scale_slider.set_value_pos(Gtk.PositionType.RIGHT)

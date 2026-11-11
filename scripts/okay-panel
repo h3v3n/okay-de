@@ -17,11 +17,13 @@ import sys
 import fcntl
 import glob
 import json
+import shlex
 import time
 import signal
 import shutil
 import socket
 import struct
+import threading
 import subprocess
 from datetime import datetime
 
@@ -46,22 +48,24 @@ def cleanup_other_panels():
             pass
 
     my_pid = os.getpid()
+    parent_pid = os.getppid()
     pid_file = "/tmp/okay-panel.pid"
     if os.path.exists(pid_file):
         try:
             with open(pid_file, "r", encoding="utf-8") as f:
                 old_pid = int(f.read().strip())
-            if old_pid != my_pid:
+            if old_pid not in (my_pid, parent_pid):
                 os.kill(old_pid, signal.SIGKILL)
         except Exception:
             pass
 
     try:
-        res = subprocess.run(["pgrep", "-f", "okay-panel"], capture_output=True, text=True, check=False)
+        # Używamy -x (dokładna nazwa procesu z prctl) zamiast -f, aby nie zabić powłoki rodzica
+        res = subprocess.run(["pgrep", "-x", "okay-panel"], capture_output=True, text=True, check=False)
         for line in res.stdout.strip().splitlines():
             try:
                 pid = int(line.strip())
-                if pid != my_pid:
+                if pid not in (my_pid, parent_pid):
                     os.kill(pid, signal.SIGKILL)
             except Exception:
                 pass
@@ -93,7 +97,7 @@ with open("/tmp/okay-panel.pid", "w", encoding="utf-8") as _pf:
 try:
     import gi
     gi.require_version("Gtk", "3.0")
-    from gi.repository import Gtk, Gdk, GLib, Gio
+    from gi.repository import Gtk, Gdk, GLib, Gio, GdkPixbuf
 except (ImportError, ValueError) as err:
     print(f"Błąd uruchamiania okay-panel (GTK3): {err}", file=sys.stderr)
     sys.exit(1)
@@ -1087,9 +1091,12 @@ class OkayPanel(Gtk.Window):
 
         # 4. Bateria
         self.box_battery = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.box_battery.set_no_show_all(True)
         self.box_battery.get_style_context().add_class("status-item")
         self.img_battery = Gtk.Image.new_from_icon_name("battery-full", Gtk.IconSize.MENU)
         self.lbl_battery = Gtk.Label(label="")
+        self.img_battery.show()
+        self.lbl_battery.show()
         self.box_battery.pack_start(self.img_battery, False, False, 0)
         self.box_battery.pack_start(self.lbl_battery, False, False, 0)
         self.right_box.pack_end(self.box_battery, False, False, 0)
@@ -1098,11 +1105,22 @@ class OkayPanel(Gtk.Window):
     # Zdarzenia paska Start, Głośności, Pulpitu
     # ------------------------------------------------------------------------
 
+    @staticmethod
+    def _launch_cmd(cmd_str: str):
+        if not cmd_str or not cmd_str.strip():
+            return
+        try:
+            args = shlex.split(cmd_str)
+            if args:
+                subprocess.Popen(args, start_new_session=True)
+        except Exception as e:
+            print(f"[okay-panel] Błąd uruchamiania '{cmd_str}': {e}", file=sys.stderr)
+
     def _on_start_button_press(self, widget, event):
         if event.button == 1:
-            subprocess.Popen(["fuzzel"])
+            self._launch_cmd("fuzzel")
         elif event.button == 3:
-            subprocess.Popen(["okay-powermenu"])
+            self._launch_cmd("okay-powermenu")
         return True
 
     def _on_desktop_clicked(self, widget):
@@ -1121,16 +1139,19 @@ class OkayPanel(Gtk.Window):
 
     def _on_volume_press(self, widget, event):
         if event.button == 1:
-            subprocess.Popen(["pavucontrol"])
+            if shutil.which("pavucontrol"):
+                self._launch_cmd("pavucontrol")
+            else:
+                self._launch_cmd("okay-settings --tab sound")
         elif event.button == 3:
-            subprocess.Popen(["okay-volume", "mute"])
+            self._launch_cmd("okay-volume mute")
         return True
 
     def _on_volume_scroll(self, widget, event):
         if event.direction == Gdk.ScrollDirection.UP:
-            subprocess.Popen(["okay-volume", "raise"])
+            self._launch_cmd("okay-volume raise")
         elif event.direction == Gdk.ScrollDirection.DOWN:
-            subprocess.Popen(["okay-volume", "lower"])
+            self._launch_cmd("okay-volume lower")
         return True
 
     # ------------------------------------------------------------------------
@@ -1170,10 +1191,16 @@ class OkayPanel(Gtk.Window):
         btn.set_tooltip_text(tooltip)
 
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        img = None
         if os.path.isabs(icon_name) and os.path.exists(icon_name):
-            img = Gtk.Image.new_from_file(icon_name)
-        else:
-            img = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.DND)
+            try:
+                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(icon_name, 22, 22, True)
+                img = Gtk.Image.new_from_pixbuf(pb)
+            except Exception:
+                img = None
+        if img is None:
+            fallback_icon = icon_name if not os.path.isabs(icon_name) else "application-x-executable"
+            img = Gtk.Image.new_from_icon_name(fallback_icon, Gtk.IconSize.DND)
         box.pack_start(img, False, False, 0)
 
         if show_label and label_text:
@@ -1351,10 +1378,7 @@ class OkayPanel(Gtk.Window):
     def _on_task_press(self, widget, event, item: dict):
         if event.button == 1:
             if not item["is_running"]:
-                try:
-                    subprocess.Popen(item["cmd"].split(), start_new_session=True)
-                except Exception:
-                    pass
+                self._launch_cmd(item.get("cmd", ""))
             else:
                 WindowManager.activate_or_minimize(
                     item["handle_id"],
@@ -1386,7 +1410,7 @@ class OkayPanel(Gtk.Window):
         if item["cmd"]:
             lbl_launch = "Otwórz nowe okno" if item["is_running"] else "Uruchom"
             mi_launch = Gtk.MenuItem(label=lbl_launch)
-            mi_launch.connect("activate", lambda _: subprocess.Popen(item["cmd"].split(), start_new_session=True))
+            mi_launch.connect("activate", lambda _w, c=item["cmd"]: self._launch_cmd(c))
             menu.append(mi_launch)
 
         # Opcja 3 i 4: Kontrola otwartego okna
@@ -1405,7 +1429,10 @@ class OkayPanel(Gtk.Window):
             menu.append(mi_close)
 
         menu.show_all()
-        menu.popup_at_widget(widget, Gdk.Gravity.NORTH, Gdk.Gravity.SOUTH, event)
+        if str(self.panel_config.get("position", "bottom")).lower() == "top":
+            menu.popup_at_widget(widget, Gdk.Gravity.SOUTH, Gdk.Gravity.NORTH, event)
+        else:
+            menu.popup_at_widget(widget, Gdk.Gravity.NORTH, Gdk.Gravity.SOUTH, event)
 
     def _pin_app(self, item: dict):
         cfg = PanelConfigManager.load()
@@ -1445,34 +1472,50 @@ class OkayPanel(Gtk.Window):
         self.lbl_clock.set_markup(f"<b>{now.strftime('%H:%M')}</b>\n<small>{now.strftime('%d.%m.%Y')}</small>")
         self.btn_clock.set_tooltip_text(now.strftime("%A, %d %B %Y"))
 
-        # Głośność (wpctl)
-        try:
-            res = subprocess.run(
-                ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
-                capture_output=True, text=True, timeout=0.2, check=False
-            )
-            if res.returncode == 0:
-                out = res.stdout.strip()
-                is_muted = "[MUTED]" in out
-                parts = out.split()
-                vol = 100
-                if len(parts) >= 2:
-                    try:
-                        vol = int(float(parts[1]) * 100)
-                    except ValueError:
-                        pass
+        # Asynchroniczne odświeżanie głośności bez blokowania pętli GTK
+        if not getattr(self, "_vol_probe_running", False):
+            self._vol_probe_running = True
 
-                if is_muted:
-                    self.img_volume.set_from_icon_name("audio-volume-muted", Gtk.IconSize.MENU)
-                    self.lbl_volume.set_text("Mute")
-                    self.btn_volume.set_tooltip_text("Dźwięk wyciszony (LPM: Mikser, PPM: Włącz)")
-                else:
-                    icon = "audio-volume-high" if vol > 65 else ("audio-volume-medium" if vol > 25 else "audio-volume-low")
-                    self.img_volume.set_from_icon_name(icon, Gtk.IconSize.MENU)
-                    self.lbl_volume.set_text(f"{vol}%")
-                    self.btn_volume.set_tooltip_text(f"Głośność: {vol}%\nLPM: Mikser, Rolka: +/-")
-        except Exception:
-            pass
+            def _probe_volume():
+                vol_data = None
+                try:
+                    res = subprocess.run(
+                        ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
+                        capture_output=True, text=True, timeout=0.4, check=False
+                    )
+                    if res.returncode == 0:
+                        out = res.stdout.strip()
+                        is_muted = "[MUTED]" in out
+                        parts = out.split()
+                        vol = 100
+                        if len(parts) >= 2:
+                            try:
+                                vol = int(float(parts[1]) * 100)
+                            except ValueError:
+                                pass
+                        vol_data = (is_muted, vol)
+                except Exception:
+                    pass
+
+                def _apply_vol():
+                    self._vol_probe_running = False
+                    if vol_data is None:
+                        return False
+                    is_muted, vol = vol_data
+                    if is_muted:
+                        self.img_volume.set_from_icon_name("audio-volume-muted", Gtk.IconSize.MENU)
+                        self.lbl_volume.set_text("Mute")
+                        self.btn_volume.set_tooltip_text("Dźwięk wyciszony (LPM: Mikser, PPM: Włącz)")
+                    else:
+                        icon = "audio-volume-high" if vol > 65 else ("audio-volume-medium" if vol > 25 else "audio-volume-low")
+                        self.img_volume.set_from_icon_name(icon, Gtk.IconSize.MENU)
+                        self.lbl_volume.set_text(f"{vol}%")
+                        self.btn_volume.set_tooltip_text(f"Głośność: {vol}%\nLPM: Mikser, Rolka: +/-")
+                    return False
+
+                GLib.idle_add(_apply_vol)
+
+            threading.Thread(target=_probe_volume, daemon=True).start()
 
         # Bateria
         bat_dirs = glob.glob("/sys/class/power_supply/BAT*")

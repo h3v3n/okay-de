@@ -55,6 +55,7 @@ class InputTab(Gtk.Box):
         card, box = make_card("Zachowanie wskaźnika i gładzika")
 
         self.speed_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, -1.0, 1.0, 0.05)
+        self.speed_scale.set_digits(2)
         self.speed_scale.set_size_request(240, -1)
         self.speed_scale.set_value(0.0)
         self.speed_scale.set_value_pos(Gtk.PositionType.RIGHT)
@@ -181,15 +182,9 @@ class InputTab(Gtk.Box):
                 root = ET.Element("labwc_config")
                 tree = ET.ElementTree(root)
 
-            libinput = root.find("libinput")
+            libinput, dev = self._find_libinput_device(root)
             if libinput is None:
                 libinput = ET.SubElement(root, "libinput")
-
-            dev = None
-            for d in libinput.findall("device"):
-                if (d.get("category") or "").strip().lower() == "default":
-                    dev = d
-                    break
             if dev is None:
                 dev = ET.SubElement(libinput, "device", {"category": "default"})
 
