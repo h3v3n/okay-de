@@ -24,10 +24,11 @@ install:
 
 	# Rejestracja plików .desktop aplikacji
 	install -d $(DESTDIR)$(PREFIX)/share/applications
-	install -m 644 sessions/okay-settings.desktop $(DESTDIR)$(PREFIX)/share/applications/okay-settings.desktop
-	install -m 644 sessions/okay-dock.desktop $(DESTDIR)$(PREFIX)/share/applications/okay-dock.desktop
-	install -m 644 sessions/foot.desktop $(DESTDIR)$(PREFIX)/share/applications/foot.desktop
-	install -m 644 sessions/pcmanfm.desktop $(DESTDIR)$(PREFIX)/share/applications/pcmanfm.desktop
+	for f in sessions/*.desktop; do \
+		if [ -f "$$f" ]; then \
+			install -m 644 "$$f" $(DESTDIR)$(PREFIX)/share/applications/; \
+		fi \
+	done
 
 	# Domyślne ikony pulpitu dla nowych kont (/etc/skel/Desktop)
 	install -d $(DESTDIR)/etc/skel/Desktop

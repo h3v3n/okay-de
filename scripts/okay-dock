@@ -892,6 +892,10 @@ class OkayDock(QWidget):
         self.setObjectName("dockWindow")
         self.setWindowTitle("okay-dock")
 
+        # Gwarancja istnienia katalogów konfiguracyjnych
+        os.makedirs(os.path.expanduser("~/.config/okay-de"), exist_ok=True)
+        os.makedirs(os.path.expanduser("~/.config/okay-dock"), exist_ok=True)
+
         # Flagi okna dla stabilnej pracy na Wayland i XWayland
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
@@ -1036,6 +1040,7 @@ class OkayDock(QWidget):
         self.watcher.fileChanged.connect(lambda _p: self._reload_tasks())
 
     def _get_pinned_apps(self) -> dict:
+        os.makedirs(os.path.dirname(self.CONFIG_FILE), exist_ok=True)
         if not os.path.exists(self.CONFIG_FILE):
             try:
                 with open(self.CONFIG_FILE, "w", encoding="utf-8") as f:

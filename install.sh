@@ -49,6 +49,7 @@ if [ "$MODE" = "--system" ]; then
 
     # Zapis wersji commita dla środowiska
     install -d /etc/okay-de
+    install -d /etc/okay-dock
     if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         git rev-parse --short HEAD > /etc/okay-de/version 2>/dev/null || echo "9eede97" > /etc/okay-de/version
     else
@@ -78,36 +79,46 @@ elif [ "$MODE" = "--user" ]; then
     mkdir -p "$HOME/.config/gtk-4.0"
     mkdir -p "$HOME/.config/pcmanfm"
     mkdir -p "$HOME/.config/okay-de"
+    mkdir -p "$HOME/.config/okay-dock"
     mkdir -p "$HOME/.local/bin"
     mkdir -p "$HOME/.local/share/applications"
     mkdir -p "$HOME/.local/share/themes"
     mkdir -p "$HOME/Desktop"
 
     # Kopiowanie konfiguracji (w tym masek przycisków XBM i wektorów SVG do labwc)
-    cp -r config/labwc/* "$HOME/.config/labwc/"
-    cp -r config/foot/* "$HOME/.config/foot/"
-    cp -r config/fuzzel/* "$HOME/.config/fuzzel/"
-    cp -r config/mako/* "$HOME/.config/mako/"
-    cp -r config/gtk-3.0/* "$HOME/.config/gtk-3.0/"
-    cp -r config/gtk-4.0/* "$HOME/.config/gtk-4.0/"
-    cp -r themes/* "$HOME/.local/share/themes/"
+    cp -r config/labwc/* "$HOME/.config/labwc/" 2>/dev/null || true
+    cp -r config/foot/* "$HOME/.config/foot/" 2>/dev/null || true
+    cp -r config/fuzzel/* "$HOME/.config/fuzzel/" 2>/dev/null || true
+    cp -r config/mako/* "$HOME/.config/mako/" 2>/dev/null || true
+    cp -r config/gtk-3.0/* "$HOME/.config/gtk-3.0/" 2>/dev/null || true
+    cp -r config/gtk-4.0/* "$HOME/.config/gtk-4.0/" 2>/dev/null || true
+    cp -r themes/* "$HOME/.local/share/themes/" 2>/dev/null || true
 
     # Kopiowanie domyślnej tapety użytkownika jeśli jeszcze nie istnieje
-    if [ ! -f "$HOME/.config/okay-de/wallpaper.png" ]; then
+    if [ ! -f "$HOME/.config/okay-de/wallpaper.png" ] && [ -f backgrounds/default.png ]; then
         echo "Kopiowanie domyślnej tapety do $HOME/.config/okay-de/wallpaper.png..."
         cp backgrounds/default.png "$HOME/.config/okay-de/wallpaper.png"
     fi
 
-    # Kopiowanie skryptów i aplikacji do ~/.local/bin
-    cp scripts/* "$HOME/.local/bin/"
-    chmod +x "$HOME/.local/bin/"*
-    chmod +x "$HOME/.config/labwc/autostart"
+    # Bezpieczne kopiowanie skryptów i aplikacji do ~/.local/bin
+    if [ -d scripts ]; then
+        for s in scripts/*; do
+            if [ -f "$s" ]; then
+                cp "$s" "$HOME/.local/bin/"
+                chmod +x "$HOME/.local/bin/$(basename "$s")"
+            fi
+        done
+    fi
+    chmod +x "$HOME/.config/labwc/autostart" 2>/dev/null || true
 
-    # Kopiowanie wpisów .desktop
-    cp sessions/okay-settings.desktop "$HOME/.local/share/applications/"
-    cp sessions/okay-dock.desktop "$HOME/.local/share/applications/"
-    cp sessions/foot.desktop "$HOME/.local/share/applications/"
-    cp sessions/pcmanfm.desktop "$HOME/.local/share/applications/"
+    # Bezpieczne kopiowanie wpisów .desktop
+    if [ -d sessions ]; then
+        for d in sessions/*.desktop; do
+            if [ -f "$d" ]; then
+                cp "$d" "$HOME/.local/share/applications/"
+            fi
+        done
+    fi
 
     # Usunięcie starej konfiguracji waybar i wyczyszczenie procesu
     rm -rf "$HOME/.config/waybar" 2>/dev/null || true
