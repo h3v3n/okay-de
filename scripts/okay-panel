@@ -39,7 +39,7 @@ except (ValueError, ImportError):
 # Style CSS (Catppuccin Mocha - 0px radius, ostry design)
 # ============================================================================
 
-CATPPUCCIN_CSS = b"""
+CATPPUCCIN_CSS = """
 * {
     font-family: "JetBrains Mono", sans-serif;
     font-size: 11px;
@@ -310,7 +310,7 @@ class OkayPanel(Gtk.Window):
 
         # Załadowanie stylów CSS Catppuccin Mocha
         css_provider = Gtk.CssProvider()
-        css_provider.load_from_data(CATPPUCCIN_CSS)
+        css_provider.load_from_data(CATPPUCCIN_CSS.encode("utf-8"))
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(),
             css_provider,
