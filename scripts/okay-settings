@@ -369,73 +369,100 @@ class InstallUpdateWorker(QThread):
 # ============================================================================
 
 class ConfigManager:
-    """Zarządza konfiguracją wyglądu, tapetą i przypiętymi aplikacjami."""
+    """Zarządza konfiguracją wyglądu, tapetą, widokiem paska i przypiętymi aplikacjami."""
 
     CONFIG_DIR = os.path.expanduser("~/.config/okay-de")
     LABWC_DIR = os.path.expanduser("~/.config/labwc")
     WALLPAPER_TARGET = os.path.join(CONFIG_DIR, "wallpaper.png")
+    PANEL_CONFIG_FILE = os.path.join(CONFIG_DIR, "panel.json")
     PINNED_APPS_FILE = os.path.join(CONFIG_DIR, "pinned_apps.json")
 
+    DEFAULT_PANEL_CONFIG = {
+        "icon_only": True,
+        "show_labels": False,
+        "pinned_apps": [
+            {"app_id": "foot", "name": "Terminal (foot)", "cmd": "foot", "icon": "utilities-terminal"},
+            {"app_id": "pcmanfm", "name": "Menedżer plików", "cmd": "pcmanfm", "icon": "system-file-manager"},
+            {"app_id": "okay-settings", "name": "Ustawienia OKay", "cmd": "okay-settings", "icon": "preferences-system"}
+        ]
+    }
+
     DEFAULT_PINNED_APPS = {
-        "foot": {"name": "Terminal (foot)", "icon": "", "cmd": "foot", "enabled": True},
-        "pcmanfm": {"name": "Menedżer plików (pcmanfm)", "icon": "󰉋", "cmd": "pcmanfm", "enabled": True},
-        "settings": {"name": "Ustawienia OKay", "icon": "󰒓", "cmd": "okay-settings", "enabled": True},
-        "firefox": {"name": "Przeglądarka internetowa (firefox)", "icon": "󰈹", "cmd": "firefox", "enabled": False}
+        "foot": {"name": "Terminal (foot)", "icon": "utilities-terminal", "cmd": "foot", "enabled": True},
+        "pcmanfm": {"name": "Menedżer plików", "icon": "system-file-manager", "cmd": "pcmanfm", "enabled": True},
+        "okay-settings": {"name": "Ustawienia OKay", "icon": "preferences-system", "cmd": "okay-settings", "enabled": True},
+        "firefox": {"name": "Przeglądarka internetowa (firefox)", "icon": "firefox", "cmd": "firefox", "enabled": False}
     }
 
     @classmethod
-    def get_pinned_apps(cls) -> dict:
-        """Pobiera listę przypiętych aplikacji."""
+    def get_panel_config(cls) -> dict:
+        """Pobiera pełną konfigurację paska zadań z ~/.config/okay-de/panel.json."""
         cls.ensure_dirs()
-        apps = dict(cls.DEFAULT_PINNED_APPS)
-        if os.path.exists(cls.PINNED_APPS_FILE):
+        cfg = {
+            "icon_only": cls.DEFAULT_PANEL_CONFIG["icon_only"],
+            "show_labels": cls.DEFAULT_PANEL_CONFIG["show_labels"],
+            "pinned_apps": list(cls.DEFAULT_PANEL_CONFIG["pinned_apps"])
+        }
+        if os.path.exists(cls.PANEL_CONFIG_FILE):
             try:
-                with open(cls.PINNED_APPS_FILE, "r", encoding="utf-8") as f:
+                with open(cls.PANEL_CONFIG_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    for k, v in data.items():
-                        apps[k] = v
+                show_labels = bool(data.get("show_labels", not data.get("icon_only", True)))
+                cfg["show_labels"] = show_labels
+                cfg["icon_only"] = not show_labels
+                if isinstance(data.get("pinned_apps"), list):
+                    cfg["pinned_apps"] = data["pinned_apps"]
             except Exception:
                 pass
+        return cfg
+
+    @classmethod
+    def save_panel_config(cls, cfg: dict) -> bool:
+        """Zapisuje konfigurację paska zadań do ~/.config/okay-de/panel.json."""
+        cls.ensure_dirs()
+        try:
+            show_labels = bool(cfg.get("show_labels", not cfg.get("icon_only", True)))
+            cfg["show_labels"] = show_labels
+            cfg["icon_only"] = not show_labels
+            with open(cls.PANEL_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"Błąd zapisu panel.json: {e}", file=sys.stderr)
+            return False
+
+    @classmethod
+    def get_pinned_apps(cls) -> dict:
+        """Pobiera listę przypiętych aplikacji z panel.json."""
+        cfg = cls.get_panel_config()
+        apps = {k: dict(v, enabled=False) for k, v in cls.DEFAULT_PINNED_APPS.items()}
+        for item in cfg.get("pinned_apps", []):
+            app_id = item.get("app_id", "")
+            if app_id:
+                apps[app_id] = {
+                    "name": item.get("name", app_id),
+                    "icon": item.get("icon", "application-x-executable"),
+                    "cmd": item.get("cmd", app_id),
+                    "enabled": True
+                }
         return apps
 
     @classmethod
-    def sync_sfwbar_pins(cls, apps: dict):
-        """Aktualizuje listę przypiętych aplikacji (pins) w konfiguracji sfwbar."""
-        paths = [
-            os.path.expanduser("~/.config/okay-de/panel/sfwbar.config"),
-            os.path.expanduser("~/.config/sfwbar/sfwbar.config")
-        ]
-        enabled_pins = []
+    def set_pinned_apps(cls, apps: dict) -> bool:
+        """Zapisuje przypięte aplikacje bezpośrednio do panel.json."""
+        cfg = cls.get_panel_config()
+        new_pins = []
         for app_id, data in apps.items():
             if data.get("enabled", False):
-                cmd = data.get("cmd", app_id).split()[0]
-                enabled_pins.append(f'"{cmd}"')
-        pins_str = f"pins = {', '.join(enabled_pins)}"
-        for conf in paths:
-            if os.path.exists(conf):
-                try:
-                    with open(conf, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    new_content = re.sub(r'pins\s*=\s*[^\n]+', pins_str, content)
-                    if new_content != content:
-                        with open(conf, "w", encoding="utf-8") as f:
-                            f.write(new_content)
-                except Exception:
-                    pass
-        subprocess.run(["killall", "-SIGHUP", "sfwbar"], check=False)
-
-    @classmethod
-    def set_pinned_apps(cls, apps: dict) -> bool:
-        """Zapisuje przypięte aplikacje do konfiguracji paska zadań."""
-        cls.ensure_dirs()
-        try:
-            with open(cls.PINNED_APPS_FILE, "w", encoding="utf-8") as f:
-                json.dump(apps, f, indent=2, ensure_ascii=False)
-            cls.sync_sfwbar_pins(apps)
-            return True
-        except Exception as e:
-            print(f"Błąd zapisu przypiętych aplikacji: {e}", file=sys.stderr)
-            return False
+                cmd = data.get("cmd", app_id)
+                new_pins.append({
+                    "app_id": app_id,
+                    "name": data.get("name", app_id),
+                    "cmd": cmd,
+                    "icon": data.get("icon", "application-x-executable")
+                })
+        cfg["pinned_apps"] = new_pins
+        return cls.save_panel_config(cfg)
 
     @classmethod
     def ensure_dirs(cls):
@@ -610,11 +637,22 @@ class AppearancePage(QWidget):
         card_desktop.add_row(self.row_wallpaper)
         layout.addWidget(card_desktop)
 
-        # 2. Karta Przypięte aplikacje w pasku zadań (Taskbar)
+        # 2. Karta Przypięte aplikacje i widok paska zadań (Taskbar)
         card_pinned = PreferenceCard(
-            "Przypięte aplikacje w pasku zadań (Taskbar)",
-            "Zarządzaj skrótami do programów stale widocznymi na dolnym pasku zadań okay-panel."
+            "Pasek zadań (Taskbar)",
+            "Zarządzaj widokiem ikon, etykiet oraz przypiętymi skrótami w okay-panel."
         )
+
+        panel_cfg = ConfigManager.get_panel_config()
+        self.combo_panel_view = QComboBox()
+        self.combo_panel_view.addItems(["Tylko ikony", "Ikony + nazwy"])
+        self.combo_panel_view.setCurrentIndex(1 if panel_cfg.get("show_labels", False) else 0)
+        self.combo_panel_view.currentIndexChanged.connect(self._on_panel_view_changed)
+        card_pinned.add_row(PreferenceRow(
+            "Widok przycisków paska zadań",
+            "Przełącz między samymi ikonami a ikonami z tytułami otwartych okien",
+            self.combo_panel_view
+        ))
 
         self.pinned_apps = ConfigManager.get_pinned_apps()
         self.pin_checkboxes = {}
@@ -626,7 +664,7 @@ class AppearancePage(QWidget):
             self.pin_checkboxes[app_id] = chk
 
             row = PreferenceRow(
-                f"{app_info.get('icon', '󰣇')}  {app_info.get('name', app_id)}",
+                f"{app_info.get('name', app_id)}",
                 f"Polecenie: {app_info.get('cmd', '')}",
                 chk
             )
@@ -645,6 +683,13 @@ class AppearancePage(QWidget):
         layout.addWidget(card_pinned)
         layout.addStretch()
 
+    def _on_panel_view_changed(self, idx: int):
+        cfg = ConfigManager.get_panel_config()
+        show_labels = (idx == 1)
+        cfg["show_labels"] = show_labels
+        cfg["icon_only"] = not show_labels
+        ConfigManager.save_panel_config(cfg)
+
     def _create_pin_toggle_handler(self, app_id: str):
         def handler(checked: bool):
             if app_id in self.pinned_apps:
@@ -659,11 +704,12 @@ class AppearancePage(QWidget):
         cmd, ok2 = QInputDialog.getText(self, "Przypnij aplikację", f"Polecenie dla '{name}':")
         if not ok2 or not cmd.strip():
             return
-        icon, ok3 = QInputDialog.getText(self, "Przypnij aplikację", "Symbol ikony (np. 󰅩, , 󰈹):", text="󰣇")
+        default_icon = os.path.basename(cmd.strip().split()[0])
+        icon, ok3 = QInputDialog.getText(self, "Przypnij aplikację", "Nazwa ikony GTK (np. firefox, utilities-terminal):", text=default_icon)
         if not ok3 or not icon.strip():
-            icon = "󰣇"
+            icon = default_icon
 
-        app_id = f"custom_{len(self.pinned_apps) + 1}"
+        app_id = os.path.basename(cmd.strip().split()[0]).lower()
         self.pinned_apps[app_id] = {
             "name": name.strip(),
             "cmd": cmd.strip(),

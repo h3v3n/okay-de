@@ -1,0 +1,24 @@
+{
+  "icon_only": true,
+  "show_labels": false,
+  "pinned_apps": [
+    {
+      "app_id": "foot",
+      "name": "Terminal (foot)",
+      "cmd": "foot",
+      "icon": "utilities-terminal"
+    },
+    {
+      "app_id": "pcmanfm",
+      "name": "Menedżer plików",
+      "cmd": "pcmanfm",
+      "icon": "system-file-manager"
+    },
+    {
+      "app_id": "okay-settings",
+      "name": "Ustawienia OKay",
+      "cmd": "okay-settings",
+      "icon": "preferences-system"
+    }
+  ]
+}

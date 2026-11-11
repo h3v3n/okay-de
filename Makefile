@@ -80,15 +80,9 @@ install:
 	install -m 644 config/pcmanfm/default/desktop-items-0.conf $(DESTDIR)/etc/xdg/pcmanfm/default/desktop-items-0.conf
 	install -m 644 config/pcmanfm/default/pcmanfm.conf $(DESTDIR)/etc/xdg/pcmanfm/default/pcmanfm.conf
 
-	# Konfiguracja paska zadań OKay DE (sfwbar / waybar)
-	install -d $(DESTDIR)/etc/xdg/okay-de/panel
-	install -m 644 config/okay-de/panel/* $(DESTDIR)/etc/xdg/okay-de/panel/
-	install -d $(DESTDIR)/etc/xdg/sfwbar
-	install -m 644 config/okay-de/panel/sfwbar.config $(DESTDIR)/etc/xdg/sfwbar/sfwbar.config
-	install -d $(DESTDIR)/etc/xdg/waybar
-	install -m 644 config/okay-de/panel/waybar.jsonc $(DESTDIR)/etc/xdg/waybar/config.jsonc
-	install -m 644 config/okay-de/panel/waybar.jsonc $(DESTDIR)/etc/xdg/waybar/config
-	install -m 644 config/okay-de/panel/waybar.css $(DESTDIR)/etc/xdg/waybar/style.css
+	# Konfiguracja zunifikowanego paska zadań OKay DE
+	install -d $(DESTDIR)/etc/xdg/okay-de
+	install -m 644 config/okay-de/panel.json $(DESTDIR)/etc/xdg/okay-de/panel.json
 
 	# Reguły uprawnień administracyjnych (Polkit & Sudoers)
 	install -d $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d

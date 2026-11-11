@@ -15,19 +15,20 @@ fi
 # 2. Demon powiadomień
 mako &
 
-# 3. Pasek zadań OKay DE (sfwbar / waybar)
+# 3. Pasek zadań OKay DE (Zunifikowany okay-panel)
 (
     sleep 0.5
     pkill -9 -x sfwbar 2>/dev/null || true
     pkill -9 -x waybar 2>/dev/null || true
+    pkill -9 -x okay-dock 2>/dev/null || true
     if [ -x "$HOME/.local/bin/okay-panel" ]; then
-        "$HOME/.local/bin/okay-panel" &
+        "$HOME/.local/bin/okay-panel" > /tmp/okay-panel.log 2>&1 &
     elif [ -x /usr/local/bin/okay-panel ]; then
-        /usr/local/bin/okay-panel &
+        /usr/local/bin/okay-panel > /tmp/okay-panel.log 2>&1 &
     elif [ -x /usr/bin/okay-panel ]; then
-        /usr/bin/okay-panel &
+        /usr/bin/okay-panel > /tmp/okay-panel.log 2>&1 &
     elif command -v okay-panel >/dev/null 2>&1; then
-        okay-panel &
+        okay-panel > /tmp/okay-panel.log 2>&1 &
     fi
 ) &
 

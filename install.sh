@@ -13,10 +13,10 @@ if [ "$MODE" = "--system" ]; then
     echo "Instalowanie OKay DE w całym systemie (/etc/xdg, /usr/bin, /usr/local/bin, /usr/share)..."
     make install PREFIX=/usr
 
-    # Instalacja pakietów systemowych dla pełnej obsługi okien i taskbara
+    # Instalacja pakietów systemowych dla pełnej obsługi okien i zunifikowanego taskbara
     if command -v pacman >/dev/null 2>&1; then
-        echo "Weryfikacja i instalacja pakietów systemowych (waybar, wlrctl, python-pyqt6, qt6-wayland)..."
-        pacman -S --needed --noconfirm waybar wlrctl python-pyqt6 qt6-wayland gtk3 gtk-layer-shell python-gobject 2>/dev/null || true
+        echo "Weryfikacja i instalacja pakietów systemowych (gtk3, gtk-layer-shell, python-gobject, wlrctl, python-pyqt6, qt6-wayland)..."
+        pacman -S --needed --noconfirm gtk3 gtk-layer-shell python-gobject wlrctl python-pyqt6 qt6-wayland 2>/dev/null || true
     fi
 
     # Instalacja reguł uprawnień Polkit i Sudoers dla okay-settings
@@ -30,24 +30,22 @@ if [ "$MODE" = "--system" ]; then
         install -m 440 config/sudoers/99-okay-de /etc/sudoers.d/99-okay-de
     fi
 
-    # Usunięcie pozostałości starego paska docka (okay-dock)
-    rm -rf /etc/okay-dock 2>/dev/null || true
+    # Usunięcie pozostałości starych/konfliktujących pasków
+    rm -rf /etc/okay-dock /etc/xdg/sfwbar /etc/xdg/waybar /etc/xdg/okay-de/panel 2>/dev/null || true
     rm -f /usr/local/bin/okay-dock /usr/bin/okay-dock 2>/dev/null || true
     rm -f /usr/share/applications/okay-dock.desktop 2>/dev/null || true
     pkill -9 -x okay-dock 2>/dev/null || true
+    pkill -9 -x waybar 2>/dev/null || true
+    pkill -9 -x sfwbar 2>/dev/null || true
 
     # Dodatkowa instalacja okay-settings i okay-panel w /usr/local/bin
     install -d /usr/local/bin
     install -m 755 scripts/okay-settings /usr/local/bin/okay-settings
     install -m 755 scripts/okay-panel /usr/local/bin/okay-panel
 
-    # Instalacja konfiguracji paska zadań w /etc/xdg
-    install -d /etc/xdg/okay-de/panel /etc/xdg/sfwbar /etc/xdg/waybar
-    cp -r config/okay-de/panel/* /etc/xdg/okay-de/panel/ 2>/dev/null || true
-    cp config/okay-de/panel/sfwbar.config /etc/xdg/sfwbar/sfwbar.config 2>/dev/null || true
-    cp config/okay-de/panel/waybar.jsonc /etc/xdg/waybar/config.jsonc 2>/dev/null || true
-    cp config/okay-de/panel/waybar.jsonc /etc/xdg/waybar/config 2>/dev/null || true
-    cp config/okay-de/panel/waybar.css /etc/xdg/waybar/style.css 2>/dev/null || true
+    # Instalacja domyślnej konfiguracji panelu w /etc/xdg/okay-de/panel.json
+    install -d /etc/xdg/okay-de
+    install -m 644 config/okay-de/panel.json /etc/xdg/okay-de/panel.json
 
     # Rejestracja plików .desktop w /usr/share/applications
     install -d /usr/share/applications
@@ -79,12 +77,12 @@ if [ "$MODE" = "--system" ]; then
 elif [ "$MODE" = "--user" ]; then
     echo "Instalowanie konfiguracji OKay DE dla bieżącego użytkownika ($HOME/.config)..."
 
-    # Weryfikacja obecności paska zadań (sfwbar lub waybar) oraz wlrctl
+    # Weryfikacja obecności oficjalnych bibliotek GTK3 / Layer-Shell / wlrctl
     PKGS_TO_INSTALL=()
     if ! command -v wlrctl >/dev/null 2>&1; then PKGS_TO_INSTALL+=("wlrctl"); fi
-    if ! command -v sfwbar >/dev/null 2>&1 && ! command -v waybar >/dev/null 2>&1; then
-        PKGS_TO_INSTALL+=("waybar")
-    fi
+    if ! pacman -Qi gtk-layer-shell >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk-layer-shell"); fi
+    if ! pacman -Qi python-gobject >/dev/null 2>&1; then PKGS_TO_INSTALL+=("python-gobject"); fi
+    if ! pacman -Qi gtk3 >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk3"); fi
     if [ ${#PKGS_TO_INSTALL[@]} -gt 0 ] && command -v pacman >/dev/null 2>&1; then
         echo "Wykryto brak pakietów dla paska zadań: ${PKGS_TO_INSTALL[*]}"
         INSTALLED=0
@@ -103,6 +101,11 @@ elif [ "$MODE" = "--user" ]; then
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
     fi
 
+    # Usunięcie konfliktowych konfiguracji waybar / sfwbar
+    rm -rf "$HOME/.config/sfwbar" "$HOME/.config/waybar" "$HOME/.config/okay-de/panel" 2>/dev/null || true
+    pkill -9 -x waybar 2>/dev/null || true
+    pkill -9 -x sfwbar 2>/dev/null || true
+
     # Tworzenie katalogów docelowych
     mkdir -p "$HOME/.config/labwc"
     mkdir -p "$HOME/.config/foot"
@@ -111,20 +114,16 @@ elif [ "$MODE" = "--user" ]; then
     mkdir -p "$HOME/.config/gtk-3.0"
     mkdir -p "$HOME/.config/gtk-4.0"
     mkdir -p "$HOME/.config/pcmanfm"
-    mkdir -p "$HOME/.config/okay-de/panel"
-    mkdir -p "$HOME/.config/sfwbar"
-    mkdir -p "$HOME/.config/waybar"
+    mkdir -p "$HOME/.config/okay-de"
     mkdir -p "$HOME/.local/bin"
     mkdir -p "$HOME/.local/share/applications"
     mkdir -p "$HOME/.local/share/themes"
     mkdir -p "$HOME/Desktop"
 
-    # Kopiowanie konfiguracji paska zadań (sfwbar & waybar z motywem OKsavi Dark Neon)
-    cp -r config/okay-de/panel/* "$HOME/.config/okay-de/panel/" 2>/dev/null || true
-    cp config/okay-de/panel/sfwbar.config "$HOME/.config/sfwbar/sfwbar.config" 2>/dev/null || true
-    cp config/okay-de/panel/waybar.jsonc "$HOME/.config/waybar/config.jsonc" 2>/dev/null || true
-    cp config/okay-de/panel/waybar.jsonc "$HOME/.config/waybar/config" 2>/dev/null || true
-    cp config/okay-de/panel/waybar.css "$HOME/.config/waybar/style.css" 2>/dev/null || true
+    # Domyślny plik panel.json (tylko jeśli nie istnieje, aby zachować przypięte aplikacje użytkownika)
+    if [ ! -f "$HOME/.config/okay-de/panel.json" ] && [ -f config/okay-de/panel.json ]; then
+        cp config/okay-de/panel.json "$HOME/.config/okay-de/panel.json"
+    fi
 
     # Kopiowanie konfiguracji (w tym masek przycisków XBM i wektorów SVG do labwc)
     cp -r config/labwc/* "$HOME/.config/labwc/" 2>/dev/null || true
@@ -192,7 +191,7 @@ elif [ "$MODE" = "--user" ]; then
     fi
 
     echo "Konfiguracja użytkownika zainstalowana pomyślnie."
-    echo "Wymagane pakiety: sfwbar (lub waybar), wlrctl, python-pyqt6, qt6-wayland."
+    echo "Wymagane pakiety: gtk3, gtk-layer-shell, python-gobject, wlrctl, python-pyqt6, qt6-wayland."
     echo "Sugerowane pakiety narzędzi: swaybg, wdisplays, pavucontrol, papirus-icon-theme."
     echo "Upewnij się, że \$HOME/.local/bin znajduje się w Twojej zmiennej PATH."
 
