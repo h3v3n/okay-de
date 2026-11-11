@@ -30,16 +30,6 @@
   <!-- Reguły okien: wymuszenie Server-Side Decorations (SSD) dla wszystkich aplikacji XDG-Shell -->
   <windowRules>
     <windowRule identifier="*" serverDecoration="yes" />
-    <windowRule identifier="okay-dock" serverDecoration="no" skipTaskbar="yes" skipWindowSwitcher="yes">
-      <action name="MoveToEdge" direction="down" snapWindows="no" />
-      <action name="ToggleAlwaysOnTop" />
-      <fixedPosition>yes</fixedPosition>
-    </windowRule>
-    <windowRule title="okay-dock*" serverDecoration="no" skipTaskbar="yes" skipWindowSwitcher="yes">
-      <action name="MoveToEdge" direction="down" snapWindows="no" />
-      <action name="ToggleAlwaysOnTop" />
-      <fixedPosition>yes</fixedPosition>
-    </windowRule>
     <windowRule identifier="fuzzel" serverDecoration="no" />
     <windowRule identifier="pcmanfm" type="desktop" serverDecoration="no" />
   </windowRules>

@@ -343,13 +343,11 @@ class InstallUpdateWorker(QThread):
             # Przeładowanie kompozytora i paska zadań
             self.progress.emit("Przeładowywanie kompozytora labwc i paska zadań...")
             subprocess.run(["pkill", "-x", "waybar"], check=False)
-            subprocess.run(["pkill", "-x", "okay-dock"], check=False)
+            subprocess.run(["pkill", "-9", "-x", "okay-dock"], check=False)
             subprocess.run(["pkill", "-x", "sfwbar"], check=False)
             subprocess.run(["labwc", "--reconfigure"], check=False)
             if shutil.which("sfwbar"):
                 subprocess.Popen(["sfwbar"])
-            elif shutil.which("okay-dock"):
-                subprocess.Popen(["okay-dock"])
 
             if shutil.which("notify-send"):
                 subprocess.Popen([
@@ -423,7 +421,7 @@ class ConfigManager:
 
     @classmethod
     def set_pinned_apps(cls, apps: dict) -> bool:
-        """Zapisuje przypięte aplikacje do pliku konfiguracyjnego docka oraz sfwbar."""
+        """Zapisuje przypięte aplikacje do konfiguracji paska zadań sfwbar."""
         cls.ensure_dirs()
         try:
             with open(cls.PINNED_APPS_FILE, "w", encoding="utf-8") as f:
@@ -610,7 +608,7 @@ class AppearancePage(QWidget):
         # 2. Karta Przypięte aplikacje w pasku zadań (Taskbar)
         card_pinned = PreferenceCard(
             "Przypięte aplikacje w pasku zadań (Taskbar)",
-            "Zarządzaj skrótami do programów stale widocznymi na dolnym pasku zadań OKay Dock."
+            "Zarządzaj skrótami do programów stale widocznymi na dolnym pasku zadań sfwbar."
         )
 
         self.pinned_apps = ConfigManager.get_pinned_apps()
@@ -1000,7 +998,7 @@ class UpdatesPage(QWidget):
                 self,
                 "Aktualizacja zakończona",
                 "OKay DE zostało pomyślnie zaktualizowane!\n"
-                "Konfiguracja kompozytora labwc oraz pasek zadań OKay Dock zostały odświeżone."
+                "Konfiguracja kompozytora labwc oraz pasek zadań zostały odświeżone."
             )
         else:
             QMessageBox.critical(self, "Błąd aktualizacji", f"Instalacja aktualizacji nie powiodła się:\n\n{msg}")

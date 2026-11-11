@@ -9,7 +9,6 @@ install:
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m 755 scripts/okay-session $(DESTDIR)$(PREFIX)/bin/okay-session
 	install -m 755 scripts/okay-settings $(DESTDIR)$(PREFIX)/bin/okay-settings
-	install -m 755 scripts/okay-dock $(DESTDIR)$(PREFIX)/bin/okay-dock
 	install -m 755 scripts/okay-powermenu $(DESTDIR)$(PREFIX)/bin/okay-powermenu
 	install -m 755 scripts/okay-clipboard $(DESTDIR)$(PREFIX)/bin/okay-clipboard
 	install -m 755 scripts/okay-screenshot $(DESTDIR)$(PREFIX)/bin/okay-screenshot
@@ -17,6 +16,10 @@ install:
 	install -m 755 scripts/okay-volume $(DESTDIR)$(PREFIX)/bin/okay-volume
 	install -m 755 scripts/okay-brightness $(DESTDIR)$(PREFIX)/bin/okay-brightness
 	install -m 755 scripts/oksavi-ghost-runner $(DESTDIR)$(PREFIX)/bin/oksavi-ghost-runner
+
+	# Usunięcie pozostałości starego paska docka
+	rm -f $(DESTDIR)$(PREFIX)/bin/okay-dock
+	rm -f $(DESTDIR)$(PREFIX)/share/applications/okay-dock.desktop
 
 	# Rejestracja sesji Wayland dla Display Managerów
 	install -d $(DESTDIR)$(PREFIX)/share/wayland-sessions

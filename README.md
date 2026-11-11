@@ -21,7 +21,7 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 - **Architektura Server-Side Decorations (SSD):** Belka kompozytora `labwc` o wysokości 30px (`titlebar.height: 30`) stanowi nadrzędną ramkę na zewnątrz każdego okna. Dzięki zmiennym sesyjnym `GTK_CSD=0` oraz `QT_WAYLAND_DISABLE_WINDOWDECORATION=0` aplikacje GTK3/GTK4 i Qt nie wstrzykują przycisków sterowania do pasków zakładek i nagłówków.
 - **Dekoracje okien:** Trzy spłaszczone, panoramiczne prostokąty (48x10px) w układzie `:iconify,max,close` z zaokrągleniem narożników `8px` (`cornerRadius: 8`) bez wyświetlania nazwy okna (`showTitle: no`). Lewy przycisk minimalizuje okno, środkowy maksymalizuje, a prawy zamyka program.
 - **Tapeta i tło pulpitu (`swaybg`):** Demon tapety Wayland z bezpieczną kaskadą: tapeta użytkownika (`~/.config/okay-de/wallpaper.png`) -> tapeta systemowa (`/usr/share/backgrounds/okay-de/default.png`) -> awaryjny kolor bazowy Catppuccin Mocha (`#1e1e2e`).
-- **Natywny Dock OKay (`okay-dock` w PyQt6):** Pływający, wyśrodkowany dock (`border-radius: 18px`) z menu aplikacji (`󰣇`), dynamicznym systemem przypinania/odpinania aplikacji (terminal `foot`, menedżer plików `pcmanfm`, `okay-settings`, `firefox`), apletem schowka, regulacją głośności (kółko myszy/wyciszanie), zegarem z kalendarzem i menu zasilania.
+- **Pasek Zadań OKay (`sfwbar`):** Oficjalny, ultra-lekki pasek zadań w C z natywną obsługą `wlr-layer-shell` oraz `wlr-foreign-toplevel`. Zawiera menu programów (`󰣇`), dynamiczny taskbar z białą kreską statusu pod otwartymi oknami, powiadomienia, aplet głośności z regulacją rolką, dwuwierszowy zegar KDE Plasma oraz przycisk „Pokaż pulpit”.
 - **Kafelkowanie (Snapping / Tiling):** Wbudowane przeciąganie okien myszą do krawędzi ekranu oraz skróty `Super + Strzałki`.
 - **Motyw i ikony:** Catppuccin Mocha z akcentem Sapphire/Blue (`#89b4fa`), zestaw ikon `Papirus-Dark` oraz kursor `Adwaita (24px)`.
 
@@ -34,7 +34,7 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 | **Kompozytor Wayland** | `labwc` | Stacking compositor zgodny z protokołem wlroots i Openbox XML |
 | **Pulpit z ikonami** | `pcmanfm --desktop` | Interaktywny pulpit z obsługą ikon plików i tła |
 | **Centrum Sterowania** | `okay-settings` | Natywna aplikacja Pythona 3 (PyQt6) |
-| **Dock / Pasek zadań** | `okay-dock` | Natywny pływający dock PyQt6 z menu aplikacji i przypiętymi programami |
+| **Pasek zadań (Taskbar)** | `sfwbar` | Pasek w C z obsługą wlr-layer-shell, Catppuccin Mocha i zegarem KDE |
 | **Launcher aplikacji** | `fuzzel` | Błyskawiczny launcher aplikacji z akceleracją Wayland |
 | **Emulator terminala** | `foot` | Ultra-lekki terminal Wayland z przezroczystością tła `0.95` |
 | **Menedżer plików** | `pcmanfm` | Szybki menedżer plików z ciemnym motywem GTK |
@@ -123,5 +123,5 @@ Kopiuje konfiguracje do `~/.config/`, skrypty do `~/.local/bin/`, ikony na `$HOM
   git pull origin main
   ./install.sh --user   # lub: sudo ./install.sh --system
   labwc --reconfigure
-  pkill -x okay-dock; okay-dock &
+  killall -SIGHUP sfwbar 2>/dev/null || sfwbar &
   ```

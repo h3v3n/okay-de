@@ -19,19 +19,20 @@ if [ "$MODE" = "--system" ]; then
         pacman -S --needed --noconfirm sfwbar wlrctl python-pyqt6 qt6-wayland 2>/dev/null || true
     fi
 
-    # Dodatkowa instalacja okay-settings i okay-dock w /usr/local/bin
+    # Usunięcie pozostałości starego paska docka (okay-dock) oraz waybar
+    rm -rf /etc/xdg/waybar /etc/okay-dock 2>/dev/null || true
+    rm -f /usr/local/bin/okay-dock /usr/bin/okay-dock 2>/dev/null || true
+    rm -f /usr/share/applications/okay-dock.desktop 2>/dev/null || true
+    pkill -9 -x okay-dock 2>/dev/null || true
+    pkill -x waybar 2>/dev/null || true
+
+    # Dodatkowa instalacja okay-settings w /usr/local/bin
     install -d /usr/local/bin
     install -m 755 scripts/okay-settings /usr/local/bin/okay-settings
-    install -m 755 scripts/okay-dock /usr/local/bin/okay-dock
-
-    # Usunięcie pozostałości starego Waybara i wyczyszczenie procesów
-    rm -rf /etc/xdg/waybar 2>/dev/null || true
-    pkill -x waybar 2>/dev/null || true
 
     # Rejestracja plików .desktop w /usr/share/applications
     install -d /usr/share/applications
     install -m 644 sessions/okay-settings.desktop /usr/share/applications/okay-settings.desktop
-    install -m 644 sessions/okay-dock.desktop /usr/share/applications/okay-dock.desktop
     install -m 644 sessions/foot.desktop /usr/share/applications/foot.desktop
     install -m 644 sessions/pcmanfm.desktop /usr/share/applications/pcmanfm.desktop
 
@@ -49,7 +50,6 @@ if [ "$MODE" = "--system" ]; then
 
     # Zapis wersji commita dla środowiska
     install -d /etc/okay-de
-    install -d /etc/okay-dock
     if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         git rev-parse --short HEAD > /etc/okay-de/version 2>/dev/null || echo "9eede97" > /etc/okay-de/version
     else
@@ -87,7 +87,6 @@ elif [ "$MODE" = "--user" ]; then
     mkdir -p "$HOME/.config/gtk-4.0"
     mkdir -p "$HOME/.config/pcmanfm"
     mkdir -p "$HOME/.config/okay-de"
-    mkdir -p "$HOME/.config/okay-dock"
     mkdir -p "$HOME/.local/bin"
     mkdir -p "$HOME/.local/share/applications"
     mkdir -p "$HOME/.local/share/themes"
@@ -129,10 +128,11 @@ elif [ "$MODE" = "--user" ]; then
         done
     fi
 
-    # Usunięcie starej konfiguracji waybar i wyczyszczenie procesów
-    rm -rf "$HOME/.config/waybar" 2>/dev/null || true
+    # Całkowite usunięcie pozostałości starego paska docka (okay-dock) i waybar
+    rm -rf "$HOME/.config/waybar" "$HOME/.config/okay-dock" 2>/dev/null || true
+    rm -f "$HOME/.local/bin/okay-dock" "$HOME/.local/share/applications/okay-dock.desktop" 2>/dev/null || true
+    pkill -9 -x okay-dock 2>/dev/null || true
     pkill -x waybar 2>/dev/null || true
-    pkill -x okay-dock 2>/dev/null || true
     if pgrep -x sfwbar >/dev/null 2>&1; then
         echo "Przeładowywanie uruchomionego paska sfwbar (SIGHUP)..."
         killall -SIGHUP sfwbar 2>/dev/null || true
