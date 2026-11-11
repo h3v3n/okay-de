@@ -13,6 +13,12 @@ if [ "$MODE" = "--system" ]; then
     echo "Instalowanie OKay DE w całym systemie (/etc/xdg, /usr/bin, /usr/local/bin, /usr/share)..."
     make install PREFIX=/usr
 
+    # Instalacja pakietów systemowych dla pełnej obsługi okien i taskbara
+    if command -v pacman >/dev/null 2>&1; then
+        echo "Weryfikacja i instalacja pakietów (python-pyqt6, qt6-wayland, wlrctl)..."
+        pacman -S --needed --noconfirm wlrctl python-pyqt6 qt6-wayland 2>/dev/null || true
+    fi
+
     # Dodatkowa instalacja okay-settings i okay-dock w /usr/local/bin
     install -d /usr/local/bin
     install -m 755 scripts/okay-settings /usr/local/bin/okay-settings
@@ -52,6 +58,16 @@ if [ "$MODE" = "--system" ]; then
     echo "Instalacja systemowa zakończona sukcesem."
 elif [ "$MODE" = "--user" ]; then
     echo "Instalowanie konfiguracji OKay DE dla bieżącego użytkownika ($HOME/.config)..."
+
+    # Weryfikacja obecności wlrctl
+    if ! command -v wlrctl >/dev/null 2>&1; then
+        if command -v pkexec >/dev/null 2>&1; then
+            echo "Wykryto brak wlrctl. Instalowanie pakietu..."
+            pkexec pacman -S --needed --noconfirm wlrctl 2>/dev/null || true
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo pacman -S --needed --noconfirm wlrctl 2>/dev/null || true
+        fi
+    fi
 
     # Tworzenie katalogów docelowych
     mkdir -p "$HOME/.config/labwc"

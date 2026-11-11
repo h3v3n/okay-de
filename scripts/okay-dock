@@ -5,18 +5,21 @@
 OKay Dock (okay-dock)
 Natywny pasek zadań (Taskbar / Panel) w stylu KDE Plasma dla OKay DE w PyQt6.
 Funkcje:
-- Menu Start a'la KDE Kickoff z płynną animacją Fade In/Out i wyszukiwarką na żywo
-- Dynamiczny menedżer zadań:
-  * Zminimalizowane okna NIE znikają z paska zadań
-  * Pod otwartymi i zminimalizowanymi aplikacjami wyświetlana jest mała biała kreska
-  * Kliknięcie aktywnego okna minimalizuje je, a kliknięcie zminimalizowanego przywraca
 - Prawdziwe ikony systemowe (QIcon.fromTheme) z awaryjnym generatorem QPainter
-- Tacka systemowa: schowek, zegar cyfrowy KDE, aplet głośności i przycisk 'Pokaż Pulpit'
+- Menu Start a'la KDE Kickoff z płynną animacją Fade In/Out (QGraphicsOpacityEffect)
+- Menedżer zadań:
+  * Automatyczne wykrywanie otwartych programów (zarówno przypiętych, jak i nieprzypiętych)
+  * Pod KAŻDĄ otwartą lub zminimalizowaną aplikacją rysowana jest mała biała kreska
+  * Zminimalizowane okna NIE ZNIKAJĄ z paska zadań — pozostają na nim z białą kreską
+  * Kliknięcie otwartego/zminimalizowanego programu przywraca go na pierwszy plan (NIE otwiera nowej instancji)
+  * Ponowne kliknięcie aktywnego programu minimalizuje go
+- Tacka systemowa: historia schowka, zegar cyfrowy KDE Plasma, regulacja głośności, przycisk 'Pokaż Pulpit'
 """
 
 import os
 import sys
 import json
+import glob
 import shutil
 import subprocess
 
@@ -41,7 +44,7 @@ except ImportError as err:
 
 
 # ============================================================================
-# Generator i Menedżer Ikon Graficznych (System Icons + Painter Fallback)
+# Generator i Menedżer Ikon Graficznych (System Icons + QPainter Fallback)
 # ============================================================================
 
 class IconHelper:
@@ -195,6 +198,149 @@ class IconHelper:
 
 
 # ============================================================================
+# Monitor Okien i Procesów Graficznych (wlrctl + /proc scanner)
+# ============================================================================
+
+class WindowManagerHelper:
+    """Niezależny zarządca okien dla środowiska labwc Wayland."""
+
+    IGNORED_PROCESSES = {
+        "labwc", "okay-dock", "waybar", "swaybg", "mako", "Xwayland",
+        "polkit-gnome-authentication-agent-1", "cliphist", "wl-paste",
+        "dbus-daemon", "systemd", "pipewire", "wireplumber", "dconf-service"
+    }
+
+    @classmethod
+    def get_open_windows(cls) -> tuple[dict, str]:
+        """
+        Zwraca:
+        - słownik {app_id: {'title': str, 'app_id': str, 'running': True}}
+        - id aktywnego okna (str)
+        """
+        windows = {}
+        active_id = ""
+
+        # 1. Metoda główna: protokół wlr-foreign-toplevel przez wlrctl
+        if shutil.which("wlrctl"):
+            try:
+                res = subprocess.run(
+                    ["wlrctl", "toplevel", "list"],
+                    capture_output=True,
+                    text=True,
+                    timeout=0.5,
+                    check=False
+                )
+                if res.returncode == 0:
+                    for line in res.stdout.strip().splitlines():
+                        if ":" in line:
+                            aid, title = line.split(":", 1)
+                            aid = aid.strip()
+                            if aid and aid.lower() not in cls.IGNORED_PROCESSES:
+                                windows[aid] = {
+                                    "app_id": aid,
+                                    "title": title.strip() or aid,
+                                    "running": True
+                                }
+
+                    # Sprawdzenie okna ze stanem active
+                    for aid in windows.keys():
+                        c = subprocess.run(
+                            ["wlrctl", "toplevel", "find", f"app_id:{aid}", "state:active"],
+                            capture_output=True,
+                            timeout=0.3,
+                            check=False
+                        )
+                        if c.returncode == 0:
+                            active_id = aid
+                            break
+            except Exception:
+                pass
+
+        # 2. Metoda awaryjna: skaner procesów GUI w /proc (gdy wlrctl nie jest zainstalowany)
+        proc_gui_apps = cls._scan_proc_gui_apps()
+        for aid, p_info in proc_gui_apps.items():
+            if aid not in windows and aid.lower() not in cls.IGNORED_PROCESSES:
+                windows[aid] = {
+                    "app_id": aid,
+                    "title": p_info.get("name", aid),
+                    "running": True
+                }
+
+        return windows, active_id
+
+    @classmethod
+    def _scan_proc_gui_apps(cls) -> dict:
+        """Skanuje /proc w poszukiwaniu procesów użytkownika posiadających interfejs GUI."""
+        apps = {}
+        try:
+            pids = [p for p in os.listdir("/proc") if p.isdigit()]
+        except Exception:
+            return apps
+
+        for pid in pids:
+            try:
+                with open(f"/proc/{pid}/environ", "rb") as f:
+                    env_bytes = f.read()
+                # Tylko procesy z podłączonym ekranem Wayland lub X11
+                if b"WAYLAND_DISPLAY=" not in env_bytes and b"DISPLAY=" not in env_bytes:
+                    continue
+
+                with open(f"/proc/{pid}/comm", "r", encoding="utf-8") as f:
+                    comm = f.read().strip()
+
+                if comm.lower() in cls.IGNORED_PROCESSES:
+                    continue
+
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    raw_cmd = f.read()
+                cmd_parts = [p.decode("utf-8", "ignore") for p in raw_cmd.split(b"\x00") if p]
+                if not cmd_parts:
+                    continue
+
+                app_id = comm
+                if app_id.startswith("python") and len(cmd_parts) > 1:
+                    script = os.path.basename(cmd_parts[1])
+                    if script:
+                        app_id = script
+
+                if app_id.lower() in cls.IGNORED_PROCESSES:
+                    continue
+
+                apps[app_id] = {
+                    "app_id": app_id,
+                    "name": app_id,
+                    "cmd": cmd_parts[0]
+                }
+            except Exception:
+                continue
+
+        return apps
+
+    @classmethod
+    def focus_or_restore(cls, app_id: str) -> bool:
+        """Przywraca zminimalizowane okno lub przenosi je na pierwszy plan."""
+        if shutil.which("wlrctl"):
+            try:
+                # wlrctl focus przywraca okno zminimalizowane pod labwc
+                subprocess.run(["wlrctl", "toplevel", "focus", f"app_id:{app_id}"], timeout=0.6, check=False)
+                return True
+            except Exception:
+                pass
+        return False
+
+    @classmethod
+    def minimize_window(cls, app_id: str) -> bool:
+        """Minimalizuje okno pod kompozytorem labwc."""
+        if shutil.which("wlrctl"):
+            try:
+                subprocess.run(["wlrctl", "toplevel", "minimize", f"app_id:{app_id}"], timeout=0.6, check=False)
+                return True
+            except Exception:
+                pass
+        return False
+
+
+# ============================================================================
 # Style arkusza QSS (KDE Plasma Dark / Catppuccin Mocha)
 # ============================================================================
 
@@ -254,7 +400,6 @@ QPushButton#startBtn:hover {
 QPushButton.task-btn {
     background-color: transparent;
     border: none;
-    border-bottom: 3px solid transparent;
     border-radius: 4px;
     min-width: 44px;
     max-width: 52px;
@@ -268,27 +413,9 @@ QPushButton.task-btn:hover {
     background-color: #313244;
 }
 
-/* Aplikacja jest już otwarta (w tle lub zminimalizowana): MAŁA BIAŁA KRESKA POD IKONĄ */
-QPushButton.task-btn[running="true"] {
-    border-bottom: 3px solid #ffffff;
-    border-bottom-left-radius: 1px;
-    border-bottom-right-radius: 1px;
-}
-
-/* Aplikacja jest aktualnie aktywna na pierwszym planie */
+/* Aktywne okno na pierwszym planie */
 QPushButton.task-btn[active="true"] {
     background-color: #24273a;
-    border-bottom: 3px solid #ffffff;
-    border-bottom-left-radius: 1px;
-    border-bottom-right-radius: 1px;
-}
-
-/* Aplikacja zminimalizowana: pozostaje na pasku z małą białą kreską */
-QPushButton.task-btn[minimized="true"] {
-    background-color: transparent;
-    border-bottom: 3px solid #ffffff;
-    border-bottom-left-radius: 1px;
-    border-bottom-right-radius: 1px;
 }
 
 /* Separator pionowy */
@@ -414,10 +541,13 @@ class KickoffMenu(QWidget):
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.setObjectName("kickoffWindow")
         self.setFixedSize(400, 480)
-        self.setWindowOpacity(0.0)
 
-        # Animacja Fade
-        self.fade_anim = QPropertyAnimation(self, b"windowOpacity")
+        # Animacja Fade oparta na QGraphicsOpacityEffect (100% wsparcie na VM)
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.opacity_effect)
+        self.opacity_effect.setOpacity(0.0)
+
+        self.fade_anim = QPropertyAnimation(self.opacity_effect, b"opacity")
         self.fade_anim.setDuration(160)
         self.fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
@@ -468,7 +598,7 @@ class KickoffMenu(QWidget):
         self._load_apps()
 
     def _load_apps(self):
-        """Ładuje aplikacje ze standardowych plików .desktop."""
+        """Ładuje aplikacje ze standardowych wpisów środowiska."""
         self.all_apps = [
             {"name": "Terminal (foot)", "cmd": "foot", "icon": "foot", "desc": "Szybki emulator terminala Wayland"},
             {"name": "Menedżer plików (pcmanfm)", "cmd": "pcmanfm", "icon": "pcmanfm", "desc": "Zarządzanie plikami i katalogami"},
@@ -519,13 +649,13 @@ class KickoffMenu(QWidget):
         x = max(0, target_pos.x())
         y = max(0, target_pos.y() - self.height() - 6)
         self.move(x, y)
-        self.setWindowOpacity(0.0)
+        self.opacity_effect.setOpacity(0.0)
         self.show()
         self.raise_()
         self.activateWindow()
         self.search_bar.setFocus()
 
-        # Fade in
+        # Płynny Fade In
         self.fade_anim.stop()
         self.fade_anim.setStartValue(0.0)
         self.fade_anim.setEndValue(1.0)
@@ -534,7 +664,7 @@ class KickoffMenu(QWidget):
     def close_animated(self):
         """Płynny Fade Out przed ukryciem menu."""
         self.fade_anim.stop()
-        self.fade_anim.setStartValue(self.windowOpacity())
+        self.fade_anim.setStartValue(self.opacity_effect.opacity())
         self.fade_anim.setEndValue(0.0)
         try:
             self.fade_anim.finished.disconnect(self._finish_close)
@@ -559,11 +689,14 @@ class KickoffMenu(QWidget):
 
 
 # ============================================================================
-# Przycisk Zadania z małą białą kreską i kontrolą minimalizacji
+# Przycisk Zadania z małą białą kreską i kontrolą instancji
 # ============================================================================
 
 class TaskButton(QPushButton):
-    """Przycisk zadania z prawdziwą ikoną, małą białą kreską i obsługą minimalizacji."""
+    """
+    Przycisk zadania z prawdziwą ikoną, wyrysowaną małą białą kreską na dole
+    i inteligentną obsługą: aktywacja / minimalizacja zamiast otwierania nowej instancji.
+    """
 
     def __init__(self, app_id: str, app_info: dict, parent=None):
         super().__init__(parent)
@@ -574,9 +707,7 @@ class TaskButton(QPushButton):
         self.is_minimized = False
 
         self.setProperty("class", "dock-btn task-btn")
-        self.setProperty("running", "false")
         self.setProperty("active", "false")
-        self.setProperty("minimized", "false")
 
         self.setIconSize(QSize(24, 24))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -597,50 +728,72 @@ class TaskButton(QPushButton):
             self.is_active = is_active
             self.is_minimized = is_minimized
 
-            self.setProperty("running", "true" if is_running else "false")
             self.setProperty("active", "true" if is_active else "false")
-            self.setProperty("minimized", "true" if is_minimized else "false")
-
             self.style().unpolish(self)
             self.style().polish(self)
             self.update()
+
+    def paintEvent(self, event):
+        """Rysuje przycisk oraz gwarantowaną małą białą kreskę pod otwartą aplikacją."""
+        super().paintEvent(event)
+
+        # Jeśli aplikacja jest już otwarta (w tle, aktywna lub zminimalizowana):
+        if self.is_running:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+            # Czysta biel dla kreski wskaźnika otwarcia
+            line_color = QColor("#ffffff")
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(line_color))
+
+            # Wyśrodkowana mała biała kreska o szerokości 22px i wysokości 3px na samym dole przycisku
+            bar_width = 22
+            bar_height = 3
+            x = (self.width() - bar_width) // 2
+            y = self.height() - bar_height - 1
+            painter.drawRoundedRect(x, y, bar_width, bar_height, 1, 1)
+            painter.end()
 
     def _handle_click(self):
         cmd = self.app_info.get("cmd", self.app_id)
         app_id_clean = self.app_info.get("app_id") or self.app_id
 
-        # Obsługa aktywacji / minimalizacji przez wlrctl
-        if self.is_running and shutil.which("wlrctl"):
+        # 1. Jeśli aplikacja jest JUŻ OTWARTA:
+        if self.is_running:
+            # Jeśli okno jest aktywne -> minimalizujemy je!
             if self.is_active:
-                # Okno jest aktywne -> minimalizujemy je (pozostaje na pasku z małą białą kreską!)
-                subprocess.Popen(["wlrctl", "toplevel", "minimize", f"app_id:{app_id_clean}"])
+                WindowManagerHelper.minimize_window(app_id_clean)
                 self.set_window_state(is_running=True, is_active=False, is_minimized=True)
             else:
-                # Okno zminimalizowane lub w tle -> przywracamy i skupiamy
-                subprocess.Popen(["wlrctl", "toplevel", "focus", f"app_id:{app_id_clean}"])
-                self.set_window_state(is_running=True, is_active=True, is_minimized=False)
+                # Okno zminimalizowane lub w tle -> przywracamy i skupiamy istniejącą instancję!
+                success = WindowManagerHelper.focus_or_restore(app_id_clean)
+                if success:
+                    self.set_window_state(is_running=True, is_active=True, is_minimized=False)
             return
 
-        # Start nowej instancji
+        # 2. Jeśli aplikacja NIE jest jeszcze otwarta -> uruchamiamy ją
         if cmd:
             subprocess.Popen([cmd], shell=True)
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        action_launch = menu.addAction(f"Uruchom nowe okno: {self.app_info.get('name', self.app_id)}")
+        app_id_clean = self.app_info.get("app_id") or self.app_id
+
+        action_launch = menu.addAction(f"Nowe okno: {self.app_info.get('name', self.app_id)}")
         action_launch.triggered.connect(lambda: subprocess.Popen([self.app_info.get("cmd", self.app_id)], shell=True))
 
-        if self.is_running and shutil.which("wlrctl"):
+        if self.is_running:
             menu.addSeparator()
-            if not self.is_minimized:
+            if not self.is_minimized and self.is_active:
                 action_min = menu.addAction("Zminimalizuj")
-                action_min.triggered.connect(lambda: subprocess.Popen(["wlrctl", "toplevel", "minimize", f"app_id:{self.app_id}"]))
+                action_min.triggered.connect(lambda: WindowManagerHelper.minimize_window(app_id_clean))
             else:
                 action_restore = menu.addAction("Przywróć okno")
-                action_restore.triggered.connect(lambda: subprocess.Popen(["wlrctl", "toplevel", "focus", f"app_id:{self.app_id}"]))
+                action_restore.triggered.connect(lambda: WindowManagerHelper.focus_or_restore(app_id_clean))
 
             action_close = menu.addAction("Zamknij")
-            action_close.triggered.connect(lambda: subprocess.Popen(["wlrctl", "toplevel", "close", f"app_id:{self.app_id}"]))
+            action_close.triggered.connect(lambda: subprocess.Popen(["wlrctl", "toplevel", "close", f"app_id:{app_id_clean}"]))
 
         menu.exec(event.globalPos())
 
@@ -795,7 +948,7 @@ class OkayDock(QWidget):
         sep1.setFrameShape(QFrame.Shape.VLine)
         self.layout_dock.addWidget(sep1)
 
-        # 2. Kontener paska zadań (przypięte aplikacje i aktywne zadania z białą kreską)
+        # 2. Kontener paska zadań (przypięte aplikacje i otwarte okna z białą kreską)
         self.tasks_widget = QWidget()
         self.layout_tasks = QHBoxLayout(self.tasks_widget)
         self.layout_tasks.setContentsMargins(0, 0, 0, 0)
@@ -865,15 +1018,15 @@ class OkayDock(QWidget):
         self.timer_clock.timeout.connect(self._update_clock)
         self.timer_clock.start(1000)
 
-        # Aktualizacja głośnika co 3 sekundy
+        # Aktualizacja głośności co 3 sekundy
         self.timer_vol = QTimer(self)
         self.timer_vol.timeout.connect(self.btn_volume.update_volume)
         self.timer_vol.start(3000)
 
-        # Monitorowanie otwartych i zminimalizowanych okien co 1.2 sekundy
+        # Szybki monitor otwartych i zminimalizowanych okien co 800 ms
         self.timer_windows = QTimer(self)
         self.timer_windows.timeout.connect(self._scan_open_windows)
-        self.timer_windows.start(1200)
+        self.timer_windows.start(800)
 
     def _setup_watcher(self):
         os.makedirs(os.path.dirname(self.CONFIG_FILE), exist_ok=True)
@@ -918,103 +1071,56 @@ class OkayDock(QWidget):
         self._scan_open_windows()
 
     def _scan_open_windows(self):
-        """Skanuje otwarte okna przez wlrctl i procesy systemowe."""
-        open_windows = {}
-        active_app_id = ""
+        """Monitoruje stan otwartych i zminimalizowanych okien i aktualizuje białe kreski."""
+        open_windows, active_id = WindowManagerHelper.get_open_windows()
 
-        # 1. Odpytanie wlrctl toplevel list
-        if shutil.which("wlrctl"):
-            try:
-                res = subprocess.run(
-                    ["wlrctl", "toplevel", "list"],
-                    capture_output=True,
-                    text=True,
-                    timeout=0.5,
-                    check=False
-                )
-                if res.returncode == 0:
-                    for line in res.stdout.strip().splitlines():
-                        if ":" in line:
-                            app_id, title = line.split(":", 1)
-                            open_windows[app_id.strip()] = title.strip()
-            except Exception:
-                pass
-
-            # Sprawdzenie aktywnego okna
-            try:
-                for aid in open_windows.keys():
-                    c = subprocess.run(
-                        ["wlrctl", "toplevel", "find", f"app_id:{aid}", "state:active"],
-                        capture_output=True,
-                        timeout=0.3,
-                        check=False
-                    )
-                    if c.returncode == 0:
-                        active_app_id = aid
-                        break
-            except Exception:
-                pass
-
-        # 2. Aktualizacja stanu przypiętych przycisków
+        # 1. Sprawdź i zaktualizuj przypięte aplikacje
         for app_id, btn in self.pinned_buttons.items():
             cmd = btn.app_info.get("cmd", app_id)
             is_open = False
 
-            # Sprawdzenie przez wlrctl
             for w_id in open_windows.keys():
                 if w_id.lower() in [app_id.lower(), cmd.lower()]:
                     is_open = True
                     break
 
-            # Fallback na pgrep
-            if not is_open:
-                clean_cmd = cmd.split()[0]
-                is_open = self._is_process_running(clean_cmd)
-
-            is_active = (app_id.lower() == active_app_id.lower())
+            is_active = (app_id.lower() == active_id.lower())
             is_min = (is_open and not is_active)
             btn.set_window_state(is_running=is_open, is_active=is_active, is_minimized=is_min)
 
-        # 3. Dynamiczne dodawanie nieprzypiętych otwartych okien (np. edytor, gra, terminal)
-        for w_id, w_title in open_windows.items():
-            if w_id.lower() in ["okay-dock", "waybar", "fuzzel"]:
-                continue
-
-            already_in_dock = False
+        # 2. Dynamiczne dodawanie aplikacji, które NIE są przypięte do paska
+        for w_id, w_info in open_windows.items():
+            # Czy już jest przypięta na pasku?
+            already_pinned = False
             for aid, btn in self.pinned_buttons.items():
                 if aid.lower() == w_id.lower() or btn.app_info.get("cmd", "").lower() == w_id.lower():
-                    already_in_dock = True
+                    already_pinned = True
                     break
 
-            if not already_in_dock and w_id not in self.dynamic_buttons:
+            if not already_pinned and w_id not in self.dynamic_buttons:
+                # Tworzymy dynamiczny przycisk w taskbarze z małą białą kreską
                 dyn_info = {
-                    "name": w_title or w_id,
+                    "name": w_info.get("title", w_id),
                     "app_id": w_id,
                     "cmd": w_id,
                     "icon_name": w_id
                 }
                 dyn_btn = TaskButton(w_id, dyn_info)
-                is_active = (w_id == active_app_id)
-                dyn_btn.set_window_state(is_running=True, is_active=is_active, is_minimized=(not is_active))
+                is_act = (w_id.lower() == active_id.lower())
+                dyn_btn.set_window_state(is_running=True, is_active=is_act, is_minimized=(not is_act))
                 self.layout_tasks.addWidget(dyn_btn)
                 self.dynamic_buttons[w_id] = dyn_btn
+            elif w_id in self.dynamic_buttons:
+                dyn_btn = self.dynamic_buttons[w_id]
+                is_act = (w_id.lower() == active_id.lower())
+                dyn_btn.set_window_state(is_running=True, is_active=is_act, is_minimized=(not is_act))
 
-        # Usunięcie zamkniętych dynamicznych okien
+        # 3. Usunięcie dynamicznych przycisków TYLKO wtedy, gdy proces został faktycznie zamknięty
         for dyn_id in list(self.dynamic_buttons.keys()):
             if dyn_id not in open_windows:
                 btn = self.dynamic_buttons.pop(dyn_id)
                 self.layout_tasks.removeWidget(btn)
                 btn.deleteLater()
-
-    @staticmethod
-    def _is_process_running(proc_name: str) -> bool:
-        if not shutil.which("pgrep"):
-            return False
-        try:
-            r = subprocess.run(["pgrep", "-x", proc_name], capture_output=True, timeout=0.3, check=False)
-            return r.returncode == 0
-        except Exception:
-            return False
 
     def _update_clock(self):
         now = QDateTime.currentDateTime()
@@ -1034,7 +1140,7 @@ class OkayDock(QWidget):
             ])
 
     def _toggle_kickoff(self):
-        if self.kickoff_menu.isVisible() and self.kickoff_menu.windowOpacity() > 0.1:
+        if self.kickoff_menu.isVisible() and self.kickoff_menu.opacity_effect.opacity() > 0.1:
             self.kickoff_menu.close_animated()
         else:
             pos = self.btn_start.mapToGlobal(QPoint(0, 0))
