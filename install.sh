@@ -46,6 +46,7 @@ if [ "$MODE" = "--system" ]; then
     cp -r config/okay-de/panel/* /etc/xdg/okay-de/panel/ 2>/dev/null || true
     cp config/okay-de/panel/sfwbar.config /etc/xdg/sfwbar/sfwbar.config 2>/dev/null || true
     cp config/okay-de/panel/waybar.jsonc /etc/xdg/waybar/config.jsonc 2>/dev/null || true
+    cp config/okay-de/panel/waybar.jsonc /etc/xdg/waybar/config 2>/dev/null || true
     cp config/okay-de/panel/waybar.css /etc/xdg/waybar/style.css 2>/dev/null || true
 
     # Rejestracja plików .desktop w /usr/share/applications
@@ -122,6 +123,7 @@ elif [ "$MODE" = "--user" ]; then
     cp -r config/okay-de/panel/* "$HOME/.config/okay-de/panel/" 2>/dev/null || true
     cp config/okay-de/panel/sfwbar.config "$HOME/.config/sfwbar/sfwbar.config" 2>/dev/null || true
     cp config/okay-de/panel/waybar.jsonc "$HOME/.config/waybar/config.jsonc" 2>/dev/null || true
+    cp config/okay-de/panel/waybar.jsonc "$HOME/.config/waybar/config" 2>/dev/null || true
     cp config/okay-de/panel/waybar.css "$HOME/.config/waybar/style.css" 2>/dev/null || true
 
     # Kopiowanie konfiguracji (w tym masek przycisków XBM i wektorów SVG do labwc)

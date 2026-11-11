@@ -18,7 +18,17 @@ mako &
 # 3. Pasek zadań OKay DE (sfwbar / waybar)
 (
     sleep 0.5
-    okay-panel &
+    pkill -9 -x sfwbar 2>/dev/null || true
+    pkill -9 -x waybar 2>/dev/null || true
+    if [ -x "$HOME/.local/bin/okay-panel" ]; then
+        "$HOME/.local/bin/okay-panel" &
+    elif [ -x /usr/local/bin/okay-panel ]; then
+        /usr/local/bin/okay-panel &
+    elif [ -x /usr/bin/okay-panel ]; then
+        /usr/bin/okay-panel &
+    elif command -v okay-panel >/dev/null 2>&1; then
+        okay-panel &
+    fi
 ) &
 
 # 4. Tapeta i tło pulpitu (swaybg z kolorem bazowym i tapetą)

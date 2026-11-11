@@ -10,11 +10,6 @@ ACTION="${1:-start}"
 restart_panel() {
     pkill -9 -x sfwbar 2>/dev/null || true
     pkill -9 -x waybar 2>/dev/null || true
-    for pid in $(pgrep -f "okay-panel" 2>/dev/null || true); do
-        if [ "$pid" != "$$" ]; then
-            kill -9 "$pid" 2>/dev/null || true
-        fi
-    done
     sleep 0.2
 }
 
@@ -32,10 +27,11 @@ if command -v sfwbar >/dev/null 2>&1; then
     [ ! -f "$SFW_CONF" ] && SFW_CONF="$HOME/.config/sfwbar/sfwbar.config"
     [ ! -f "$SFW_CONF" ] && SFW_CONF="/etc/xdg/sfwbar/sfwbar.config"
 
+    echo "[okay-panel] Start backendu sfwbar z konfiguracją: $SFW_CONF" > /tmp/okay-panel.log
     if [ -f "$SFW_CONF" ]; then
-        exec sfwbar -f "$SFW_CONF" > /tmp/okay-panel.log 2>&1
+        exec sfwbar -f "$SFW_CONF" >> /tmp/okay-panel.log 2>&1
     else
-        exec sfwbar > /tmp/okay-panel.log 2>&1
+        exec sfwbar >> /tmp/okay-panel.log 2>&1
     fi
 fi
 
@@ -48,10 +44,11 @@ if command -v waybar >/dev/null 2>&1; then
     [ ! -f "$WAY_CONF" ] && WAY_CONF="$HOME/.config/waybar/config.jsonc"
     [ ! -f "$WAY_CSS" ] && WAY_CSS="$HOME/.config/waybar/style.css"
 
+    echo "[okay-panel] Start backendu waybar z konfiguracją: $WAY_CONF" > /tmp/okay-panel.log
     if [ -f "$WAY_CONF" ] && [ -f "$WAY_CSS" ]; then
-        exec waybar -c "$WAY_CONF" -s "$WAY_CSS" > /tmp/okay-panel.log 2>&1
+        exec waybar -c "$WAY_CONF" -s "$WAY_CSS" >> /tmp/okay-panel.log 2>&1
     else
-        exec waybar > /tmp/okay-panel.log 2>&1
+        exec waybar >> /tmp/okay-panel.log 2>&1
     fi
 fi
 

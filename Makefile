@@ -87,6 +87,7 @@ install:
 	install -m 644 config/okay-de/panel/sfwbar.config $(DESTDIR)/etc/xdg/sfwbar/sfwbar.config
 	install -d $(DESTDIR)/etc/xdg/waybar
 	install -m 644 config/okay-de/panel/waybar.jsonc $(DESTDIR)/etc/xdg/waybar/config.jsonc
+	install -m 644 config/okay-de/panel/waybar.jsonc $(DESTDIR)/etc/xdg/waybar/config
 	install -m 644 config/okay-de/panel/waybar.css $(DESTDIR)/etc/xdg/waybar/style.css
 
 	# Reguły uprawnień administracyjnych (Polkit & Sudoers)

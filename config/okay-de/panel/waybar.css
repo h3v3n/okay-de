@@ -6,14 +6,14 @@
   font-family: "JetBrains Mono", sans-serif;
   font-size: 11px;
   border-radius: 0px;
-  margin: 0;
-  padding: 0;
 }
 
 window#waybar {
   background-color: #111111;
   border-top: 1px solid #222222;
   color: #e0e0e0;
+  margin: 0;
+  padding: 0;
 }
 
 /* Przycisk Start (OK) */
@@ -21,9 +21,9 @@ window#waybar {
   background-color: #00e676;
   color: #000000;
   font-weight: bold;
-  font-size: 13px;
+  font-size: 12px;
   padding: 0px 14px;
-  margin-right: 6px;
+  margin: 0px 6px 0px 0px;
 }
 
 #custom-launcher:hover {
@@ -32,43 +32,55 @@ window#waybar {
 }
 
 /* ==========================================================================
- * Dynamiczny Pasek Zadań (Taskbar)
+ * Dynamiczny Pasek Zadań (Taskbar - wlr/taskbar)
  * ========================================================================== */
 
 #taskbar {
   margin: 0;
-  padding: 0;
+  padding: 0 4px;
 }
 
+/* Każde otwarte okno: subtelny biały wskaźnik u dołu przycisku */
 #taskbar button {
   background-color: transparent;
   border: none;
   border-radius: 0px;
-  border-bottom: 3px solid #282828;
-  padding: 2px 10px;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.55);
+  padding: 0px 10px;
   margin: 0px 2px;
   min-height: 34px;
-  min-width: 60px;
-  color: #e0e0e0;
+  min-width: 44px;
+  color: #cccccc;
+  transition: none;
 }
 
-/* Aktywne / zogniskowane okno (Zielony akcent OKsavi) */
+/* Aktywne / sfokusowane okno: wyraźniejsze podświetlenie + pełna biała kreska */
 #taskbar button.active {
   background-color: #172b1e;
-  border-bottom: 3px solid #00e676;
+  border-bottom: 3px solid #ffffff;
   color: #ffffff;
+  font-weight: bold;
 }
 
-/* Zminimalizowane okno */
+/* Zminimalizowane okno: lekko przygaszona ikona i subtelny ciemniejszy wskaźnik */
 #taskbar button.minimized {
-  opacity: 0.65;
+  opacity: 0.55;
   background-color: transparent;
-  border-bottom: 3px solid #00e676;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.25);
+  color: #888888;
 }
 
 /* Efekt najechania myszą */
 #taskbar button:hover {
   background-color: #222222;
+  color: #ffffff;
+}
+
+/* Okno pilne */
+#taskbar button.urgent {
+  background-color: #2e1518;
+  border-bottom: 3px solid #f38ba8;
+  color: #ffffff;
 }
 
 /* ==========================================================================
@@ -90,16 +102,19 @@ window#waybar {
   background-color: #00e676;
 }
 
+#pulseaudio,
 #wireplumber {
   padding: 0px 10px;
   margin: 0px 2px;
   color: #e0e0e0;
 }
 
+#pulseaudio:hover,
 #wireplumber:hover {
   background-color: #222222;
 }
 
+#pulseaudio.muted,
 #wireplumber.muted {
   color: #f38ba8;
 }

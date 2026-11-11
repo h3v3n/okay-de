@@ -17,7 +17,7 @@
 
   "modules-right": [
     "tray",
-    "wireplumber",
+    "pulseaudio",
     "clock",
     "custom/desktop"
   ],
@@ -31,17 +31,17 @@
   },
 
   "wlr/taskbar": {
-    "format": "{icon} {title}",
-    "max-length": 30,
-    "icon-size": 18,
-    "icon-theme": "Papirus-Dark",
+    "format": "{icon} {title:.18}",
+    "icon-size": 20,
+    "all-outputs": true,
     "tooltip": true,
     "tooltip-format": "{title}",
     "on-click": "minimize-raise",
     "on-click-middle": "close",
     "on-click-right": "minimize",
-    "all-outputs": true,
-    "active-first": false
+    "ignore-list": [
+      "fuzzel"
+    ]
   },
 
   "tray": {
@@ -49,10 +49,12 @@
     "spacing": 8
   },
 
-  "wireplumber": {
+  "pulseaudio": {
     "format": "{icon} {volume}%",
     "format-muted": "󰝟 Wyciszony",
-    "format-icons": ["󰕿", "󰖀", "󰕾"],
+    "format-icons": {
+      "default": ["󰕿", "󰖀", "󰕾"]
+    },
     "on-click": "pavucontrol",
     "on-click-right": "okay-volume mute",
     "on-scroll-up": "okay-volume raise",
