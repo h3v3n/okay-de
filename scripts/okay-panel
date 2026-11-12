@@ -3,7 +3,7 @@
 
 """
 OKay Panel (okay-panel)
-Zunifikowany, natywny pasek zadań środowiska OKay DE (Wayland / labwc).
+Zunifikowany, natywny pasek zadań środowiska OKay DE (Wayland / Wayfire).
 Funkcje:
 - Jeden zunifikowany kontener zadań (przypięte aplikacje + dynamiczne otwarte okna w wlrctl)
 - Brak duplikacji ikon (uruchomiona przypięta aplikacja przekształca się w przycisk okna)

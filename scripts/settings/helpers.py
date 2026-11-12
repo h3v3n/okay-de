@@ -704,18 +704,6 @@ DEFAULT_PANEL_CONFIG = {
     ],
 }
 
-_LABWC_CONFIG_FILES = (
-    "rc.xml",
-    "autostart",
-    "environment",
-    "menu.xml",
-    "themerc",
-    "themerc-override",
-)
-
-_LABWC_ASSET_EXTS = (".xbm", ".svg")
-
-
 def xdg_config_home() -> str:
     val = os.environ.get("XDG_CONFIG_HOME", "").strip()
     return os.path.expanduser(val) if val else os.path.expanduser("~/.config")
@@ -732,10 +720,6 @@ def xdg_bin_home() -> str:
 
 def okay_config_dir() -> str:
     return os.path.join(xdg_config_home(), "okay-de")
-
-
-def labwc_config_dir() -> str:
-    return os.path.join(xdg_config_home(), "labwc")
 
 
 def wayfire_config_file() -> str:
@@ -882,29 +866,8 @@ def okay_template_dirs() -> tuple:
     return tuple(dirs)
 
 
-def labwc_template_dirs() -> tuple:
-    dirs = [
-        "/etc/okay-de/labwc",
-        "/etc/xdg/labwc",
-        "/usr/share/okay-de/defaults/labwc",
-        "/usr/share/okay-de/labwc",
-        "/usr/local/share/okay-de/defaults/labwc",
-        "/usr/local/share/okay-de/labwc",
-        os.path.join(okay_data_dir(), "defaults", "labwc"),
-        os.path.join(okay_data_dir(), "repo", "config", "labwc"),
-    ]
-    repo_root = _repo_root_from_script()
-    if repo_root:
-        dirs.append(os.path.join(repo_root, "config", "labwc"))
-    return tuple(dirs)
-
-
 def okay_template_file(rel_path: str) -> str:
     return find_existing_file(*(os.path.join(d, rel_path) for d in okay_template_dirs()))
-
-
-def labwc_template_file(rel_path: str) -> str:
-    return find_existing_file(*(os.path.join(d, rel_path) for d in labwc_template_dirs()))
 
 
 def wallpaper_template_file() -> str:
@@ -1138,11 +1101,9 @@ def merge_missing_json_defaults(user_json_path: str, defaults: dict, template_pa
 
 
 def ensure_user_configs() -> None:
-    """Inicjalizuje ~/.config/okay-de oraz ~/.config/labwc z szablonów systemowych (read-only) przy pierwszym starcie."""
+    """Inicjalizuje ~/.config/okay-de oraz ~/.config/wayfire.ini z szablonów systemowych przy pierwszym starcie."""
     okay_dir = okay_config_dir()
-    labwc_dir = labwc_config_dir()
     os.makedirs(okay_dir, exist_ok=True)
-    os.makedirs(labwc_dir, exist_ok=True)
 
     # 1. Konfiguracja panelu i animacji (~/.config/okay-de/panel.json)
     panel_json = os.path.join(okay_dir, "panel.json")
@@ -1181,50 +1142,15 @@ def ensure_user_configs() -> None:
             except Exception:
                 pass
 
-    # 4. Pliki labwc (~/.config/labwc/{rc.xml, autostart, environment, menu.xml, themerc, ...})
-    for fname in _LABWC_CONFIG_FILES:
-        dst = os.path.join(labwc_dir, fname)
-        if not os.path.exists(dst):
-            src = labwc_template_file(fname)
-            if src:
-                try:
-                    atomic_copy_file(src, dst, mode=0o755 if fname == "autostart" else 0o644)
-                except Exception:
-                    pass
-
-    # 5. Maski przycisków okna labwc (*.xbm, *.svg)
-    seen_assets = set()
-    for tdir in labwc_template_dirs():
-        if not os.path.isdir(tdir):
-            continue
-        try:
-            for entry in os.listdir(tdir):
-                if entry.endswith(_LABWC_ASSET_EXTS) and entry not in seen_assets:
-                    seen_assets.add(entry)
-                    dst = os.path.join(labwc_dir, entry)
-                    if not os.path.exists(dst):
-                        try:
-                            atomic_copy_file(os.path.join(tdir, entry), dst, mode=0o644)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-
-    # 6. Motyw użytkownika (~/.local/share/themes/OKay) z szablonu systemowego (read-only)
-    user_theme_dir = os.path.join(xdg_data_home(), "themes", "OKay")
-    if not os.path.exists(user_theme_dir):
-        for sys_theme in (
-            "/usr/share/themes/OKay",
-            "/usr/local/share/themes/OKay",
-            "/usr/share/okay-de/themes/OKay",
-            os.path.join(okay_data_dir(), "repo", "themes", "OKay"),
-        ):
-            if os.path.isdir(sys_theme):
-                try:
-                    shutil.copytree(sys_theme, user_theme_dir)
-                except Exception:
-                    pass
-                break
+    # 4. Skrypt autostartu (~/.config/okay-de/autostart)
+    user_autostart = os.path.join(okay_dir, "autostart")
+    if not os.path.exists(user_autostart):
+        src_as = okay_template_file("autostart")
+        if src_as:
+            try:
+                atomic_copy_file(src_as, user_autostart, mode=0o755)
+            except Exception:
+                pass
 
     # 7. Konfiguracja fuzzel (~/.config/fuzzel/fuzzel.ini)
     created_fuzzel = False
@@ -1277,6 +1203,14 @@ def ensure_user_configs() -> None:
                 created_wf = True
             except Exception:
                 pass
+    if os.path.isfile(wf_ini) and (
+        os.path.isfile("/usr/lib/wayfire/libpixdecor.so")
+        or os.path.isfile("/usr/local/lib/wayfire/libpixdecor.so")
+    ):
+        plugins_line = read_wayfire_value("core", "plugins", "")
+        if plugins_line and "pixdecor" not in plugins_line.split() and "decoration" in plugins_line.split():
+            new_plugins = re.sub(r"\bdecoration\b", "pixdecor", plugins_line)
+            update_wayfire_section("core", {"plugins": new_plugins})
 
     if created_fuzzel or created_mako or created_wf:
         cur_accent = get_current_accent_color()
@@ -1511,15 +1445,7 @@ class UpdateManager:
     def _reload_user_session(cls) -> list:
         notes = []
         if os.environ.get("WAYLAND_DISPLAY"):
-            cur_de = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
-            if "wayfire" in cur_de:
-                notes.append("Wayfire automatycznie przeładowuje ~/.config/wayfire.ini.")
-            elif shutil.which("labwc"):
-                rc_l, _o, err_l = run_cmd(["labwc", "--reconfigure"], timeout=5)
-                if rc_l == 0:
-                    notes.append("Przeładowano konfigurację kompozytora (labwc --reconfigure).")
-                else:
-                    notes.append(f"Ostrzeżenie labwc --reconfigure: {err_l.strip() or rc_l}")
+            notes.append("Wayfire automatycznie przeładowuje ~/.config/wayfire.ini.")
             for app_name in ("okay-panel", "okay-desktop"):
                 app_bin = os.path.join(xdg_bin_home(), app_name)
                 if not (os.path.isfile(app_bin) and os.access(app_bin, os.X_OK)):
@@ -1586,158 +1512,8 @@ class UpdateManager:
         return out
 
 
-def _expand_labwc_svg_states(base_map: dict, inactive_map: dict | None = None) -> dict:
-    """Rozszerza bazowe ikony SVG o sufiksy stanów wymagane przez labwc (-active/-inactive)."""
-    out = {}
-    inactive_map = inactive_map or {}
-    for btn in ("close", "max", "max_toggled", "iconify"):
-        normal_svg = base_map.get(f"{btn}.svg", "")
-        hover_svg = base_map.get(f"{btn}_hover.svg", normal_svg)
-        inact_svg = inactive_map.get(f"{btn}.svg", normal_svg)
-        inact_hover_svg = inactive_map.get(f"{btn}_hover.svg", hover_svg)
-        if normal_svg:
-            out[f"{btn}.svg"] = normal_svg
-            out[f"{btn}-active.svg"] = normal_svg
-            out[f"{btn}-inactive.svg"] = inact_svg
-        if hover_svg:
-            out[f"{btn}_hover.svg"] = hover_svg
-            out[f"{btn}_hover-active.svg"] = hover_svg
-            out[f"{btn}_hover-inactive.svg"] = inact_hover_svg
-    return out
-
-
-def _make_xbm(name: str, width: int, height: int, pixel_fn) -> str:
-    """Tworzy jednobitowy plik XBM (LSB-first w każdym bajcie, wiersz po wierszu)."""
-    row_bytes = (width + 7) // 8
-    values = []
-    for y in range(height):
-        for bx in range(row_bytes):
-            byte_val = 0
-            for bit in range(8):
-                x = bx * 8 + bit
-                if x < width and pixel_fn(x, y):
-                    byte_val |= (1 << bit)
-            values.append(f"0x{byte_val:02x}")
-    lines = [f"#define {name}_width {width}", f"#define {name}_height {height}", f"static unsigned char {name}_bits[] = {{"]
-    for i in range(0, len(values), 12):
-        chunk = ", ".join(values[i:i + 12])
-        suffix = "," if i + 12 < len(values) else ""
-        lines.append(f"   {chunk}{suffix}")
-    lines.append("};")
-    return "\n".join(lines) + "\n"
-
-
-def generate_window_button_xbms(style: str) -> dict:
-    """Generuje fallbackowe maski XBM dopasowane kształtem do wybranego stylu przycisków."""
-    style = style.lower() if style in ("rectangles", "circles_left", "circles_right", "windows") else "rectangles"
-
-    if style in ("circles_left", "circles_right"):
-        circle_fn = lambda x, y: (x - 6.5) ** 2 + (y - 6.5) ** 2 <= 5.8 ** 2
-        close_hover_fn = lambda x, y: circle_fn(x, y) and not (abs(x - y) <= 0.9 or abs((x + y) - 13.0) <= 0.9) if (4 <= x <= 9 and 4 <= y <= 9) else circle_fn(x, y)
-        min_hover_fn = lambda x, y: circle_fn(x, y) and not (y == 6 and 4 <= x <= 9)
-        max_hover_fn = lambda x, y: circle_fn(x, y) and not ((4 <= x <= 7 and 4 <= y <= 7 and (x + y <= 11)) or (6 <= x <= 9 and 6 <= y <= 9 and (x + y >= 15)))
-        return {
-            "close.xbm": _make_xbm("close", 14, 14, circle_fn),
-            "close_hover.xbm": _make_xbm("close_hover", 14, 14, close_hover_fn),
-            "max.xbm": _make_xbm("max", 14, 14, circle_fn),
-            "max_hover.xbm": _make_xbm("max_hover", 14, 14, max_hover_fn),
-            "max_toggled.xbm": _make_xbm("max_toggled", 14, 14, circle_fn),
-            "iconify.xbm": _make_xbm("iconify", 14, 14, circle_fn),
-            "iconify_hover.xbm": _make_xbm("iconify_hover", 14, 14, min_hover_fn),
-        }
-
-    if style == "windows":
-        x_fn = lambda x, y: (5 <= x <= 14 and 5 <= y <= 14) and (abs(x - y) <= 1 or abs((x + y) - 19) <= 1)
-        sq_fn = lambda x, y: (5 <= x <= 14 and 5 <= y <= 14) and (x in (5, 14) or y in (5, 14))
-        restore_fn = lambda x, y: ((7 <= x <= 14 and 4 <= y <= 11) and (x == 14 or y == 4 or (x == 7 and y <= 6) or (y == 11 and x >= 12))) or ((5 <= x <= 12 and 7 <= y <= 14) and (x in (5, 12) or y in (7, 14)))
-        min_fn = lambda x, y: (5 <= x <= 14) and (y in (10, 11))
-        return {
-            "close.xbm": _make_xbm("close", 20, 20, x_fn),
-            "close_hover.xbm": _make_xbm("close_hover", 20, 20, x_fn),
-            "max.xbm": _make_xbm("max", 20, 20, sq_fn),
-            "max_hover.xbm": _make_xbm("max_hover", 20, 20, sq_fn),
-            "max_toggled.xbm": _make_xbm("max_toggled", 20, 20, restore_fn),
-            "iconify.xbm": _make_xbm("iconify", 20, 20, min_fn),
-            "iconify_hover.xbm": _make_xbm("iconify_hover", 20, 20, min_fn),
-        }
-
-    rect_fn = lambda x, y: True
-    return {
-        "close.xbm": _make_xbm("close", 48, 10, rect_fn),
-        "close_hover.xbm": _make_xbm("close_hover", 48, 10, rect_fn),
-        "max.xbm": _make_xbm("max", 48, 10, rect_fn),
-        "max_hover.xbm": _make_xbm("max_hover", 48, 10, rect_fn),
-        "max_toggled.xbm": _make_xbm("max_toggled", 48, 10, rect_fn),
-        "iconify.xbm": _make_xbm("iconify", 48, 10, rect_fn),
-        "iconify_hover.xbm": _make_xbm("iconify_hover", 48, 10, rect_fn),
-    }
-
-
-def generate_window_button_svgs(style: str, accent_hex: str) -> dict:
-    """Generuje kod SVG dla przycisków okna (close, max, max_toggled, iconify) w zadanym stylu."""
-    accent = sanitize_hex_color(accent_hex)
-    hover_accent = compute_hover_hex(accent)
-    style = style.lower() if style in ("rectangles", "circles_left", "circles_right", "windows") else "rectangles"
-
-    if style == "rectangles":
-        base = {
-            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#f38ba8" /></svg>\n',
-            "close_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#eba0ac" /></svg>\n',
-            "max.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="{accent}" /></svg>\n',
-            "max_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="{hover_accent}" /></svg>\n',
-            "max_toggled.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="{accent}" /></svg>\n',
-            "max_toggled_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="{hover_accent}" /></svg>\n',
-            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#585b70" /></svg>\n',
-            "iconify_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#6c7086" /></svg>\n',
-        }
-        inact = {
-            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#45475a" /></svg>\n',
-            "max.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#45475a" /></svg>\n',
-            "max_toggled.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#45475a" /></svg>\n',
-            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#313244" /></svg>\n',
-        }
-        return _expand_labwc_svg_states(base, inact)
-    elif style in ("circles_left", "circles_right"):
-        base = {
-            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ff5f56" /></svg>\n',
-            "close_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ff5f56" /><path d="M4.6 4.6 L9.4 9.4 M9.4 4.6 L4.6 9.4" stroke="#4d0000" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
-            "max.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#27c93f" /></svg>\n',
-            "max_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#27c93f" /><path d="M4.5 4.5 L7.6 4.5 L4.5 7.6 Z M9.5 9.5 L6.4 9.5 L9.5 6.4 Z" fill="#004d00" /></svg>\n',
-            "max_toggled.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#27c93f" /></svg>\n',
-            "max_toggled_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#27c93f" /><path d="M4.5 4.5 L7.6 4.5 L4.5 7.6 Z M9.5 9.5 L6.4 9.5 L9.5 6.4 Z" fill="#004d00" /></svg>\n',
-            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ffbd2e" /></svg>\n',
-            "iconify_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ffbd2e" /><line x1="4.4" y1="7" x2="9.6" y2="7" stroke="#7a4400" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
-        }
-        dim_circle = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#45475a" /></svg>\n'
-        inact = {
-            "close.svg": dim_circle,
-            "max.svg": dim_circle,
-            "max_toggled.svg": dim_circle,
-            "iconify.svg": dim_circle,
-        }
-        return _expand_labwc_svg_states(base, inact)
-    else:  # windows
-        base = {
-            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><path d="M10.5 6.5 L19.5 15.5 M19.5 6.5 L10.5 15.5" stroke="#cdd6f4" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
-            "close_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect width="30" height="22" rx="4" fill="#e81123" /><path d="M10.5 6.5 L19.5 15.5 M19.5 6.5 L10.5 15.5" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
-            "max.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect x="10" y="6" width="10" height="10" rx="1.5" fill="none" stroke="#cdd6f4" stroke-width="1.3" /></svg>\n',
-            "max_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect width="30" height="22" rx="4" fill="#313244" /><rect x="10" y="6" width="10" height="10" rx="1.5" fill="none" stroke="{accent}" stroke-width="1.3" /></svg>\n',
-            "max_toggled.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect x="11.5" y="5" width="8.5" height="8.5" rx="1.2" fill="none" stroke="#cdd6f4" stroke-width="1.2" /><rect x="9" y="7.5" width="8.5" height="8.5" rx="1.2" fill="#181825" stroke="#cdd6f4" stroke-width="1.2" /></svg>\n',
-            "max_toggled_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect width="30" height="22" rx="4" fill="#313244" /><rect x="11.5" y="5" width="8.5" height="8.5" rx="1.2" fill="none" stroke="{accent}" stroke-width="1.2" /><rect x="9" y="7.5" width="8.5" height="8.5" rx="1.2" fill="#313244" stroke="{accent}" stroke-width="1.2" /></svg>\n',
-            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><line x1="10" y1="12" x2="20" y2="12" stroke="#cdd6f4" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
-            "iconify_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect width="30" height="22" rx="4" fill="#313244" /><line x1="10" y1="12" x2="20" y2="12" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
-        }
-        inact = {
-            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><path d="M10.5 6.5 L19.5 15.5 M19.5 6.5 L10.5 15.5" stroke="#6c7086" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
-            "max.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect x="10" y="6" width="10" height="10" rx="1.5" fill="none" stroke="#6c7086" stroke-width="1.3" /></svg>\n',
-            "max_toggled.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect x="11.5" y="5" width="8.5" height="8.5" rx="1.2" fill="none" stroke="#6c7086" stroke-width="1.2" /><rect x="9" y="7.5" width="8.5" height="8.5" rx="1.2" fill="#181825" stroke="#6c7086" stroke-width="1.2" /></svg>\n',
-            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><line x1="10" y1="12" x2="20" y2="12" stroke="#6c7086" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
-        }
-        return _expand_labwc_svg_states(base, inact)
-
-
 def apply_window_decorations(buttons_style: str = None, corner_radius: int = None, accent_hex: str = None) -> dict:
-    """Zapisuje styl przycisków, zaokrąglenie ramek okien labwc oraz przeładowuje kompozytor."""
+    """Zapisuje styl przycisków, zaokrąglenie ramek okien w Wayfire / GTK oraz przeładowuje powiadomienia."""
     ensure_user_configs()
     panel_file = os.path.join(okay_config_dir(), "panel.json")
     cfg = {}
@@ -1772,163 +1548,9 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
     cfg["accent_color"] = accent_hex
     atomic_write_json(panel_file, normalize_panel_config(cfg))
 
-    labwc_dir = labwc_config_dir()
-    os.makedirs(labwc_dir, exist_ok=True)
+    layout = "close minimize maximize" if buttons_style == "circles_left" else "minimize maximize close"
 
-    # Zapewnij lokalny katalog motywu ~/.local/share/themes/OKay, aby labwc ładował SVG z przestrzeni użytkownika
-    user_theme_root = os.path.join(xdg_data_home(), "themes", "OKay")
-    if not os.path.exists(user_theme_root):
-        for sys_theme in (
-            "/usr/share/themes/OKay",
-            "/usr/local/share/themes/OKay",
-            "/usr/share/okay-de/themes/OKay",
-            os.path.join(okay_data_dir(), "repo", "themes", "OKay"),
-        ):
-            if os.path.isdir(sys_theme):
-                try:
-                    shutil.copytree(sys_theme, user_theme_root)
-                except Exception:
-                    pass
-                break
-
-    theme_labwc_dir = os.path.join(user_theme_root, "labwc")
-    theme_ob_dir = os.path.join(user_theme_root, "openbox-3")
-    target_asset_dirs = [labwc_dir, theme_labwc_dir, theme_ob_dir]
-    legacy_theme_root = os.path.join(os.path.expanduser("~"), ".themes", "OKay")
-    if os.path.isdir(legacy_theme_root):
-        target_asset_dirs.extend([
-            os.path.join(legacy_theme_root, "labwc"),
-            os.path.join(legacy_theme_root, "openbox-3"),
-        ])
-
-    # 1. Zapis wektorowych plików SVG (ze stanami -active/-inactive wymaganymi przez labwc)
-    # oraz dopasowanych kształtem masek XBM (fallback gdy labwc nie używa librsvg)
-    svg_map = generate_window_button_svgs(buttons_style, accent_hex)
-    xbm_map = generate_window_button_xbms(buttons_style)
-    for tdir in target_asset_dirs:
-        os.makedirs(tdir, exist_ok=True)
-        for fname, svg_content in svg_map.items():
-            atomic_write_text(os.path.join(tdir, fname), svg_content, mode=0o644)
-        for fname, xbm_content in xbm_map.items():
-            atomic_write_text(os.path.join(tdir, fname), xbm_content, mode=0o644)
-
-    # 2. Parametry geometrii, układu oraz kolorów dla fallbacku XBM
-    hover_accent = compute_hover_hex(accent_hex)
-    if buttons_style == "rectangles":
-        layout = ":iconify,max,close"
-        btn_w, btn_h, btn_sp, hover_radius = 48, 10, 8, 0
-        btn_colors = {
-            "window.active.button.close.unpressed.image.color": "#f38ba8",
-            "window.active.button.close.hover.image.color": "#eba0ac",
-            "window.active.button.max.unpressed.image.color": accent_hex,
-            "window.active.button.max.hover.image.color": hover_accent,
-            "window.active.button.iconify.unpressed.image.color": "#585b70",
-            "window.active.button.iconify.hover.image.color": "#6c7086",
-            "window.inactive.button.close.unpressed.image.color": "#45475a",
-            "window.inactive.button.max.unpressed.image.color": "#45475a",
-            "window.inactive.button.iconify.unpressed.image.color": "#313244",
-        }
-    elif buttons_style == "circles_left":
-        layout = "close,iconify,max:"
-        btn_w, btn_h, btn_sp, hover_radius = 14, 14, 8, 7
-        btn_colors = {
-            "window.active.button.close.unpressed.image.color": "#ff5f56",
-            "window.active.button.close.hover.image.color": "#ff5f56",
-            "window.active.button.max.unpressed.image.color": "#27c93f",
-            "window.active.button.max.hover.image.color": "#27c93f",
-            "window.active.button.iconify.unpressed.image.color": "#ffbd2e",
-            "window.active.button.iconify.hover.image.color": "#ffbd2e",
-            "window.inactive.button.close.unpressed.image.color": "#45475a",
-            "window.inactive.button.max.unpressed.image.color": "#45475a",
-            "window.inactive.button.iconify.unpressed.image.color": "#45475a",
-        }
-    elif buttons_style == "circles_right":
-        layout = ":iconify,max,close"
-        btn_w, btn_h, btn_sp, hover_radius = 14, 14, 8, 7
-        btn_colors = {
-            "window.active.button.close.unpressed.image.color": "#ff5f56",
-            "window.active.button.close.hover.image.color": "#ff5f56",
-            "window.active.button.max.unpressed.image.color": "#27c93f",
-            "window.active.button.max.hover.image.color": "#27c93f",
-            "window.active.button.iconify.unpressed.image.color": "#ffbd2e",
-            "window.active.button.iconify.hover.image.color": "#ffbd2e",
-            "window.inactive.button.close.unpressed.image.color": "#45475a",
-            "window.inactive.button.max.unpressed.image.color": "#45475a",
-            "window.inactive.button.iconify.unpressed.image.color": "#45475a",
-        }
-    else:  # windows
-        layout = ":iconify,max,close"
-        btn_w, btn_h, btn_sp, hover_radius = 30, 22, 2, 4
-        btn_colors = {
-            "window.active.button.close.unpressed.image.color": "#cdd6f4",
-            "window.active.button.close.hover.image.color": "#e81123",
-            "window.active.button.max.unpressed.image.color": "#cdd6f4",
-            "window.active.button.max.hover.image.color": accent_hex,
-            "window.active.button.iconify.unpressed.image.color": "#cdd6f4",
-            "window.active.button.iconify.hover.image.color": "#ffffff",
-            "window.inactive.button.close.unpressed.image.color": "#6c7086",
-            "window.inactive.button.max.unpressed.image.color": "#6c7086",
-            "window.inactive.button.iconify.unpressed.image.color": "#6c7086",
-        }
-
-    # 3. Aktualizacja themerc-override, themerc oraz plików themerc w motywie użytkownika
-    override_path = os.path.join(labwc_dir, "themerc-override")
-    def _patch_decorations(raw_text: str) -> str:
-        text = raw_text
-        reps = [
-            (r"^(window\.cornerRadius:\s*).*$", rf"\g<1>{corner_radius}"),
-            (r"^(window\.titlebar\.layout:\s*).*$", rf"\g<1>{layout}"),
-            (r"^(window\.button\.width:\s*).*$", rf"\g<1>{btn_w}"),
-            (r"^(window\.button\.height:\s*).*$", rf"\g<1>{btn_h}"),
-            (r"^(window\.button\.spacing:\s*).*$", rf"\g<1>{btn_sp}"),
-            (r"^(window\.button\.hover\.bg\.corner-radius:\s*).*$", rf"\g<1>{hover_radius}"),
-        ]
-        for k, v in btn_colors.items():
-            escaped_k = re.escape(k)
-            reps.append((rf"^({escaped_k}:\s*).*$", rf"\g<1>{v}"))
-        for pattern, repl in reps:
-            if re.search(pattern, text, flags=re.MULTILINE):
-                text = re.sub(pattern, repl, text, flags=re.MULTILINE)
-            else:
-                key = pattern.split(r"\s*")[0].lstrip("^").rstrip(":").replace("\\", "")
-                val = repl.rsplit(r">", 1)[-1]
-                text += f"\n{key}: {val}"
-        return text
-
-    merc_paths = [
-        override_path,
-        os.path.join(labwc_dir, "themerc"),
-        os.path.join(theme_labwc_dir, "themerc"),
-        os.path.join(theme_ob_dir, "themerc"),
-    ]
-    if os.path.isdir(legacy_theme_root):
-        merc_paths.extend([
-            os.path.join(legacy_theme_root, "labwc", "themerc"),
-            os.path.join(legacy_theme_root, "openbox-3", "themerc"),
-        ])
-    for merc_path in merc_paths:
-        if os.path.isfile(merc_path):
-            try:
-                with open(merc_path, "r", encoding="utf-8") as f:
-                    cur = f.read()
-                atomic_write_text(merc_path, _patch_decorations(cur), mode=0o644)
-            except Exception:
-                pass
-
-    # 5. Aktualizacja rc.xml
-    rc_file = os.path.join(labwc_dir, "rc.xml")
-    if os.path.isfile(rc_file):
-        try:
-            with open(rc_file, "r", encoding="utf-8") as f:
-                rc_content = f.read()
-            rc_content = re.sub(r"(<cornerRadius>).*?(</cornerRadius>)", rf"\g<1>{corner_radius}\g<2>", rc_content)
-            rc_content = re.sub(r"(<layout>).*?(</layout>)", rf"\g<1>{layout}\g<2>", rc_content)
-            atomic_write_text(rc_file, rc_content, mode=0o644)
-        except Exception:
-            pass
-
-    # 6. Wymuszenie zaokrąglenia wszystkich 4 narożników w aplikacjach GTK3 / GTK4
-    # (w tym trybu .ssd / .solid-csd wymuszonego przez serverDecoration="yes" w labwc)
+    # Wymuszenie zaokrąglenia wszystkich 4 narożników w aplikacjach GTK3 / GTK4
     marker_start = "/* OKAY-DE-CORNERS-START */"
     marker_end = "/* OKAY-DE-CORNERS-END */"
     gtk3_block = (
@@ -1972,7 +1594,7 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         except Exception:
             pass
 
-    # 6b. Synchronizacja zaokrąglenia w fuzzel (~/.config/fuzzel/fuzzel.ini) oraz mako (~/.config/mako/config)
+    # Synchronizacja zaokrąglenia w fuzzel (~/.config/fuzzel/fuzzel.ini) oraz mako (~/.config/mako/config)
     fuzzel_ini = os.path.join(xdg_config_home(), "fuzzel", "fuzzel.ini")
     if os.path.isfile(fuzzel_ini):
         try:
@@ -1999,21 +1621,18 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         except Exception:
             pass
 
-    # 7. Przeładowanie labwc, mako oraz aktualizacja Wayfire (wayfire.ini przeładowuje się automatycznie)
-    wf_btn_order = "close minimize maximize" if buttons_style == "circles_left" else "minimize maximize close"
+    # Aktualizacja Wayfire (~/.config/wayfire.ini przeładowuje się automatycznie) oraz mako
     update_wayfire_section("decoration", {
-        "button_order": wf_btn_order,
+        "button_order": layout,
         "active_color": f"{accent_hex}ff",
     })
     update_wayfire_section("pixdecor", {
-        "button_order": wf_btn_order,
+        "button_order": layout,
         "rounded_corner_radius": str(corner_radius),
         "rounded_corners": "true" if corner_radius > 0 else "false",
         "active_color": f"{accent_hex}ff",
     })
 
-    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("labwc"):
-        run_cmd(["labwc", "--reconfigure"], timeout=4)
     if shutil.which("makoctl"):
         run_cmd(["makoctl", "reload"], timeout=2)
 
@@ -2061,10 +1680,10 @@ def sync_gtk_animations(enabled: bool) -> None:
 def update_system_accent_color(new_accent: str) -> dict:
     """Aktualizuje kolor akcentu w całej przestrzeni użytkownika OKay DE:
     - ~/.config/okay-de/panel.json (klucz accent_color)
-    - ~/.config/labwc/themerc-override (oraz themerc)
+    - ~/.config/wayfire.ini (sekcje [decoration] i [pixdecor])
     - ~/.config/mako/config (border-color, background-color)
     - ~/.config/fuzzel/fuzzel.ini (prompt, match, selection-match, border, background)
-    oraz asynchronicznie przeładowuje kompozytor (labwc --reconfigure) i powiadomienia (makoctl reload).
+    oraz przeładowuje powiadomienia (makoctl reload).
     """
     clean_hex = sanitize_hex_color(new_accent)
     hover_hex = compute_hover_hex(clean_hex)
@@ -2094,118 +1713,10 @@ def update_system_accent_color(new_accent: str) -> dict:
     except Exception:
         pass
 
-    # 2. ~/.config/labwc/themerc-override (oraz themerc)
-    labwc_dir = labwc_config_dir()
-    os.makedirs(labwc_dir, exist_ok=True)
-    override_path = os.path.join(labwc_dir, "themerc-override")
-
-    def _patch_themerc_content(raw_text: str) -> str:
-        replacements = [
-            (r"^(window\.active\.border\.color:\s*).*$", rf"\g<1>{clean_hex}"),
-            (r"^(window\.active\.title\.bg\.color:\s*).*$", rf"\g<1>{title_bg}"),
-            (r"^(window\.active\.button\.max\.unpressed\.image\.color:\s*).*$", rf"\g<1>{clean_hex}"),
-            (r"^(window\.active\.button\.max\.hover\.image\.color:\s*).*$", rf"\g<1>{hover_hex}"),
-            (r"^(window\.inactive\.button\.max\.hover\.image\.color:\s*).*$", rf"\g<1>{clean_hex}"),
-            (r"^(menu\.border\.color:\s*).*$", rf"\g<1>{clean_hex}"),
-            (r"^(menu\.items\.bg\.color:\s*).*$", rf"\g<1>{title_bg}"),
-            (r"^(menu\.items\.active\.bg\.color:\s*).*$", rf"\g<1>{clean_hex}"),
-            (r"^(menu\.items\.active\.text\.color:\s*).*$", rf"\g<1>{contrast_text}"),
-        ]
-        text = raw_text
-        for pattern, repl in replacements:
-            if re.search(pattern, text, flags=re.MULTILINE):
-                text = re.sub(pattern, repl, text, flags=re.MULTILINE)
-            else:
-                key = pattern.split(r"\s*")[0].lstrip("^").rstrip(":")
-                val = repl.rsplit(r">", 1)[-1]
-                text += f"\n{key}: {val}"
-        return text
-
-    existing_themerc = ""
-    if os.path.isfile(override_path):
-        try:
-            with open(override_path, "r", encoding="utf-8") as f:
-                existing_themerc = f.read()
-        except Exception:
-            existing_themerc = ""
-    if not existing_themerc:
-        src = labwc_template_file("themerc-override") or labwc_template_file("themerc")
-        if src and os.path.isfile(src):
-            try:
-                with open(src, "r", encoding="utf-8") as f:
-                    existing_themerc = f.read()
-            except Exception:
-                existing_themerc = ""
-
-    if existing_themerc:
-        updated_themerc = _patch_themerc_content(existing_themerc)
-    else:
-        updated_themerc = (
-            "# OKay DE - Labwc Theme Override\n"
-            "window.cornerRadius: 0\n"
-            "window.titlebar.layout: :iconify,max,close\n"
-            "window.button.width: 48\n"
-            "window.button.height: 10\n"
-            "window.button.spacing: 8\n"
-            "border.width: 2\n"
-            f"window.active.border.color: {clean_hex}\n"
-            "window.inactive.border.color: #313244\n"
-            "titlebar.height: 30\n"
-            "window.titlebar.padding: 4\n"
-            "window.titlebar.padding.width: 10\n"
-            "window.titlebar.padding.height: 10\n"
-            f"window.active.title.bg.color: {title_bg}\n"
-            "window.inactive.title.bg.color: #181825\n"
-            "window.active.label.text.color: transparent\n"
-            "window.inactive.label.text.color: transparent\n"
-            "window.active.button.close.unpressed.image.color: #f38ba8\n"
-            "window.active.button.close.hover.image.color: #eba0ac\n"
-            "window.inactive.button.close.unpressed.image.color: #45475a\n"
-            "window.inactive.button.close.hover.image.color: #f38ba8\n"
-            f"window.active.button.max.unpressed.image.color: {clean_hex}\n"
-            f"window.active.button.max.hover.image.color: {hover_hex}\n"
-            "window.inactive.button.max.unpressed.image.color: #45475a\n"
-            f"window.inactive.button.max.hover.image.color: {clean_hex}\n"
-            "window.active.button.iconify.unpressed.image.color: #585b70\n"
-            "window.active.button.iconify.hover.image.color: #6c7086\n"
-            "window.inactive.button.iconify.unpressed.image.color: #313244\n"
-            "window.inactive.button.iconify.hover.image.color: #585b70\n"
-            "menu.border.width: 1\n"
-            f"menu.border.color: {clean_hex}\n"
-            f"menu.items.bg.color: {title_bg}\n"
-            "menu.items.text.color: #cdd6f4\n"
-            f"menu.items.active.bg.color: {clean_hex}\n"
-            f"menu.items.active.text.color: {contrast_text}\n"
-        )
-    try:
-        atomic_write_text(override_path, updated_themerc, mode=0o644)
-        notes.append("themerc-override")
-    except Exception:
-        pass
-
+    # 2. ~/.config/wayfire.ini
     if update_wayfire_section("decoration", {"active_color": f"{clean_hex}ff"}) and update_wayfire_section("pixdecor", {"active_color": f"{clean_hex}ff", "fg_color": f"{title_bg}ff"}):
         notes.append("wayfire.ini")
 
-    user_themerc = os.path.join(labwc_dir, "themerc")
-    if os.path.isfile(user_themerc):
-        try:
-            with open(user_themerc, "r", encoding="utf-8") as f:
-                t_raw = f.read()
-            atomic_write_text(user_themerc, _patch_themerc_content(t_raw), mode=0o644)
-        except Exception:
-            pass
-
-    for theme_sub in ("labwc", "openbox-3"):
-        theme_rc = os.path.join(xdg_data_home(), "themes", "OKay", theme_sub, "themerc")
-        if os.path.isfile(theme_rc):
-            try:
-                with open(theme_rc, "r", encoding="utf-8") as f:
-                    tr_raw = f.read()
-                atomic_write_text(theme_rc, _patch_themerc_content(tr_raw), mode=0o644)
-            except Exception:
-                pass
-
-    # Synchronizacja wektorowych przycisków okna labwc z nowym kolorem akcentu
     try:
         apply_window_decorations(buttons_style=cur_btn_style, corner_radius=cur_radius, accent_hex=clean_hex)
         notes.append("decorations")

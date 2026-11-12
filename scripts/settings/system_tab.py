@@ -130,7 +130,7 @@ class SystemTab(Gtk.Box):
             if self.parent_window is not None and hasattr(self.parent_window, "refresh_after_update"):
                 self.parent_window.refresh_after_update()
             self.lbl_upd_status.set_text(
-                "Aktualizacja zainstalowana w ~/.local (konfiguracja zachowana). Przeładowano labwc i okay-panel."
+                "Aktualizacja zainstalowana w ~/.local (konfiguracja zachowana). Odświeżono sesję Wayfire (okay-panel, okay-desktop)."
             )
 
         def _err(exc):

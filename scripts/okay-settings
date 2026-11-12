@@ -93,7 +93,7 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
         self.set_size_request(760, 500)
         self.set_position(Gtk.WindowPosition.CENTER)
 
-        # Inicjalizacja ~/.config/okay-de i ~/.config/labwc z szablonów systemowych (read-only)
+        # Inicjalizacja ~/.config/okay-de i ~/.config/wayfire.ini z szablonów systemowych (read-only)
         ensure_user_configs()
         apply_settings_css()
 

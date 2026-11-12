@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# OKay DE - Skrypt autostartu sesji kompozytora labwc
+# OKay DE - Skrypt autostartu sesji środowiska (Wayfire)
 
 # 0. Zapewnienie pełnej ścieżki PATH oraz spójnego ciemnego motywu sesji (GTK / ikony / kursor)
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"

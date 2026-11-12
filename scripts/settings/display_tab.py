@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Zakładka „Monitory” (wlr-randr dla Wayland / labwc) w GTK3.
+Zakładka „Monitory” (wlr-randr dla Wayland / Wayfire) w GTK3.
 Obsługuje zarówno wyjście JSON (`wlr-randr --json`), jak i standardowe wyjście tekstowe.
 """
 

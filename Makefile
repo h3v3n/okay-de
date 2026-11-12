@@ -16,6 +16,7 @@ install:
 	install -m 755 scripts/okay-volume $(DESTDIR)$(PREFIX)/bin/okay-volume
 	install -m 755 scripts/okay-brightness $(DESTDIR)$(PREFIX)/bin/okay-brightness
 	install -m 755 scripts/okay-panel $(DESTDIR)$(PREFIX)/bin/okay-panel
+	install -m 755 scripts/okay-desktop $(DESTDIR)$(PREFIX)/bin/okay-desktop
 
 	# Moduły centrum sterowania OKay Settings oraz aplety panelu OKay Panel (GTK3)
 	install -d $(DESTDIR)$(PREFIX)/share/okay-de/settings $(DESTDIR)$(PREFIX)/share/okay-de/panel
@@ -38,32 +39,42 @@ install:
 		fi \
 	done
 
-	# Domyślne ikony pulpitu dla nowych kont (/etc/skel/Desktop)
-	install -d $(DESTDIR)/etc/skel/Desktop
+	# Domyślne ikony pulpitu i konfiguracja dla nowych kont (/etc/skel)
+	install -d $(DESTDIR)/etc/skel/Desktop \
+		$(DESTDIR)/etc/skel/.config/okay-de \
+		$(DESTDIR)/etc/skel/.config/foot \
+		$(DESTDIR)/etc/skel/.config/fuzzel \
+		$(DESTDIR)/etc/skel/.config/mako \
+		$(DESTDIR)/etc/skel/.config/gtk-3.0 \
+		$(DESTDIR)/etc/skel/.config/gtk-4.0 \
+		$(DESTDIR)/etc/skel/.config/pcmanfm/default
 	install -m 644 sessions/foot.desktop $(DESTDIR)/etc/skel/Desktop/foot.desktop
 	install -m 644 sessions/pcmanfm.desktop $(DESTDIR)/etc/skel/Desktop/pcmanfm.desktop
 	install -m 644 sessions/okay-settings.desktop $(DESTDIR)/etc/skel/Desktop/okay-settings.desktop
+	install -m 644 config/wayfire/wayfire.ini $(DESTDIR)/etc/skel/.config/wayfire.ini
+	install -m 755 config/okay-de/autostart $(DESTDIR)/etc/skel/.config/okay-de/autostart
+	install -m 644 config/okay-de/panel.json $(DESTDIR)/etc/skel/.config/okay-de/panel.json
+	install -m 644 config/foot/foot.ini $(DESTDIR)/etc/skel/.config/foot/foot.ini
+	install -m 644 config/fuzzel/fuzzel.ini $(DESTDIR)/etc/skel/.config/fuzzel/fuzzel.ini
+	install -m 644 config/mako/config $(DESTDIR)/etc/skel/.config/mako/config
+	install -m 644 config/gtk-3.0/settings.ini $(DESTDIR)/etc/skel/.config/gtk-3.0/settings.ini
+	install -m 644 config/gtk-4.0/settings.ini $(DESTDIR)/etc/skel/.config/gtk-4.0/settings.ini
+	install -m 644 config/pcmanfm/default/desktop-items-0.conf $(DESTDIR)/etc/skel/.config/pcmanfm/default/desktop-items-0.conf
+	install -m 644 config/pcmanfm/default/pcmanfm.conf $(DESTDIR)/etc/skel/.config/pcmanfm/default/pcmanfm.conf
 
 	# Domyślna tapeta Catppuccin Mocha
 	install -d $(DESTDIR)$(PREFIX)/share/backgrounds/okay-de
 	install -m 644 backgrounds/default.png $(DESTDIR)$(PREFIX)/share/backgrounds/okay-de/default.png
 
-	# Domyślny motyw graficzny OKay dla kompozytora labwc / Openbox (belki i przyciski SSD)
-	install -d $(DESTDIR)$(PREFIX)/share/themes/OKay/labwc
-	install -m 644 themes/OKay/labwc/* $(DESTDIR)$(PREFIX)/share/themes/OKay/labwc/
-	install -d $(DESTDIR)$(PREFIX)/share/themes/OKay/openbox-3
-	install -m 644 themes/OKay/openbox-3/* $(DESTDIR)$(PREFIX)/share/themes/OKay/openbox-3/
+	# Usunięcie pozostałości konfiguracji przestarzałego kompozytora labwc
+	rm -rf $(DESTDIR)/etc/xdg/labwc \
+		$(DESTDIR)$(PREFIX)/share/okay-de/defaults/labwc \
+		$(DESTDIR)$(PREFIX)/share/themes/OKay/labwc \
+		$(DESTDIR)$(PREFIX)/share/themes/OKay/openbox-3
 
-	# Domyślne konfiguracje systemowe XDG i maski przycisków XBM / SVG
-	install -d $(DESTDIR)/etc/xdg/labwc
-	install -m 644 config/labwc/environment $(DESTDIR)/etc/xdg/labwc/environment
-	install -m 644 config/labwc/rc.xml $(DESTDIR)/etc/xdg/labwc/rc.xml
-	install -m 644 config/labwc/menu.xml $(DESTDIR)/etc/xdg/labwc/menu.xml
-	install -m 644 config/labwc/themerc $(DESTDIR)/etc/xdg/labwc/themerc
-	install -m 644 config/labwc/themerc-override $(DESTDIR)/etc/xdg/labwc/themerc-override
-	install -m 644 config/labwc/*.xbm $(DESTDIR)/etc/xdg/labwc/
-	install -m 644 config/labwc/*.svg $(DESTDIR)/etc/xdg/labwc/
-	install -m 755 config/labwc/autostart $(DESTDIR)/etc/xdg/labwc/autostart
+	# Domyślne konfiguracje systemowe XDG i kompozytora Wayfire
+	install -d $(DESTDIR)/etc/xdg
+	install -m 644 config/wayfire/wayfire.ini $(DESTDIR)/etc/xdg/wayfire.ini
 
 	install -d $(DESTDIR)/etc/xdg/foot
 	install -m 644 config/foot/foot.ini $(DESTDIR)/etc/xdg/foot/foot.ini
@@ -84,13 +95,20 @@ install:
 	install -m 644 config/pcmanfm/default/desktop-items-0.conf $(DESTDIR)/etc/xdg/pcmanfm/default/desktop-items-0.conf
 	install -m 644 config/pcmanfm/default/pcmanfm.conf $(DESTDIR)/etc/xdg/pcmanfm/default/pcmanfm.conf
 
-	# Konfiguracja zunifikowanego paska zadań OKay DE i szablony read-only
-	install -d $(DESTDIR)/etc/xdg/okay-de $(DESTDIR)/etc/okay-de
+	# Konfiguracja OKay DE, kompozytora Wayfire oraz szablony read-only
+	install -d $(DESTDIR)/etc/xdg/okay-de $(DESTDIR)/etc/okay-de \
+		$(DESTDIR)$(PREFIX)/share/okay-de/defaults/okay-de \
+		$(DESTDIR)$(PREFIX)/share/okay-de/defaults/wayfire \
+		$(DESTDIR)$(PREFIX)/share/okay-de/defaults/backgrounds
 	install -m 644 config/okay-de/panel.json $(DESTDIR)/etc/xdg/okay-de/panel.json
 	install -m 644 config/okay-de/panel.json $(DESTDIR)/etc/okay-de/panel.json
-	install -d $(DESTDIR)$(PREFIX)/share/okay-de/defaults/okay-de $(DESTDIR)$(PREFIX)/share/okay-de/defaults/labwc $(DESTDIR)$(PREFIX)/share/okay-de/defaults/backgrounds
 	install -m 644 config/okay-de/panel.json $(DESTDIR)$(PREFIX)/share/okay-de/defaults/okay-de/panel.json
-	install -m 644 config/labwc/* $(DESTDIR)$(PREFIX)/share/okay-de/defaults/labwc/
+	install -m 755 config/okay-de/autostart $(DESTDIR)/etc/xdg/okay-de/autostart
+	install -m 755 config/okay-de/autostart $(DESTDIR)/etc/okay-de/autostart
+	install -m 755 config/okay-de/autostart $(DESTDIR)$(PREFIX)/share/okay-de/defaults/okay-de/autostart
+	install -m 644 config/wayfire/wayfire.ini $(DESTDIR)/etc/xdg/okay-de/wayfire.ini
+	install -m 644 config/wayfire/wayfire.ini $(DESTDIR)/etc/okay-de/wayfire.ini
+	install -m 644 config/wayfire/wayfire.ini $(DESTDIR)$(PREFIX)/share/okay-de/defaults/wayfire/wayfire.ini
 	install -m 644 backgrounds/default.png $(DESTDIR)$(PREFIX)/share/okay-de/defaults/backgrounds/default.png
 
 	# Reguły uprawnień administracyjnych (Polkit & Sudoers)
@@ -105,6 +123,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-session
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-settings
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-panel
+	rm -f $(DESTDIR)$(PREFIX)/bin/okay-desktop
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-dock
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-powermenu
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-clipboard
@@ -121,6 +140,9 @@ uninstall:
 	rm -rf $(DESTDIR)$(PREFIX)/share/okay-de
 	rm -rf $(DESTDIR)$(PREFIX)/share/themes/OKay
 	rm -rf $(DESTDIR)/etc/skel/Desktop
+	rm -rf $(DESTDIR)/etc/skel/.config/okay-de
+	rm -f $(DESTDIR)/etc/skel/.config/wayfire.ini
+	rm -f $(DESTDIR)/etc/xdg/wayfire.ini
 	rm -rf $(DESTDIR)/etc/xdg/labwc
 	rm -rf $(DESTDIR)/etc/xdg/foot
 	rm -rf $(DESTDIR)/etc/xdg/fuzzel

@@ -13,10 +13,11 @@ if [ "$MODE" = "--system" ]; then
     echo "Instalowanie OKay DE w całym systemie (/etc/xdg, /usr/bin, /usr/local/bin, /usr/share)..."
     make install PREFIX=/usr
 
-    # Instalacja pakietów systemowych dla pełnej obsługi panelu i ustawień GTK3
+    # Instalacja pakietów systemowych (Wayfire jako kompozytor bazowy oraz zależności GTK3/Wayland)
     if command -v pacman >/dev/null 2>&1; then
-        echo "Weryfikacja i instalacja pakietów systemowych (gtk3, gtk-layer-shell, python-gobject, wlr-randr)..."
-        pacman -S --needed --noconfirm gtk3 gtk-layer-shell python-gobject wlr-randr
+        echo "Weryfikacja i instalacja pakietów systemowych (wayfire, gtk3, gtk-layer-shell, python-gobject, wlr-randr)..."
+        pacman -S --needed --noconfirm wayfire swaybg foot fuzzel mako pcmanfm swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber gtk3 gtk-layer-shell python python-gobject wlr-randr xdg-user-dirs papirus-icon-theme adwaita-icon-theme || \
+            pacman -S --needed --noconfirm wayfire gtk3 gtk-layer-shell python-gobject wlr-randr
     fi
 
     # Instalacja reguł uprawnień Polkit i Sudoers dla okay-settings
@@ -30,8 +31,10 @@ if [ "$MODE" = "--system" ]; then
         install -m 440 config/sudoers/99-okay-de /etc/sudoers.d/99-okay-de
     fi
 
-    # Usunięcie pozostałości starych/konfliktujących pasków oraz osieroconych plików poprzednich wersji
+    # Usunięcie pozostałości starych/konfliktujących pasków, przestarzałego labwc oraz osieroconych plików poprzednich wersji
     rm -rf /etc/okay-dock /etc/xdg/sfwbar /etc/xdg/waybar /etc/xdg/okay-de/panel 2>/dev/null || true
+    rm -rf /etc/xdg/labwc /etc/okay-de/labwc /usr/share/okay-de/defaults/labwc /usr/local/share/okay-de/defaults/labwc 2>/dev/null || true
+    rm -rf /usr/share/themes/OKay/labwc /usr/share/themes/OKay/openbox-3 2>/dev/null || true
     rm -rf /usr/share/okay-de/settings /usr/local/share/okay-de/settings /usr/share/okay-de/panel /usr/local/share/okay-de/panel 2>/dev/null || true
     rm -f /usr/local/bin/okay-dock /usr/bin/okay-dock 2>/dev/null || true
     rm -f /usr/bin/okay-settings /usr/local/bin/okay-settings 2>/dev/null || true
@@ -65,14 +68,33 @@ if [ "$MODE" = "--system" ]; then
         install -m 644 scripts/panel/*.py /usr/local/share/okay-de/panel/
     fi
 
-    # Instalacja domyślnej konfiguracji panelu i szablonów systemowych (read-only fallback)
-    install -d /etc/xdg/okay-de /etc/okay-de /usr/share/okay-de/defaults/okay-de /usr/share/okay-de/defaults/labwc /usr/share/okay-de/defaults/wayfire /usr/share/okay-de/defaults/backgrounds
+    # Instalacja domyślnej konfiguracji Wayfire, autostartu, panelu i szablonów systemowych (read-only fallback)
+    install -d /etc/xdg /etc/xdg/okay-de /etc/okay-de /etc/skel/.config/okay-de \
+        /usr/share/okay-de/defaults/okay-de /usr/share/okay-de/defaults/wayfire /usr/share/okay-de/defaults/backgrounds
     install -m 644 config/okay-de/panel.json /etc/xdg/okay-de/panel.json
     install -m 644 config/okay-de/panel.json /etc/okay-de/panel.json
+    install -m 644 config/okay-de/panel.json /etc/skel/.config/okay-de/panel.json
     install -m 644 config/okay-de/panel.json /usr/share/okay-de/defaults/okay-de/panel.json
-    install -m 644 config/labwc/* /usr/share/okay-de/defaults/labwc/ 2>/dev/null || true
-    install -m 644 config/wayfire/wayfire.ini /usr/share/okay-de/defaults/wayfire/wayfire.ini 2>/dev/null || true
-    install -m 644 config/wayfire/wayfire.ini /etc/xdg/okay-de/wayfire.ini 2>/dev/null || true
+    if [ -f config/okay-de/autostart ]; then
+        install -m 755 config/okay-de/autostart /etc/xdg/okay-de/autostart
+        install -m 755 config/okay-de/autostart /etc/okay-de/autostart
+        install -m 755 config/okay-de/autostart /etc/skel/.config/okay-de/autostart
+        install -m 755 config/okay-de/autostart /usr/share/okay-de/defaults/okay-de/autostart
+    fi
+    if [ -f config/wayfire/wayfire.ini ]; then
+        install -m 644 config/wayfire/wayfire.ini /etc/xdg/wayfire.ini
+        install -m 644 config/wayfire/wayfire.ini /etc/xdg/okay-de/wayfire.ini
+        install -m 644 config/wayfire/wayfire.ini /etc/okay-de/wayfire.ini
+        install -m 644 config/wayfire/wayfire.ini /etc/skel/.config/wayfire.ini
+        install -m 644 config/wayfire/wayfire.ini /usr/share/okay-de/defaults/wayfire/wayfire.ini
+        if [ -f /usr/lib/wayfire/libpixdecor.so ] || [ -f /usr/local/lib/wayfire/libpixdecor.so ]; then
+            for wf_target in /etc/xdg/wayfire.ini /etc/xdg/okay-de/wayfire.ini /etc/okay-de/wayfire.ini /etc/skel/.config/wayfire.ini /usr/share/okay-de/defaults/wayfire/wayfire.ini; do
+                if [ -f "$wf_target" ] && grep -qE '^plugins\s*=.*\bdecoration\b' "$wf_target" 2>/dev/null && ! grep -qE '^plugins\s*=.*\bpixdecor\b' "$wf_target" 2>/dev/null; then
+                    sed -i -E 's/(^plugins\s*=.*)\bdecoration\b/\1pixdecor/' "$wf_target" 2>/dev/null || true
+                fi
+            done
+        fi
+    fi
     if [ -f backgrounds/default.png ]; then
         install -m 644 backgrounds/default.png /usr/share/okay-de/defaults/backgrounds/default.png
     fi
@@ -119,7 +141,6 @@ elif [ "$MODE" = "--user" ]; then
     XDG_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}"
     BIN_DIR="$HOME/.local/bin"
     OKAY_CFG_DIR="$XDG_CFG/okay-de"
-    LABWC_CFG_DIR="$XDG_CFG/labwc"
     OKAY_DATA_DIR="$XDG_DATA/okay-de"
 
     echo "Instalowanie OKay DE w przestrzeni użytkownika ($OKAY_CFG_DIR, $BIN_DIR, $OKAY_DATA_DIR)..."
@@ -165,6 +186,7 @@ elif [ "$MODE" = "--user" ]; then
     else
         MISSING_DEPS+=("python3")
     fi
+    command -v wayfire >/dev/null 2>&1 || MISSING_DEPS+=("wayfire")
     command -v wlr-randr >/dev/null 2>&1 || MISSING_DEPS+=("wlr-randr")
     command -v wpctl >/dev/null 2>&1 || MISSING_DEPS+=("wireplumber")
     if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
@@ -177,13 +199,12 @@ elif [ "$MODE" = "--user" ]; then
     fi
 
     # Usunięcie starych konfliktowych konfiguracji wyłącznie w katalogu użytkownika
-    rm -rf "$XDG_CFG/sfwbar" "$XDG_CFG/waybar" "$OKAY_CFG_DIR/panel" 2>/dev/null || true
+    rm -rf "$XDG_CFG/sfwbar" "$XDG_CFG/waybar" "$OKAY_CFG_DIR/panel" "$OKAY_DATA_DIR/defaults/labwc" 2>/dev/null || true
     pkill -9 -x waybar 2>/dev/null || true
     pkill -9 -x sfwbar 2>/dev/null || true
 
     # Tworzenie katalogów docelowych XDG użytkownika
-    mkdir -p "$LABWC_CFG_DIR" \
-             "$XDG_CFG/foot" \
+    mkdir -p "$XDG_CFG/foot" \
              "$XDG_CFG/fuzzel" \
              "$XDG_CFG/mako" \
              "$XDG_CFG/gtk-3.0" \
@@ -194,27 +215,19 @@ elif [ "$MODE" = "--user" ]; then
              "$OKAY_DATA_DIR/settings" \
              "$OKAY_DATA_DIR/panel" \
              "$OKAY_DATA_DIR/defaults/okay-de" \
-             "$OKAY_DATA_DIR/defaults/labwc" \
              "$OKAY_DATA_DIR/defaults/wayfire" \
              "$OKAY_DATA_DIR/defaults/backgrounds" \
              "$XDG_DATA/applications" \
-             "$XDG_DATA/themes" \
              "$HOME/Desktop"
 
-    # Szablony read-only dla pierwszego uruchomienia okay-settings w przestrzeni użytkownika
+    # Szablony read-only dla pierwszego uruchomienia okay-settings oraz sesji Wayfire
     if [ -f config/okay-de/panel.json ]; then
         atomic_copy_file config/okay-de/panel.json "$OKAY_DATA_DIR/defaults/okay-de/panel.json" 644
     fi
-    if [ -d config/labwc ]; then
-        for lf in config/labwc/*; do
-            [ -f "$lf" ] || continue
-            lbase="$(basename "$lf")"
-            if [ "$lbase" = "autostart" ]; then
-                atomic_copy_file "$lf" "$OKAY_DATA_DIR/defaults/labwc/$lbase" 755
-            else
-                atomic_copy_file "$lf" "$OKAY_DATA_DIR/defaults/labwc/$lbase" 644
-            fi
-        done
+    if [ -f config/okay-de/autostart ]; then
+        atomic_copy_file config/okay-de/autostart "$OKAY_DATA_DIR/defaults/okay-de/autostart" 755
+        copy_if_missing config/okay-de/autostart "$OKAY_CFG_DIR/autostart" 755
+        chmod +x "$OKAY_CFG_DIR/autostart" 2>/dev/null || true
     fi
     if [ -f config/wayfire/wayfire.ini ]; then
         atomic_copy_file config/wayfire/wayfire.ini "$OKAY_DATA_DIR/defaults/wayfire/wayfire.ini" 644
@@ -224,10 +237,6 @@ elif [ "$MODE" = "--user" ]; then
                 sed -i -E 's/(^plugins\s*=.*)\bdecoration\b/\1pixdecor/' "$XDG_CFG/wayfire.ini" 2>/dev/null || true
             fi
         fi
-    fi
-    if [ -f config/labwc/autostart ]; then
-        copy_if_missing config/labwc/autostart "$OKAY_CFG_DIR/autostart" 755
-        chmod +x "$OKAY_CFG_DIR/autostart" 2>/dev/null || true
     fi
     if [ -f backgrounds/default.png ]; then
         atomic_copy_file backgrounds/default.png "$OKAY_DATA_DIR/defaults/backgrounds/default.png" 644
@@ -271,35 +280,12 @@ PYEOF
         fi
     fi
 
-    # Konfiguracja ~/.config/labwc: zachowujemy istniejące pliki użytkownika, kopiujemy brakujące i ikony przycisków
-    if [ -d config/labwc ]; then
-        for lf in config/labwc/*; do
-            [ -f "$lf" ] || continue
-            lbase="$(basename "$lf")"
-            case "$lbase" in
-                *.xbm|*.svg)
-                    copy_if_missing "$lf" "$LABWC_CFG_DIR/$lbase" 644
-                    ;;
-                autostart)
-                    copy_if_missing "$lf" "$LABWC_CFG_DIR/$lbase" 755
-                    chmod +x "$LABWC_CFG_DIR/autostart" 2>/dev/null || true
-                    ;;
-                *)
-                    copy_if_missing "$lf" "$LABWC_CFG_DIR/$lbase" 644
-                    ;;
-            esac
-        done
-    fi
-
     copy_dir_missing config/foot "$XDG_CFG/foot" 644
     copy_dir_missing config/fuzzel "$XDG_CFG/fuzzel" 644
     copy_dir_missing config/mako "$XDG_CFG/mako" 644
     copy_dir_missing config/gtk-3.0 "$XDG_CFG/gtk-3.0" 644
     copy_dir_missing config/gtk-4.0 "$XDG_CFG/gtk-4.0" 644
     copy_dir_missing config/pcmanfm "$XDG_CFG/pcmanfm" 644
-    if [ ! -d "$XDG_DATA/themes/OKay" ]; then
-        cp -r themes/* "$XDG_DATA/themes/" 2>/dev/null || true
-    fi
 
     # Domyślna tapeta użytkownika (tylko jeśli nie istnieje)
     copy_if_missing backgrounds/default.png "$OKAY_CFG_DIR/wallpaper.png" 644
@@ -352,14 +338,9 @@ PYEOF
     fi
     rm -f "$XDG_CACHE/fuzzel" 2>/dev/null || true
 
-    # Migracja istniejącego autostart/rc.xml użytkownika dla okay-desktop
-    for as_file in "$OKAY_CFG_DIR/autostart" "$LABWC_CFG_DIR/autostart"; do
-        if [ -f "$as_file" ] && ! grep -q "okay-desktop" "$as_file" 2>/dev/null; then
-            printf '\n# Natywny pulpit OKay DE\n(\n    sleep 0.3\n    DESKTOP_LOG="${XDG_RUNTIME_DIR:-/tmp}/okay-desktop.log"\n    if [ -x "$HOME/.local/bin/okay-desktop" ]; then\n        "$HOME/.local/bin/okay-desktop" > "$DESKTOP_LOG" 2>&1 &\n    elif command -v okay-desktop >/dev/null 2>&1; then\n        okay-desktop > "$DESKTOP_LOG" 2>&1 &\n    fi\n) &\n' >> "$as_file"
-        fi
-    done
-    if [ -f "$LABWC_CFG_DIR/rc.xml" ] && ! grep -q 'identifier="okay-desktop"' "$LABWC_CFG_DIR/rc.xml" 2>/dev/null; then
-        sed -i 's|<windowRule identifier="okay-panel" serverDecoration="no" />|<windowRule identifier="okay-panel" serverDecoration="no" />\n    <windowRule identifier="okay-desktop" serverDecoration="no" />|' "$LABWC_CFG_DIR/rc.xml" 2>/dev/null || true
+    # Migracja istniejącego autostartu użytkownika dla okay-desktop
+    if [ -f "$OKAY_CFG_DIR/autostart" ] && ! grep -q "okay-desktop" "$OKAY_CFG_DIR/autostart" 2>/dev/null; then
+        printf '\n# Natywny pulpit OKay DE\n(\n    sleep 0.3\n    DESKTOP_LOG="${XDG_RUNTIME_DIR:-/tmp}/okay-desktop.log"\n    if [ -x "$HOME/.local/bin/okay-desktop" ]; then\n        "$HOME/.local/bin/okay-desktop" > "$DESKTOP_LOG" 2>&1 &\n    elif command -v okay-desktop >/dev/null 2>&1; then\n        okay-desktop > "$DESKTOP_LOG" 2>&1 &\n    fi\n) &\n' >> "$OKAY_CFG_DIR/autostart"
     fi
 
     # Czyszczenie przestarzałych plików okay-dock (bez ubijania aktywnego okay-settings w trakcie aktualizacji)
@@ -385,11 +366,8 @@ PYEOF
     mv -f "$TMP_VER" "$OKAY_CFG_DIR/version"
     atomic_copy_file "$OKAY_CFG_DIR/version" "$OKAY_DATA_DIR/defaults/version" 644
 
-    # Przeładowanie sesji Wayland bez błędu (labwc --reconfigure oraz restart okay-panel)
+    # Przeładowanie sesji Wayfire bez błędu (restart okay-panel i okay-desktop)
     if [ "${OKAY_DE_SKIP_RELOAD:-0}" != "1" ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-        if command -v labwc >/dev/null 2>&1 && pgrep -u "$(id -u)" -x labwc >/dev/null 2>&1; then
-            labwc --reconfigure >/dev/null 2>&1 || true
-        fi
         if [ -x "$BIN_DIR/okay-panel" ]; then
             nohup "$BIN_DIR/okay-panel" --restart </dev/null >/dev/null 2>&1 &
         elif command -v okay-panel >/dev/null 2>&1; then

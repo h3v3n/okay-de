@@ -1,13 +1,13 @@
 # Maintainer: Zespół OKsavi Linux <dev@oksavi.org>
 pkgname=okay-de
-pkgver=1.0.0
+pkgver=1.1.0
 pkgrel=1
-pkgdesc="Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla OKsavi Linux oparte na labwc"
+pkgdesc="Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla OKsavi Linux oparte na Wayfire"
 arch=('any')
-url="https://github.com/oksavi/okay-de"
+url="https://github.com/h3v3n/okay-de"
 license=('GPL-3.0-or-later')
 depends=(
-    'labwc'
+    'wayfire'
     'swaybg'
     'pcmanfm'
     'fuzzel'
@@ -31,6 +31,8 @@ depends=(
     'wlr-randr'
 )
 optdepends=(
+    'pixdecor: zaokrąglone narożniki okien i rozszerzone dekoracje SSD dla Wayfire (z AUR)'
+    'wayfire-plugins-extra: dodatkowe efekty i wtyczki dla Wayfire (z AUR)'
     'wlrctl: opcjonalne narzędzie CLI dla wlroots (z AUR)'
     'pavucontrol: zaawansowany mikser dźwięku dla PipeWire'
     'networkmanager: zarządzanie połączeniami Wi-Fi i sieciowymi w okay-settings'

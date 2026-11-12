@@ -136,7 +136,7 @@ class PanelTab(Gtk.Box):
         card_accent, box_accent = make_card("Kolor akcentu i motywu systemu")
 
         lbl_accent_desc = Gtk.Label(
-            label="Zmienia kolor wiodący w całym środowisku graficznym: ramki okien labwc, "
+            label="Zmienia kolor wiodący w całym środowisku graficznym: dekoracje okien Wayfire, "
                   "kontur i podświetlenia taskbara / docka, przycisk menu oraz powiadomienia mako.",
             xalign=0.0
         )
@@ -377,7 +377,7 @@ class PanelTab(Gtk.Box):
 
         def _on_done(_res):
             self.lbl_status.set_text(
-                f"Zastosowano kolor akcentu: {clean} (zaktualizowano ramki labwc, pasek zadań/dock, mako, fuzzel)."
+                f"Zastosowano kolor akcentu: {clean} (zaktualizowano Wayfire, pasek zadań/dock, mako, fuzzel)."
             )
 
         def _on_err(exc):
@@ -424,7 +424,7 @@ class PanelTab(Gtk.Box):
 
         def _on_done(_res):
             self.lbl_status.set_text(
-                f"Zastosowano styl okien (przyciski={btn_style}, zaokrąglenie={corner_radius}px). Przeładowano labwc."
+                f"Zastosowano styl okien (przyciski={btn_style}, zaokrąglenie={corner_radius}px). Zaktualizowano Wayfire."
             )
 
         def _on_err(exc):
