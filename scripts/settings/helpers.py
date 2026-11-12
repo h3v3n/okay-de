@@ -466,19 +466,6 @@ class SystemHelper:
                 pass
         return "Nieznana"
 
-    @staticmethod
-    def get_zram_status() -> str:
-        zram_disksize = "/sys/block/zram0/disksize"
-        if os.path.exists(zram_disksize):
-            try:
-                with open(zram_disksize, "r", encoding="utf-8") as f:
-                    size_bytes = int(f.read().strip())
-                if size_bytes > 0:
-                    return f"Aktywny ({size_bytes / (1024 * 1024):.0f} MiB)"
-            except Exception:
-                pass
-        return "Brak aktywnego zram0"
-
 
 class UpdateManager:
     """Zarządza sprawdzaniem i instalacją aktualizacji OKay DE z GitHub."""

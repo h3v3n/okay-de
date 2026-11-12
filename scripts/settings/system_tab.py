@@ -2,7 +2,7 @@
 
 """
 Zakładka „System i Aktualizacje” w GTK3.
-Prezentuje informacje o sprzęcie/zRAM oraz umożliwia aktualizację OKay DE z GitHub.
+Prezentuje informacje o sprzęcie oraz umożliwia aktualizację OKay DE z GitHub.
 """
 
 from gi.repository import Gtk
@@ -44,7 +44,6 @@ class SystemTab(Gtk.Box):
             ("Jądro Linux", SystemHelper.get_kernel_release()),
             ("Procesor", SystemHelper.get_cpu_info()),
             ("Pamięć operacyjna", SystemHelper.get_memory_info()),
-            ("Pamięć zRAM", SystemHelper.get_zram_status()),
         ]
         for label, val in rows:
             lbl_val = Gtk.Label(label=val, xalign=1.0)

@@ -179,7 +179,7 @@ if not HAS_LAYER_SHELL:
         subprocess.run(["notify-send", "-u", "critical", "OKay DE", "Brak pakietu gtk-layer-shell! Zainstaluj: sudo pacman -S gtk-layer-shell"], check=False)
     sys.exit(1)
 
-# Rozwiązanie ścieżki modularnych widżetów panelu (`panel/`: SNI, Quick Settings, Ghost Runner)
+# Rozwiązanie ścieżki modularnych widżetów panelu (`panel/`: SNI, Quick Settings)
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 for _candidate in (
     _SCRIPT_DIR,
@@ -190,7 +190,7 @@ for _candidate in (
     if os.path.isdir(os.path.join(_candidate, "panel")) and _candidate not in sys.path:
         sys.path.insert(0, _candidate)
 
-from panel import StatusNotifierTray, QuickSettingsPopover, GhostRunnerIndicator
+from panel import StatusNotifierTray, QuickSettingsPopover
 
 
 # ============================================================================
@@ -291,7 +291,7 @@ button:hover {
     margin-left: 6px;
 }
 
-/* Prawa strona panelu: Tray (SNI), Ghost Runner, Sieć, Bateria, Głośność, Zegar */
+/* Prawa strona panelu: Tray (SNI), Sieć, Bateria, Głośność, Zegar */
 .status-item, .tray-item {
     padding: 0 7px;
     margin: 0 1px;
@@ -300,17 +300,6 @@ button:hover {
 
 .status-item:hover, .tray-item:hover {
     background-color: #313244;
-}
-
-.ghost-pill {
-    color: #a6adc8;
-    font-weight: bold;
-}
-
-.ghost-pill.ghost-active {
-    background-color: rgba(0, 230, 118, 0.16);
-    color: #00e676;
-    border-bottom: 2px solid #00e676;
 }
 
 #clock-button {
@@ -352,8 +341,8 @@ menuitem:hover {
     color: #11111b;
 }
 
-/* Quick Settings Popover & Ghost Runner Popover (Catppuccin Mocha #1e1e2e + #00e676) */
-window#okay-quick-settings, window#okay-ghost-popover {
+/* Quick Settings Popover (Catppuccin Mocha #1e1e2e + #00e676) */
+window#okay-quick-settings {
     background-color: #1e1e2e;
     color: #cdd6f4;
 }
@@ -795,7 +784,7 @@ class AppHelper:
 
 class WaylandToplevelClient:
     """Natywny klient protokołu Wayland zwlr_foreign_toplevel_manager_v1 (zero zależności zewnętrznych)."""
-    IGNORED_APP_IDS = {"okay-panel", "okay-quick-settings", "okay-ghost-popover", "okay-dock", "fuzzel", "mako", "waybar", "sfwbar"}
+    IGNORED_APP_IDS = {"okay-panel", "okay-quick-settings", "okay-dock", "fuzzel", "mako", "waybar", "sfwbar"}
 
     DISPLAY_ID = 1
     REGISTRY_ID = 2
@@ -1393,18 +1382,12 @@ class OkayPanel(Gtk.Window):
         return str(self.panel_config.get("position", "bottom")).lower()
 
     def _toggle_quick_settings(self, *_args):
-        if hasattr(self, "ghost_widget") and self.ghost_widget._popover.get_visible():
-            self.ghost_widget._popover.hide()
         if self._quick_settings is None:
             self._quick_settings = QuickSettingsPopover(
                 self._get_panel_pos,
                 on_volume_changed_cb=lambda: GLib.timeout_add(120, lambda: (self._vol_wake.set(), False)[1])
             )
         self._quick_settings.toggle()
-
-    def _on_ghost_clicked(self, *_args):
-        if self._quick_settings is not None and self._quick_settings.get_visible():
-            self._quick_settings.hide_popover()
 
     def _build_right_section(self):
         # 1. Pokaż pulpit (skrajnie po prawej)
@@ -1459,11 +1442,7 @@ class OkayPanel(Gtk.Window):
         self.box_battery.pack_start(self.lbl_battery, False, False, 0)
         self.right_box.pack_end(self.box_battery, False, False, 0)
 
-        # 6. Widżet oksavi-ghost-runner (liczba zamrożonych slice'ów cgroups v2 + popover odmrażania)
-        self.ghost_widget = GhostRunnerIndicator(self._get_panel_pos, on_open_cb=self._on_ghost_clicked)
-        self.right_box.pack_end(self.ghost_widget, False, False, 0)
-
-        # 7. Tacka systemowa SNI (StatusNotifierWatcher + Host)
+        # 6. Tacka systemowa SNI (StatusNotifierWatcher + Host)
         self.sni_tray = StatusNotifierTray(self._get_panel_pos)
         self.right_box.pack_end(self.sni_tray, False, False, 4)
 

@@ -224,7 +224,7 @@ elif [ "$MODE" = "--user" ]; then
 
     # Całkowite usunięcie pozostałości starego paska docka (okay-dock) i instancji starego okay-settings
     rm -rf "$HOME/.config/okay-dock" 2>/dev/null || true
-    rm -f "$HOME/.local/bin/okay-dock" 2>/dev/null || true
+    rm -f "$HOME/.local/bin/okay-dock" "$HOME/.local/bin/oksavi-ghost-runner" 2>/dev/null || true
     pkill -9 -x okay-dock 2>/dev/null || true
     pkill -9 -x okay-settings 2>/dev/null || true
 

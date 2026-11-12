@@ -32,7 +32,6 @@ depends=(
 )
 optdepends=(
     'wlrctl: opcjonalne narzędzie CLI dla wlroots (z AUR)'
-    'util-linux: obsługa zramctl dla zarządcy pamięci oksavi-ghost-runner'
     'pavucontrol: zaawansowany mikser dźwięku dla PipeWire'
     'networkmanager: zarządzanie połączeniami Wi-Fi i sieciowymi w okay-settings'
     'whitesur-icon-theme: alternatywny minimalistyczny motyw ikon'

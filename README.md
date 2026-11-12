@@ -17,7 +17,7 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
   - **Mysz i Touchpad:** Prędkość wskaźnika, tap-to-click i naturalne przewijanie w `~/.config/labwc/rc.xml` (`labwc --reconfigure`).
   - **Dźwięk:** Regulacja głośności i wybór urządzeń wejścia/wyjścia PipeWire (`wpctl`).
   - **Pulpit i Panel:** Tryb „Tylko ikony”, pozycja panelu (`~/.config/okay-de/panel.json`) oraz tapeta pulpitu (`swaybg`).
-  - **System i Aktualizacje:** Specyfikacja sprzętu / zRAM i aktualizacje OKay DE bezpośrednio z GitHub (`h3v3n/okay-de`).
+  - **System i Aktualizacje:** Specyfikacja sprzętu i aktualizacje OKay DE bezpośrednio z GitHub (`h3v3n/okay-de`).
 - **Architektura Server-Side Decorations (SSD):** Belka kompozytora `labwc` o wysokości 30px (`titlebar.height: 30`) stanowi nadrzędną ramkę na zewnątrz każdego okna. Dzięki zmiennym sesyjnym `GTK_CSD=0` oraz `QT_WAYLAND_DISABLE_WINDOWDECORATION=0` aplikacje GTK3/GTK4 i Qt nie wstrzykują przycisków sterowania do pasków zakładek i nagłówków.
 - **Dekoracje okien:** Trzy spłaszczone, panoramiczne prostokąty (48x10px) w układzie `:iconify,max,close` z zaokrągleniem narożników `8px` (`cornerRadius: 8`) bez wyświetlania nazwy okna (`showTitle: no`). Lewy przycisk minimalizuje okno, środkowy maksymalizuje, a prawy zamyka program.
 - **Tapeta i tło pulpitu (`swaybg`):** Demon tapety Wayland z bezpieczną kaskadą: tapeta użytkownika (`~/.config/okay-de/wallpaper.png`) -> tapeta systemowa (`/usr/share/backgrounds/okay-de/default.png`) -> awaryjny kolor bazowy Catppuccin Mocha (`#1e1e2e`).
@@ -44,7 +44,6 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 | **Zrzuty ekranu** | `okay-screenshot` | `grim` + `slurp` do schowka, pliku i z powiadomieniem |
 | **Menedżer schowka** | `okay-clipboard` | `cliphist` + `fuzzel` + `wl-clipboard` (tekst i obrazy) |
 | **Blokada ekranu** | `okay-lock` | Estetyczny `swaylock` w motywie Catppuccin Mocha |
-| **Zarządzanie zasobami**| `oksavi-ghost-runner` | Optymalizacja pamięci (cgroups v2 + zRAM) |
 
 ---
 

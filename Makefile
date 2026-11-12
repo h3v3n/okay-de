@@ -16,7 +16,6 @@ install:
 	install -m 755 scripts/okay-volume $(DESTDIR)$(PREFIX)/bin/okay-volume
 	install -m 755 scripts/okay-brightness $(DESTDIR)$(PREFIX)/bin/okay-brightness
 	install -m 755 scripts/okay-panel $(DESTDIR)$(PREFIX)/bin/okay-panel
-	install -m 755 scripts/oksavi-ghost-runner $(DESTDIR)$(PREFIX)/bin/oksavi-ghost-runner
 
 	# Moduły centrum sterowania OKay Settings oraz aplety panelu OKay Panel (GTK3)
 	install -d $(DESTDIR)$(PREFIX)/share/okay-de/settings $(DESTDIR)$(PREFIX)/share/okay-de/panel
@@ -108,7 +107,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-lock
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-volume
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-brightness
-	rm -f $(DESTDIR)$(PREFIX)/bin/oksavi-ghost-runner
 	rm -f $(DESTDIR)$(PREFIX)/share/wayland-sessions/okay-de.desktop
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/okay-settings.desktop
 	rm -f $(DESTDIR)$(PREFIX)/share/applications/okay-dock.desktop
