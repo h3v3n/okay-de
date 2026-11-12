@@ -381,9 +381,41 @@ entry:focus {
     border-color: __ACCENT__;
 }
 
-combobox menuitem {
-    font-size: 12.5px;
+menu,
+combobox menu,
+combobox window menu {
+    background-color: #181825;
+    background-image: none;
     color: #cdd6f4;
+    border: 1px solid rgba(__ACCENT_RGB__, 0.45);
+    border-radius: 6px;
+    padding: 4px 0;
+}
+
+menu menuitem,
+combobox menuitem {
+    background-color: transparent;
+    background-image: none;
+    color: #cdd6f4;
+    padding: 6px 12px;
+    font-size: 12.5px;
+}
+
+menu menuitem label,
+combobox menuitem label,
+combobox cellview {
+    color: #cdd6f4;
+}
+
+menu menuitem:hover,
+combobox menuitem:hover {
+    background-color: rgba(__ACCENT_RGB__, 0.22);
+    color: #ffffff;
+}
+
+menu menuitem:hover label,
+combobox menuitem:hover label {
+    color: #ffffff;
 }
 
 .settings-sidebar row,
@@ -1448,23 +1480,23 @@ def generate_window_button_svgs(style: str, accent_hex: str) -> dict:
         }
     elif style in ("circles_left", "circles_right"):
         return {
-            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#f38ba8" /></svg>\n',
-            "close_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ed6a5e" /><path d="M4.5 4.5 L9.5 9.5 M9.5 4.5 L4.5 9.5" stroke="#4c0000" stroke-width="1.2" stroke-linecap="round" /></svg>\n',
-            "max.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="{accent}" /></svg>\n',
-            "max_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="{hover_accent}" /><path d="M4.5 4.5 L7.5 4.5 L4.5 7.5 Z M9.5 9.5 L6.5 9.5 L9.5 6.5 Z" fill="#11111b" /></svg>\n',
-            "max_toggled.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="{accent}" /></svg>\n',
-            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#f9e2af" /></svg>\n',
-            "iconify_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#f5c359" /><line x1="4.5" y1="7" x2="9.5" y2="7" stroke="#4a3a00" stroke-width="1.2" stroke-linecap="round" /></svg>\n',
+            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ff5f56" /></svg>\n',
+            "close_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ff5f56" /><path d="M4.6 4.6 L9.4 9.4 M9.4 4.6 L4.6 9.4" stroke="#4d0000" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
+            "max.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#27c93f" /></svg>\n',
+            "max_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#27c93f" /><path d="M4.5 4.5 L7.6 4.5 L4.5 7.6 Z M9.5 9.5 L6.4 9.5 L9.5 6.4 Z" fill="#004d00" /></svg>\n',
+            "max_toggled.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#27c93f" /></svg>\n',
+            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ffbd2e" /></svg>\n',
+            "iconify_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ffbd2e" /><line x1="4.4" y1="7" x2="9.6" y2="7" stroke="#7a4400" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
         }
     else:  # windows
         return {
-            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><path d="M8 5 L18 15 M18 5 L8 15" stroke="#cdd6f4" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
-            "close_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><rect width="26" height="20" rx="3" fill="#e81123" /><path d="M8 5 L18 15 M18 5 L8 15" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
-            "max.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><rect x="8" y="5" width="10" height="10" rx="1" fill="none" stroke="#cdd6f4" stroke-width="1.3" /></svg>\n',
-            "max_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><rect width="26" height="20" rx="3" fill="#313244" /><rect x="8" y="5" width="10" height="10" rx="1" fill="none" stroke="{accent}" stroke-width="1.3" /></svg>\n',
-            "max_toggled.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><rect x="9.5" y="4" width="8" height="8" rx="1" fill="none" stroke="#cdd6f4" stroke-width="1.1" /><rect x="7" y="6.5" width="8" height="8" rx="1" fill="#181825" stroke="#cdd6f4" stroke-width="1.1" /></svg>\n',
-            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><line x1="8" y1="14" x2="18" y2="14" stroke="#cdd6f4" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
-            "iconify_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><rect width="26" height="20" rx="3" fill="#313244" /><line x1="8" y1="14" x2="18" y2="14" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
+            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><path d="M10.5 6.5 L19.5 15.5 M19.5 6.5 L10.5 15.5" stroke="#cdd6f4" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
+            "close_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect width="30" height="22" rx="4" fill="#e81123" /><path d="M10.5 6.5 L19.5 15.5 M19.5 6.5 L10.5 15.5" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
+            "max.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect x="10" y="6" width="10" height="10" rx="1.5" fill="none" stroke="#cdd6f4" stroke-width="1.3" /></svg>\n',
+            "max_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect width="30" height="22" rx="4" fill="#313244" /><rect x="10" y="6" width="10" height="10" rx="1.5" fill="none" stroke="{accent}" stroke-width="1.3" /></svg>\n',
+            "max_toggled.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect x="11.5" y="5" width="8.5" height="8.5" rx="1.2" fill="none" stroke="#cdd6f4" stroke-width="1.2" /><rect x="9" y="7.5" width="8.5" height="8.5" rx="1.2" fill="#181825" stroke="#cdd6f4" stroke-width="1.2" /></svg>\n',
+            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><line x1="10" y1="12" x2="20" y2="12" stroke="#cdd6f4" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
+            "iconify_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect width="30" height="22" rx="4" fill="#313244" /><line x1="10" y1="12" x2="20" y2="12" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
         }
 
 
@@ -1507,14 +1539,36 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
     labwc_dir = labwc_config_dir()
     os.makedirs(labwc_dir, exist_ok=True)
 
-    # 1. Zapis wektorowych plików SVG dla przycisków w ~/.config/labwc
+    # Zapewnij lokalny katalog motywu ~/.local/share/themes/OKay, aby labwc ładował SVG z przestrzeni użytkownika
+    user_theme_root = os.path.join(xdg_data_home(), "themes", "OKay")
+    if not os.path.exists(user_theme_root):
+        for sys_theme in (
+            "/usr/share/themes/OKay",
+            "/usr/local/share/themes/OKay",
+            "/usr/share/okay-de/themes/OKay",
+            os.path.join(okay_data_dir(), "repo", "themes", "OKay"),
+        ):
+            if os.path.isdir(sys_theme):
+                try:
+                    shutil.copytree(sys_theme, user_theme_root)
+                except Exception:
+                    pass
+                break
+
+    theme_labwc_dir = os.path.join(user_theme_root, "labwc")
+    theme_ob_dir = os.path.join(user_theme_root, "openbox-3")
+    target_asset_dirs = [labwc_dir, theme_labwc_dir, theme_ob_dir]
+
+    # 1. Zapis wektorowych plików SVG dla przycisków w ~/.config/labwc oraz ~/.local/share/themes/OKay/{labwc,openbox-3}
     svg_map = generate_window_button_svgs(buttons_style, accent_hex)
-    for fname, svg_content in svg_map.items():
-        atomic_write_text(os.path.join(labwc_dir, fname), svg_content, mode=0o644)
+    for tdir in target_asset_dirs:
+        os.makedirs(tdir, exist_ok=True)
+        for fname, svg_content in svg_map.items():
+            atomic_write_text(os.path.join(tdir, fname), svg_content, mode=0o644)
 
     # 2. Zarządzanie plikami XBM:
-    # W stylu innym niż "rectangles" usuwamy stare pliki .xbm w ~/.config/labwc,
-    # aby labwc nie używał ich jako maski bitmapowej zamiast nowych SVG.
+    # W stylu innym niż "rectangles" usuwamy stare pliki .xbm ze wszystkich katalogów użytkownika,
+    # aby labwc nie używał ich jako maski bitmapowej zamiast nowych wektorowych SVG.
     # W stylu "rectangles" przywracamy domyślne XBM jeśli brakuje.
     xbm_names = (
         "close.xbm", "close_hover.xbm",
@@ -1522,23 +1576,25 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         "iconify.xbm", "iconify_hover.xbm"
     )
     if buttons_style != "rectangles":
-        for xbm in xbm_names:
-            p = os.path.join(labwc_dir, xbm)
-            if os.path.isfile(p):
-                try:
-                    os.unlink(p)
-                except Exception:
-                    pass
-    else:
-        for xbm in xbm_names:
-            dst = os.path.join(labwc_dir, xbm)
-            if not os.path.isfile(dst):
-                src = labwc_template_file(xbm)
-                if src and os.path.isfile(src):
+        for tdir in target_asset_dirs:
+            for xbm in xbm_names:
+                p = os.path.join(tdir, xbm)
+                if os.path.isfile(p):
                     try:
-                        atomic_copy_file(src, dst, mode=0o644)
+                        os.unlink(p)
                     except Exception:
                         pass
+    else:
+        for tdir in target_asset_dirs:
+            for xbm in xbm_names:
+                dst = os.path.join(tdir, xbm)
+                if not os.path.isfile(dst):
+                    src = labwc_template_file(xbm)
+                    if src and os.path.isfile(src):
+                        try:
+                            atomic_copy_file(src, dst, mode=0o644)
+                        except Exception:
+                            pass
 
     # 3. Parametry geometrii i układu
     if buttons_style == "rectangles":
@@ -1552,9 +1608,9 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         btn_w, btn_h, btn_sp = 14, 14, 8
     else:  # windows
         layout = ":iconify,max,close"
-        btn_w, btn_h, btn_sp = 26, 20, 2
+        btn_w, btn_h, btn_sp = 30, 22, 2
 
-    # 4. Aktualizacja themerc-override i themerc
+    # 4. Aktualizacja themerc-override, themerc oraz plików themerc w motywie użytkownika
     override_path = os.path.join(labwc_dir, "themerc-override")
     def _patch_decorations(raw_text: str) -> str:
         text = raw_text
@@ -1574,21 +1630,19 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
                 text += f"\n{key}: {val}"
         return text
 
-    if os.path.isfile(override_path):
-        try:
-            with open(override_path, "r", encoding="utf-8") as f:
-                cur = f.read()
-            atomic_write_text(override_path, _patch_decorations(cur), mode=0o644)
-        except Exception:
-            pass
-    user_themerc = os.path.join(labwc_dir, "themerc")
-    if os.path.isfile(user_themerc):
-        try:
-            with open(user_themerc, "r", encoding="utf-8") as f:
-                cur = f.read()
-            atomic_write_text(user_themerc, _patch_decorations(cur), mode=0o644)
-        except Exception:
-            pass
+    for merc_path in (
+        override_path,
+        os.path.join(labwc_dir, "themerc"),
+        os.path.join(theme_labwc_dir, "themerc"),
+        os.path.join(theme_ob_dir, "themerc"),
+    ):
+        if os.path.isfile(merc_path):
+            try:
+                with open(merc_path, "r", encoding="utf-8") as f:
+                    cur = f.read()
+                atomic_write_text(merc_path, _patch_decorations(cur), mode=0o644)
+            except Exception:
+                pass
 
     # 5. Aktualizacja rc.xml
     rc_file = os.path.join(labwc_dir, "rc.xml")
@@ -1602,7 +1656,37 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         except Exception:
             pass
 
-    # 6. Przeładowanie labwc
+    # 6. Zaokrąglenie narożników w aplikacjach GTK3 / GTK4 (~/.config/gtk-3.0/gtk.css i gtk-4.0/gtk.css)
+    marker_start = "/* OKAY-DE-CORNERS-START */"
+    marker_end = "/* OKAY-DE-CORNERS-END */"
+    gtk_block = (
+        f"{marker_start}\n"
+        f"window, window.csd, decoration, messagedialog, dialog {{\n"
+        f"    border-radius: {corner_radius}px;\n"
+        f"}}\n"
+        f"{marker_end}\n"
+    )
+    for gtk_ver in ("gtk-3.0", "gtk-4.0"):
+        gtk_css = os.path.join(xdg_config_home(), gtk_ver, "gtk.css")
+        try:
+            existing_css = ""
+            if os.path.isfile(gtk_css):
+                with open(gtk_css, "r", encoding="utf-8") as f:
+                    existing_css = f.read()
+            if marker_start in existing_css and marker_end in existing_css:
+                new_css = re.sub(
+                    re.escape(marker_start) + r".*?" + re.escape(marker_end) + r"\n?",
+                    gtk_block,
+                    existing_css,
+                    flags=re.DOTALL,
+                )
+            else:
+                new_css = (existing_css.rstrip() + "\n\n" if existing_css.strip() else "") + gtk_block
+            atomic_write_text(gtk_css, new_css, mode=0o644)
+        except Exception:
+            pass
+
+    # 7. Przeładowanie labwc
     if os.environ.get("WAYLAND_DISPLAY") and shutil.which("labwc"):
         run_cmd(["labwc", "--reconfigure"], timeout=4)
 

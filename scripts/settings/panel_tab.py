@@ -251,7 +251,7 @@ class PanelTab(Gtk.Box):
         box_window.pack_start(
             make_setting_row(
                 "Zaokrąglenie narożników okien",
-                "Promień zaokrąglenia krawędzi okien labwc (window.cornerRadius w themerc-override i rc.xml)",
+                "Promień zaokrąglenia górnych narożników ramek labwc oraz okien GTK (labwc nie zaokrągla dolnych krawędzi SSD)",
                 self.combo_corner_radius
             ),
             False, False, 0
