@@ -10,9 +10,11 @@ import os
 import json
 import shutil
 import subprocess
-from gi.repository import Gtk
+from gi.repository import Gtk, Gdk
 
 from .helpers import (
+    DEFAULT_ACCENT_COLOR,
+    COLOR_PRESETS,
     okay_config_dir,
     okay_template_file,
     wallpaper_template_file,
@@ -21,6 +23,11 @@ from .helpers import (
     atomic_copy_file,
     normalize_panel_config,
     ensure_user_configs,
+    sanitize_hex_color,
+    compute_contrast_text,
+    apply_settings_css,
+    update_system_accent_color,
+    run_async,
     make_scrolled_page,
     make_page_header,
     make_card,
@@ -37,14 +44,18 @@ def _user_wallpaper_path() -> str:
 
 
 class PanelTab(Gtk.Box):
-    """Widok konfiguracji paska zadań (panel.json) oraz pulpitu OKay DE."""
+    """Widok konfiguracji paska zadań (panel.json), kolorów akcentu oraz pulpitu OKay DE."""
 
-    def __init__(self, parent_window=None, defer_load: bool = False, on_animations_changed=None):
+    def __init__(self, parent_window=None, defer_load: bool = False,
+                 on_animations_changed=None, on_accent_changed=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.parent_window = parent_window
         self._on_animations_changed = on_animations_changed
+        self._on_accent_changed = on_accent_changed
         self._updating_ui = False
         self._loaded = False
+        self._current_accent = DEFAULT_ACCENT_COLOR
+        self._preset_buttons = {}
 
         sw, self.content = make_scrolled_page()
         self.pack_start(sw, True, True, 0)
@@ -119,6 +130,99 @@ class PanelTab(Gtk.Box):
 
         self.content.pack_start(card_panel, False, False, 0)
 
+        # Karta personalizacji kolorów (akcent systemu, ramki okien, outline docka)
+        card_accent, box_accent = make_card("Kolor akcentu i motywu systemu")
+
+        lbl_accent_desc = Gtk.Label(
+            label="Zmienia kolor wiodący w całym środowisku graficznym: ramki okien labwc, "
+                  "kontur i podświetlenia taskbara / docka, przycisk menu oraz powiadomienia mako.",
+            xalign=0.0
+        )
+        lbl_accent_desc.set_line_wrap(True)
+        lbl_accent_desc.get_style_context().add_class("row-subtitle")
+        box_accent.pack_start(lbl_accent_desc, False, False, 0)
+
+        # Siatka gotowych palet kolorów
+        self.flow_presets = Gtk.FlowBox()
+        self.flow_presets.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.flow_presets.set_activate_on_single_click(False)
+        self.flow_presets.set_homogeneous(True)
+        self.flow_presets.set_min_children_per_line(2)
+        self.flow_presets.set_max_children_per_line(5)
+        self.flow_presets.set_column_spacing(8)
+        self.flow_presets.set_row_spacing(8)
+
+        for hex_val, name in COLOR_PRESETS:
+            btn = Gtk.Button()
+            btn.get_style_context().add_class("color-preset-btn")
+            btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            dot = Gtk.Label()
+            dot.set_markup(f"<span foreground='{hex_val}' font_desc='13'>●</span>")
+            lbl_name = Gtk.Label(label=name)
+            btn_box.pack_start(dot, False, False, 0)
+            btn_box.pack_start(lbl_name, False, False, 0)
+            btn.add(btn_box)
+            btn.connect("clicked", lambda _b, h=hex_val: self._on_preset_clicked(h))
+            self._preset_buttons[hex_val] = btn
+            self.flow_presets.add(btn)
+
+        box_accent.pack_start(self.flow_presets, False, False, 0)
+
+        # Własny wybór koloru (GtkColorButton + kod hex)
+        custom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.color_button = Gtk.ColorButton()
+        self.color_button.set_use_alpha(False)
+        self.color_button.set_title("Wybierz własny kolor akcentu")
+        self.color_button.connect("color-set", self._on_color_set)
+        custom_box.pack_start(self.color_button, False, False, 0)
+
+        self.entry_accent = Gtk.Entry()
+        self.entry_accent.set_max_length(7)
+        self.entry_accent.set_width_chars(8)
+        self.entry_accent.set_placeholder_text("#00e676")
+        self.entry_accent.connect("activate", self._on_hex_entry_apply)
+        custom_box.pack_start(self.entry_accent, False, False, 0)
+
+        self.btn_apply_hex = Gtk.Button(label="Zastosuj")
+        self.btn_apply_hex.get_style_context().add_class("secondary-btn")
+        self.btn_apply_hex.connect("clicked", self._on_hex_entry_apply)
+        custom_box.pack_start(self.btn_apply_hex, False, False, 0)
+
+        box_accent.pack_start(
+            make_setting_row(
+                "Własny kolor (RGB / Hex)",
+                "Wybierz dowolny odcień z palety lub wpisz dokładny kod szesnastkowy",
+                custom_box
+            ),
+            False, False, 0
+        )
+
+        # Pasek podglądu elementów akcentu
+        self.preview_frame = Gtk.Frame()
+        self.preview_frame.set_shadow_type(Gtk.ShadowType.NONE)
+        self.preview_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        self.preview_content.set_margin_top(8)
+        self.preview_content.set_margin_bottom(8)
+        self.preview_content.set_margin_start(10)
+        self.preview_content.set_margin_end(10)
+        self.preview_frame.add(self.preview_content)
+
+        self.lbl_preview_title = Gtk.Label(label="Podgląd motywu:")
+        self.lbl_preview_title.get_style_context().add_class("row-subtitle")
+        self.preview_content.pack_start(self.lbl_preview_title, False, False, 0)
+
+        self.preview_win_mock = Gtk.Label(label="[ Aktywna ramka okna ]")
+        self.preview_content.pack_start(self.preview_win_mock, False, False, 0)
+
+        self.preview_dock_mock = Gtk.Label(label="[ Kontur docka / panelu ]")
+        self.preview_content.pack_start(self.preview_dock_mock, False, False, 0)
+
+        self.preview_badge_mock = Gtk.Label(label="[ Akcent #OK ]")
+        self.preview_content.pack_start(self.preview_badge_mock, False, False, 0)
+
+        box_accent.pack_start(self.preview_frame, False, False, 0)
+        self.content.pack_start(card_accent, False, False, 0)
+
         # Karta pulpitu / tapety
         card_desk, box_desk = make_card("Pulpit i tło")
 
@@ -178,6 +282,8 @@ class PanelTab(Gtk.Box):
         self.combo_mode.set_active_id(cfg["mode"])
         self.combo_position.set_active_id(cfg["position"])
         self.switch_animations.set_active(bool(cfg["animations"]))
+        accent = sanitize_hex_color(cfg.get("accent_color", DEFAULT_ACCENT_COLOR))
+        self._update_accent_ui(accent)
         self._updating_ui = False
 
         pins = cfg.get("pinned_apps", [])
@@ -186,6 +292,76 @@ class PanelTab(Gtk.Box):
             f"Przypięte aplikacje ({len(pins)}): {names}" if pins else "Brak przypiętych aplikacji."
         )
         self.lbl_status.set_text(f"Konfiguracja wczytana z: {_panel_json_path()}")
+
+    def _update_accent_ui(self, hex_val: str):
+        self._current_accent = hex_val
+        self.entry_accent.set_text(hex_val)
+        try:
+            rgba = Gdk.RGBA()
+            if rgba.parse(hex_val):
+                self.color_button.set_rgba(rgba)
+        except Exception:
+            pass
+
+        for preset_hex, btn in self._preset_buttons.items():
+            ctx = btn.get_style_context()
+            if preset_hex.lower() == hex_val.lower():
+                ctx.add_class("scale-pill")
+                btn.set_relief(Gtk.ReliefStyle.NORMAL)
+                btn.set_state_flags(Gtk.StateFlags.CHECKED, False)
+            else:
+                btn.unset_state_flags(Gtk.StateFlags.CHECKED)
+
+        contrast_text = compute_contrast_text(hex_val)
+        self.preview_win_mock.set_markup(
+            f"<span background='#1e1e2e' foreground='{hex_val}' font_desc='11'><b> ⯌ Ramka okna </b></span>"
+        )
+        self.preview_dock_mock.set_markup(
+            f"<span background='#181825' foreground='{hex_val}' font_desc='11'><b> ⯁ Kontur docka </b></span>"
+        )
+        self.preview_badge_mock.set_markup(
+            f"<span background='{hex_val}' foreground='{contrast_text}' font_desc='11'><b> OK </b></span>"
+        )
+
+    def _apply_accent_color(self, hex_val: str):
+        clean = sanitize_hex_color(hex_val)
+        self._update_accent_ui(clean)
+        apply_settings_css(clean)
+        if self._on_accent_changed is not None:
+            try:
+                self._on_accent_changed(clean)
+            except Exception:
+                pass
+        self.lbl_status.set_text(f"Stosowanie koloru akcentu: {clean}...")
+
+        def _on_done(_res):
+            self.lbl_status.set_text(
+                f"Zastosowano kolor akcentu: {clean} (zaktualizowano ramki labwc, pasek zadań/dock, mako, fuzzel)."
+            )
+
+        def _on_err(exc):
+            self.lbl_status.set_text(f"Błąd zmiany koloru akcentu: {exc}")
+
+        run_async(lambda: update_system_accent_color(clean), on_done=_on_done, on_error=_on_err)
+
+    def _on_preset_clicked(self, hex_val: str):
+        self._apply_accent_color(hex_val)
+
+    def _on_color_set(self, btn):
+        rgba = btn.get_rgba()
+        r = max(0, min(255, int(round(rgba.red * 255))))
+        g = max(0, min(255, int(round(rgba.green * 255))))
+        b = max(0, min(255, int(round(rgba.blue * 255))))
+        hex_val = f"#{r:02x}{g:02x}{b:02x}"
+        self._apply_accent_color(hex_val)
+
+    def _on_hex_entry_apply(self, *_args):
+        raw = self.entry_accent.get_text().strip()
+        clean = sanitize_hex_color(raw, "")
+        if clean:
+            self._apply_accent_color(clean)
+        else:
+            self.lbl_status.set_text(f"Niepoprawny kod koloru: '{raw}'. Podaj kod w formacie np. #00e676")
 
     def _on_setting_changed(self, *_args):
         if self._updating_ui:

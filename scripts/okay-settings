@@ -122,7 +122,12 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
         root.pack_start(self.stack, True, True, 0)
 
         # Rejestracja modularnych zakładek (leniwe ładowanie ciężkich backendów po otwarciu danej karty)
-        self._panel_tab = PanelTab(self, defer_load=True, on_animations_changed=self.apply_animations_setting)
+        self._panel_tab = PanelTab(
+            self,
+            defer_load=True,
+            on_animations_changed=self.apply_animations_setting,
+            on_accent_changed=self.apply_accent_setting,
+        )
         tabs = [
             ("wifi", "Wi-Fi i Sieć", WifiTab(self, defer_load=True)),
             ("display", "Monitory", DisplayTab(self, defer_load=True)),
@@ -162,9 +167,13 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
         return True
 
     def refresh_after_update(self):
+        apply_settings_css()
         self.apply_animations_setting(self._read_animations_setting())
         if getattr(self._panel_tab, "_loaded", False):
             self._panel_tab.load_config()
+
+    def apply_accent_setting(self, accent_hex: str):
+        apply_settings_css(accent_hex)
 
     def apply_animations_setting(self, enabled: bool):
         enabled = bool(enabled)

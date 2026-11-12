@@ -18,9 +18,9 @@ max-visible=4
 # Stylistyka (Catppuccin Mocha)
 # Uwaga: daemon mako nie obsługuje natywnej animacji fade-out przezroczystości okna;
 # delikatna półprzezroczystość (#e6), zaokrąglenia i pasek postępu zapewniają łagodne wygaszanie.
-background-color=#1e1e2ee6
+background-color=#1b2b30e6
 text-color=#cdd6f4
-border-color=#89b4fa
+border-color=#00e676
 progress-color=over #313244
 
 # Automatyczne zamykanie / wygaszanie powiadomień (ms)
@@ -32,7 +32,7 @@ border-color=#313244
 default-timeout=3000
 
 [urgency=normal]
-border-color=#89b4fa
+border-color=#00e676
 default-timeout=4500
 
 [urgency=critical]

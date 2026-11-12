@@ -19,6 +19,7 @@ import copy
 import fcntl
 import glob
 import json
+import re
 import shlex
 import time
 import signal
@@ -186,21 +187,86 @@ for _candidate in reversed((
             sys.path.remove(_candidate)
         sys.path.insert(0, _candidate)
 
-from panel import (
-    StatusNotifierTray,
-    QuickSettingsPopover,
-    WindowPreviewPopup,
-    apply_animation_class,
-    prepare_fade_in,
-    start_fade_in,
-)
+try:
+    from panel import (
+        StatusNotifierTray,
+        QuickSettingsPopover,
+        WindowPreviewPopup,
+        apply_animation_class,
+        prepare_fade_in,
+        start_fade_in,
+    )
+except ImportError as _imp_err:
+    print(
+        f"[okay-panel] BŁĄD KRYTYCZNY: Nie można załadować modułów panelu ({_imp_err}).\n"
+        "Uruchom aktualizację instalacji użytkownika: ./install.sh --user",
+        file=sys.stderr,
+    )
+    if shutil.which("notify-send"):
+        subprocess.run(
+            ["notify-send", "-u", "critical", "OKay DE", "Zaktualizuj instalację: ./install.sh --user"],
+            check=False,
+        )
+    sys.exit(1)
 
 
 # ============================================================================
-# Style CSS (Nowoczesny Taskbar / Dock + Catppuccin Mocha + OKsavi #00e676)
+# Pomocniki kolorów motywu i dynamiczny generator CSS
 # ============================================================================
 
-PANEL_CSS = """
+DEFAULT_ACCENT_COLOR = "#00e676"
+
+
+def sanitize_hex_color(value: str, default: str = DEFAULT_ACCENT_COLOR) -> str:
+    if not isinstance(value, str):
+        return default
+    raw = value.strip()
+    if not raw.startswith("#"):
+        raw = "#" + raw
+    if re.fullmatch(r"#[0-9a-fA-F]{3}", raw):
+        raw = "#" + "".join(c * 2 for c in raw[1:])
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", raw):
+        return raw.lower()
+    return default
+
+
+def parse_hex_rgb(hex_color: str, default: tuple = (0, 230, 118)) -> tuple:
+    clean = sanitize_hex_color(hex_color, "")
+    if not clean:
+        return default
+    return (int(clean[1:3], 16), int(clean[3:5], 16), int(clean[5:7], 16))
+
+
+def rgb_to_hex(r: int, g: int, b: int) -> str:
+    return f"#{max(0, min(255, int(r))):02x}{max(0, min(255, int(g))):02x}{max(0, min(255, int(b))):02x}"
+
+
+def compute_hover_hex(hex_color: str) -> str:
+    r, g, b = parse_hex_rgb(hex_color)
+    return rgb_to_hex(
+        r + (255 - r) * 0.18,
+        g + (255 - g) * 0.18,
+        b + (255 - b) * 0.18,
+    )
+
+
+def compute_contrast_text(hex_color: str) -> str:
+    r, g, b = parse_hex_rgb(hex_color)
+    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+    return "#11111b" if luminance > 140 else "#ffffff"
+
+
+def blend_hex_color(base_hex: str, accent_hex: str, ratio: float = 0.08) -> str:
+    br, bg, bb = parse_hex_rgb(base_hex, (24, 24, 37))
+    ar, ag, ab = parse_hex_rgb(accent_hex)
+    return rgb_to_hex(
+        br * (1.0 - ratio) + ar * ratio,
+        bg * (1.0 - ratio) + ag * ratio,
+        bb * (1.0 - ratio) + ab * ratio,
+    )
+
+
+PANEL_CSS_TEMPLATE = """
 * {
     font-family: "JetBrains Mono", sans-serif;
     font-size: 11px;
@@ -212,24 +278,26 @@ window#okay-panel {
 }
 
 .panel-surface {
-    background-color: rgba(24, 24, 37, 0.94);
-    border-top: 1px solid rgba(137, 180, 250, 0.16);
+    background-color: rgba(__SURFACE_RGB__, 0.94);
+    border-top: 1px solid rgba(__ACCENT_RGB__, 0.32);
+    box-shadow: 0 -2px 10px rgba(__ACCENT_RGB__, 0.10);
     padding: 0 8px;
     min-height: 42px;
 }
 
 window#okay-panel.top-panel .panel-surface {
     border-top: none;
-    border-bottom: 1px solid rgba(137, 180, 250, 0.16);
+    border-bottom: 1px solid rgba(__ACCENT_RGB__, 0.32);
+    box-shadow: 0 2px 10px rgba(__ACCENT_RGB__, 0.10);
 }
 
 window#okay-panel.dock-mode .panel-surface {
-    background-color: rgba(24, 24, 37, 0.92);
-    border: 1px solid rgba(137, 180, 250, 0.28);
+    background-color: rgba(__SURFACE_RGB__, 0.94);
+    border: 1px solid rgba(__ACCENT_RGB__, 0.44);
     border-radius: 16px;
     padding: 3px 10px;
     min-height: 46px;
-    box-shadow: 0 6px 18px rgba(17, 17, 27, 0.45);
+    box-shadow: 0 6px 20px rgba(__ACCENT_RGB__, 0.24), 0 2px 8px rgba(17, 17, 27, 0.55);
 }
 
 button {
@@ -250,10 +318,10 @@ button:hover {
     background-color: rgba(49, 50, 68, 0.85);
 }
 
-/* Przycisk Start ("OK") w zieleni OKsavi */
+/* Przycisk Start ("OK") z kolorem akcentu */
 #start-button {
-    background-color: #00e676;
-    color: #11111b;
+    background-color: __ACCENT__;
+    color: __ACCENT_CONTRAST__;
     font-weight: bold;
     font-size: 12px;
     border-radius: 9px;
@@ -269,8 +337,8 @@ window#okay-panel.dock-mode #start-button {
 }
 
 #start-button:hover {
-    background-color: #2ecc71;
-    color: #11111b;
+    background-color: __ACCENT_HOVER__;
+    color: __ACCENT_CONTRAST__;
 }
 
 /* Zunifikowana sekcja zadań */
@@ -297,7 +365,7 @@ window#okay-panel.dock-mode .task-item {
 
 .task-item:hover {
     background-color: rgba(49, 50, 68, 0.85);
-    border-color: rgba(137, 180, 250, 0.22);
+    border-color: rgba(__ACCENT_RGB__, 0.35);
     color: #ffffff;
 }
 
@@ -313,14 +381,14 @@ window#okay-panel.dock-mode .task-item {
 /* Otwarta nieaktywna aplikacja */
 .task-item.app-open {
     background-color: rgba(49, 50, 68, 0.42);
-    border-bottom: 2px solid rgba(137, 180, 250, 0.72);
+    border-bottom: 2px solid rgba(__ACCENT_RGB__, 0.72);
 }
 
 /* Aktywne / sfokusowane okno */
 .task-item.app-focused {
-    background-color: rgba(0, 230, 118, 0.16);
-    border: 1px solid rgba(0, 230, 118, 0.28);
-    border-bottom: 2px solid #00e676;
+    background-color: rgba(__ACCENT_RGB__, 0.16);
+    border: 1px solid rgba(__ACCENT_RGB__, 0.35);
+    border-bottom: 2px solid __ACCENT__;
     color: #ffffff;
     font-weight: bold;
 }
@@ -335,16 +403,16 @@ window#okay-panel.dock-mode .task-item {
 
 /* Stackowana aplikacja (wiele okien w jednej ikonie) */
 .task-item.app-stacked {
-    box-shadow: inset 0 -2px 0 rgba(137, 180, 250, 0.40);
+    box-shadow: inset 0 -2px 0 rgba(__ACCENT_RGB__, 0.40);
 }
 
 .task-item.app-focused.app-stacked {
-    box-shadow: inset 0 -2px 0 rgba(0, 230, 118, 0.50);
+    box-shadow: inset 0 -2px 0 rgba(__ACCENT_RGB__, 0.65);
 }
 
 .stack-badge {
-    background-color: #89b4fa;
-    color: #11111b;
+    background-color: __ACCENT__;
+    color: __ACCENT_CONTRAST__;
     font-size: 9px;
     font-weight: bold;
     border-radius: 7px;
@@ -356,8 +424,8 @@ window#okay-panel.dock-mode .task-item {
 }
 
 .task-item.app-focused .stack-badge {
-    background-color: #00e676;
-    color: #11111b;
+    background-color: __ACCENT__;
+    color: __ACCENT_CONTRAST__;
 }
 
 .task-label {
@@ -365,7 +433,7 @@ window#okay-panel.dock-mode .task-item {
 }
 
 .dock-divider {
-    background-color: rgba(137, 180, 250, 0.22);
+    background-color: rgba(__ACCENT_RGB__, 0.24);
     min-width: 1px;
     margin: 9px 6px;
 }
@@ -397,7 +465,7 @@ window#okay-panel.dock-mode .task-item {
 }
 
 #desktop-button {
-    border-left: 1px solid rgba(137, 180, 250, 0.18);
+    border-left: 1px solid rgba(__ACCENT_RGB__, 0.22);
     border-radius: 6px;
     min-width: 12px;
     padding: 0 6px;
@@ -406,13 +474,13 @@ window#okay-panel.dock-mode .task-item {
 }
 
 #desktop-button:hover {
-    background-color: #00e676;
+    background-color: __ACCENT__;
 }
 
 /* Menu kontekstowe PPM (panel i DBusMenu SNI) */
 menu {
-    background-color: #1e1e2e;
-    border: 1px solid #313244;
+    background-color: __POP_BG__;
+    border: 1px solid rgba(__ACCENT_RGB__, 0.36);
     border-radius: 8px;
     padding: 4px 0px;
 }
@@ -424,25 +492,26 @@ menuitem {
 }
 
 menuitem:hover {
-    background-color: #00e676;
-    color: #11111b;
+    background-color: __ACCENT__;
+    color: __ACCENT_CONTRAST__;
 }
 
-/* Quick Settings Popover (Catppuccin Mocha #1e1e2e + #00e676) */
+/* Quick Settings Popover */
 window#okay-quick-settings {
-    background-color: #1e1e2e;
+    background-color: __POP_BG__;
     color: #cdd6f4;
 }
 
 .popover-card {
-    background-color: #1e1e2e;
-    border: 1px solid #00e676;
+    background-color: __POP_BG__;
+    border: 1px solid __ACCENT__;
     border-radius: 6px;
     padding: 14px;
+    box-shadow: 0 8px 24px rgba(__ACCENT_RGB__, 0.20), 0 4px 12px rgba(17, 17, 27, 0.60);
 }
 
 .popover-title {
-    color: #00e676;
+    color: __ACCENT__;
     font-size: 13px;
     font-weight: bold;
 }
@@ -459,8 +528,8 @@ window#okay-quick-settings {
 }
 
 .qs-list {
-    background-color: #181825;
-    border: 1px solid #313244;
+    background-color: rgba(__SURFACE_RGB__, 0.96);
+    border: 1px solid rgba(__ACCENT_RGB__, 0.22);
     border-radius: 4px;
 }
 
@@ -479,7 +548,7 @@ window#okay-quick-settings {
 }
 
 .qs-ssid-active {
-    color: #00e676;
+    color: __ACCENT__;
     font-weight: bold;
     font-size: 11px;
 }
@@ -498,8 +567,8 @@ button.qs-icon-btn:hover {
 }
 
 button.qs-accent-btn {
-    background-color: #00e676;
-    color: #11111b;
+    background-color: __ACCENT__;
+    color: __ACCENT_CONTRAST__;
     font-weight: bold;
     border-radius: 4px;
     min-height: 28px;
@@ -507,7 +576,8 @@ button.qs-accent-btn {
 }
 
 button.qs-accent-btn:hover {
-    background-color: #2ecc71;
+    background-color: __ACCENT_HOVER__;
+    color: __ACCENT_CONTRAST__;
 }
 
 button.qs-mini-btn {
@@ -519,7 +589,7 @@ button.qs-mini-btn {
 }
 
 button.qs-mini-btn:hover {
-    border: 1px solid #00e676;
+    border: 1px solid __ACCENT__;
 }
 
 button.qs-mini-btn-active {
@@ -538,11 +608,11 @@ window#okay-quick-settings switch {
 }
 
 window#okay-quick-settings switch:checked {
-    background-color: #00e676;
+    background-color: __ACCENT__;
 }
 
 window#okay-quick-settings scale highlight {
-    background-color: #00e676;
+    background-color: __ACCENT__;
     border-radius: 3px;
 }
 
@@ -553,14 +623,14 @@ window#okay-quick-settings scale trough {
 }
 
 window#okay-quick-settings scale slider {
-    background-color: #00e676;
+    background-color: __ACCENT__;
     border-radius: 8px;
     min-width: 14px;
     min-height: 14px;
 }
 
 window#okay-quick-settings entry {
-    background-color: #181825;
+    background-color: rgba(__SURFACE_RGB__, 0.96);
     color: #cdd6f4;
     border: 1px solid #313244;
     border-radius: 4px;
@@ -578,11 +648,11 @@ window#okay-window-preview {
 }
 
 .preview-card {
-    background-color: rgba(24, 24, 37, 0.96);
-    border: 1px solid rgba(137, 180, 250, 0.36);
+    background-color: rgba(__SURFACE_RGB__, 0.96);
+    border: 1px solid rgba(__ACCENT_RGB__, 0.42);
     border-radius: 14px;
     padding: 10px 12px;
-    box-shadow: 0 8px 24px rgba(17, 17, 27, 0.55);
+    box-shadow: 0 8px 24px rgba(__ACCENT_RGB__, 0.22), 0 4px 14px rgba(17, 17, 27, 0.65);
 }
 
 .preview-app-title {
@@ -592,8 +662,8 @@ window#okay-window-preview {
 }
 
 .preview-count-pill {
-    background-color: rgba(137, 180, 250, 0.18);
-    color: #89b4fa;
+    background-color: rgba(__ACCENT_RGB__, 0.20);
+    color: __ACCENT__;
     border-radius: 8px;
     padding: 1px 8px;
     font-size: 10px;
@@ -601,7 +671,7 @@ window#okay-window-preview {
 }
 
 .preview-win-tile {
-    background-color: #1e1e2e;
+    background-color: __POP_BG__;
     border: 1px solid #313244;
     border-radius: 10px;
     padding: 6px;
@@ -609,13 +679,13 @@ window#okay-window-preview {
 }
 
 .preview-win-tile:hover {
-    border-color: rgba(137, 180, 250, 0.70);
+    border-color: rgba(__ACCENT_RGB__, 0.70);
     background-color: #242438;
 }
 
 .preview-win-tile.preview-win-focused {
-    border: 1px solid #00e676;
-    background-color: rgba(0, 230, 118, 0.08);
+    border: 1px solid __ACCENT__;
+    background-color: rgba(__ACCENT_RGB__, 0.12);
 }
 
 .preview-win-tile.preview-win-minimized {
@@ -634,7 +704,7 @@ window#okay-window-preview {
 }
 
 .preview-state-active {
-    color: #00e676;
+    color: __ACCENT__;
     font-size: 9px;
     font-weight: bold;
 }
@@ -660,7 +730,7 @@ button.preview-close-btn:hover {
 }
 
 button.preview-win-body {
-    background-color: #181825;
+    background-color: rgba(__SURFACE_RGB__, 0.96);
     border-radius: 7px;
     padding: 6px 8px;
     margin: 0;
@@ -692,6 +762,25 @@ menu.no-animations menuitem {
     transition: none;
 }
 """
+
+
+def generate_panel_css(accent_hex: str = DEFAULT_ACCENT_COLOR) -> str:
+    clean = sanitize_hex_color(accent_hex)
+    r, g, b = parse_hex_rgb(clean)
+    hover = compute_hover_hex(clean)
+    contrast = compute_contrast_text(clean)
+    surface_tint = blend_hex_color("#181825", clean, 0.07)
+    sr, sg, sb = parse_hex_rgb(surface_tint)
+    pop_tint = blend_hex_color("#1e1e2e", clean, 0.06)
+    return (
+        PANEL_CSS_TEMPLATE
+        .replace("__ACCENT__", clean)
+        .replace("__ACCENT_RGB__", f"{r}, {g}, {b}")
+        .replace("__ACCENT_HOVER__", hover)
+        .replace("__ACCENT_CONTRAST__", contrast)
+        .replace("__SURFACE_RGB__", f"{sr}, {sg}, {sb}")
+        .replace("__POP_BG__", pop_tint)
+    )
 
 
 # ============================================================================
@@ -727,6 +816,7 @@ class PanelConfigManager:
         "position": "bottom",
         "mode": "panel",
         "animations": True,
+        "accent_color": DEFAULT_ACCENT_COLOR,
         "pinned_apps": [
             {
                 "app_id": "foot",
@@ -805,6 +895,8 @@ class PanelConfigManager:
             mode = str(data.get("mode", "panel")).lower()
             data["mode"] = "dock" if mode == "dock" else "panel"
             data["animations"] = bool(data.get("animations", True))
+            raw_accent = str(data.get("accent_color", DEFAULT_ACCENT_COLOR)).strip()
+            data["accent_color"] = sanitize_hex_color(raw_accent, DEFAULT_ACCENT_COLOR)
             if "pinned_apps" not in data or not isinstance(data["pinned_apps"], list):
                 data["pinned_apps"] = copy.deepcopy(cls.DEFAULT_CONFIG["pinned_apps"])
             return data
@@ -822,6 +914,8 @@ class PanelConfigManager:
         mode = str(data.get("mode", "panel")).lower()
         data["mode"] = "dock" if mode == "dock" else "panel"
         data["animations"] = bool(data.get("animations", True))
+        raw_accent = str(data.get("accent_color", DEFAULT_ACCENT_COLOR)).strip()
+        data["accent_color"] = sanitize_hex_color(raw_accent, DEFAULT_ACCENT_COLOR)
         fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", dir=cls.CONFIG_DIR)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -1563,11 +1657,10 @@ class OkayPanel(Gtk.Window):
             self.set_visual(visual)
             self.set_app_paintable(True)
 
-        css_provider = Gtk.CssProvider()
-        css_provider.load_from_data(PANEL_CSS.encode("utf-8"))
+        self.css_provider = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(),
-            css_provider,
+            self.css_provider,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
@@ -1614,8 +1707,10 @@ class OkayPanel(Gtk.Window):
         self._vol_wake = threading.Event()
         self._quick_settings = None
         self._preview_popup = None
+        self._last_applied_accent = None
 
         self._build_right_section()
+        self._apply_theme_colors()
         self._apply_layout_mode()
         self._apply_animations()
 
@@ -1675,6 +1770,17 @@ class OkayPanel(Gtk.Window):
 
     def _animations_enabled(self) -> bool:
         return bool(self.panel_config.get("animations", True))
+
+    def _apply_theme_colors(self):
+        accent = sanitize_hex_color(self.panel_config.get("accent_color", DEFAULT_ACCENT_COLOR))
+        if accent == self._last_applied_accent:
+            return
+        self._last_applied_accent = accent
+        css = generate_panel_css(accent)
+        try:
+            self.css_provider.load_from_data(css.encode("utf-8"))
+        except Exception as exc:
+            print(f"[okay-panel] Błąd ładowania CSS motywu: {exc}", file=sys.stderr)
 
     def _hide_preview(self):
         if self._preview_popup is not None:
@@ -2109,6 +2215,7 @@ class OkayPanel(Gtk.Window):
             if mtime != self._config_mtime:
                 self._config_mtime = mtime
                 self.panel_config = PanelConfigManager.load()
+                self._apply_theme_colors()
                 self._apply_layout_mode()
                 self._apply_animations()
                 self._last_struct_key = None

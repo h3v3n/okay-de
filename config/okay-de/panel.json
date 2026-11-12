@@ -4,6 +4,7 @@
   "position": "bottom",
   "mode": "panel",
   "animations": true,
+  "accent_color": "#00e676",
   "pinned_apps": [
     {
       "app_id": "foot",

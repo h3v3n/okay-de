@@ -6,6 +6,7 @@ dla modułów centrum sterowania OKay Settings.
 """
 
 import os
+import re
 import sys
 import copy
 import glob
@@ -27,21 +28,86 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
 
 
-SETTINGS_CSS = """
+DEFAULT_ACCENT_COLOR = "#00e676"
+
+COLOR_PRESETS = [
+    ("#00e676", "OKsavi Neon"),
+    ("#89b4fa", "Catppuccin Blue"),
+    ("#cba6f7", "Mauve Fiolet"),
+    ("#94e2d5", "Teal Morski"),
+    ("#fab387", "Peach Brzoskwinia"),
+    ("#f5c2e7", "Flamingo Róż"),
+    ("#f38ba8", "Red Czerwień"),
+    ("#f9e2af", "Sun Słoneczny"),
+    ("#b4befe", "Lavender Lawenda"),
+    ("#2ecc71", "Emerald Szmaragd"),
+]
+
+
+def sanitize_hex_color(value: str, default: str = DEFAULT_ACCENT_COLOR) -> str:
+    if not isinstance(value, str):
+        return default
+    raw = value.strip()
+    if not raw.startswith("#"):
+        raw = "#" + raw
+    if re.fullmatch(r"#[0-9a-fA-F]{3}", raw):
+        raw = "#" + "".join(c * 2 for c in raw[1:])
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", raw):
+        return raw.lower()
+    return default
+
+
+def parse_hex_rgb(hex_color: str, default: tuple = (0, 230, 118)) -> tuple:
+    clean = sanitize_hex_color(hex_color, "")
+    if not clean:
+        return default
+    return (int(clean[1:3], 16), int(clean[3:5], 16), int(clean[5:7], 16))
+
+
+def rgb_to_hex(r: int, g: int, b: int) -> str:
+    return f"#{max(0, min(255, int(r))):02x}{max(0, min(255, int(g))):02x}{max(0, min(255, int(b))):02x}"
+
+
+def compute_hover_hex(hex_color: str) -> str:
+    r, g, b = parse_hex_rgb(hex_color)
+    return rgb_to_hex(
+        r + (255 - r) * 0.18,
+        g + (255 - g) * 0.18,
+        b + (255 - b) * 0.18,
+    )
+
+
+def compute_contrast_text(hex_color: str) -> str:
+    r, g, b = parse_hex_rgb(hex_color)
+    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+    return "#11111b" if luminance > 140 else "#ffffff"
+
+
+def blend_hex_color(base_hex: str, accent_hex: str, ratio: float = 0.08) -> str:
+    br, bg, bb = parse_hex_rgb(base_hex, (30, 30, 46))
+    ar, ag, ab = parse_hex_rgb(accent_hex)
+    return rgb_to_hex(
+        br * (1.0 - ratio) + ar * ratio,
+        bg * (1.0 - ratio) + ag * ratio,
+        bb * (1.0 - ratio) + ab * ratio,
+    )
+
+
+SETTINGS_CSS_TEMPLATE = """
 window#okay-settings {
-    background-color: #111111;
+    background-color: __BG_WIN__;
     color: #f0f0f0;
     font-family: "Inter", "JetBrains Mono", sans-serif;
 }
 
 .settings-sidebar {
-    background-color: #151515;
+    background-color: __BG_SIDEBAR__;
     border-right: 1px solid #262626;
     padding: 8px 6px;
 }
 
 .settings-sidebar list {
-    background-color: #151515;
+    background-color: __BG_SIDEBAR__;
 }
 
 .settings-sidebar row {
@@ -59,21 +125,21 @@ window#okay-settings {
 }
 
 .settings-sidebar row:selected {
-    background-color: rgba(0, 230, 118, 0.14);
-    color: #00e676;
+    background-color: rgba(__ACCENT_RGB__, 0.14);
+    color: __ACCENT__;
     font-weight: 700;
-    border-left: 3px solid #00e676;
+    border-left: 3px solid __ACCENT__;
 }
 
 .settings-brand {
-    background-color: #151515;
+    background-color: __BG_SIDEBAR__;
     border-right: 1px solid #262626;
     border-bottom: 1px solid #262626;
     padding: 14px 16px;
 }
 
 .brand-title {
-    color: #00e676;
+    color: __ACCENT__;
     font-size: 15px;
     font-weight: 800;
     letter-spacing: 0.4px;
@@ -96,14 +162,14 @@ window#okay-settings {
 }
 
 .card-frame {
-    background-color: #1a1a1a;
-    border: 1px solid #2a2a2a;
+    background-color: __BG_CARD__;
+    border: 1px solid rgba(__ACCENT_RGB__, 0.18);
     border-radius: 6px;
     padding: 14px 16px;
 }
 
 .card-title {
-    color: #00e676;
+    color: __ACCENT__;
     font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.5px;
@@ -122,7 +188,7 @@ window#okay-settings {
 }
 
 .status-ok {
-    color: #00e676;
+    color: __ACCENT__;
     font-weight: 600;
     font-size: 12px;
 }
@@ -140,9 +206,9 @@ window#okay-settings {
 }
 
 .badge-connected {
-    background-color: rgba(0, 230, 118, 0.16);
-    color: #00e676;
-    border: 1px solid rgba(0, 230, 118, 0.4);
+    background-color: rgba(__ACCENT_RGB__, 0.16);
+    color: __ACCENT__;
+    border: 1px solid rgba(__ACCENT_RGB__, 0.4);
     border-radius: 4px;
     padding: 2px 8px;
     font-size: 11px;
@@ -170,14 +236,14 @@ list.settings-list row:hover {
 }
 
 list.settings-list row:selected {
-    background-color: rgba(0, 230, 118, 0.12);
+    background-color: rgba(__ACCENT_RGB__, 0.12);
     color: #ffffff;
 }
 
 button.accent-btn {
-    background-color: #00e676;
+    background-color: __ACCENT__;
     background-image: none;
-    color: #0b0b0b;
+    color: __ACCENT_CONTRAST__;
     border: none;
     border-radius: 4px;
     padding: 6px 14px;
@@ -186,7 +252,7 @@ button.accent-btn {
 }
 
 button.accent-btn:hover {
-    background-color: #2ecc71;
+    background-color: __ACCENT_HOVER__;
 }
 
 button.accent-btn:disabled {
@@ -207,7 +273,7 @@ button.secondary-btn {
 
 button.secondary-btn:hover {
     background-color: #2e2e2e;
-    border-color: #00e676;
+    border-color: __ACCENT__;
 }
 
 button.danger-btn {
@@ -237,9 +303,31 @@ button.scale-pill {
 }
 
 button.scale-pill:checked {
-    background-color: rgba(0, 230, 118, 0.18);
-    color: #00e676;
-    border-color: #00e676;
+    background-color: rgba(__ACCENT_RGB__, 0.18);
+    color: __ACCENT__;
+    border-color: __ACCENT__;
+}
+
+button.color-preset-btn {
+    background-color: #202020;
+    background-image: none;
+    color: #e6e6e6;
+    border: 1px solid #333333;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-weight: 600;
+    font-size: 12px;
+}
+
+button.color-preset-btn:hover {
+    background-color: #2a2a2a;
+    border-color: __ACCENT__;
+}
+
+button.color-preset-btn:checked {
+    background-color: rgba(__ACCENT_RGB__, 0.16);
+    color: #ffffff;
+    border: 1px solid __ACCENT__;
 }
 
 switch {
@@ -249,8 +337,8 @@ switch {
 }
 
 switch:checked {
-    background-color: #00e676;
-    border-color: #00e676;
+    background-color: __ACCENT__;
+    border-color: __ACCENT__;
 }
 
 switch slider {
@@ -259,7 +347,7 @@ switch slider {
 }
 
 scale highlight {
-    background-color: #00e676;
+    background-color: __ACCENT__;
     border-radius: 3px;
 }
 
@@ -270,7 +358,7 @@ scale trough {
 }
 
 scale slider {
-    background-color: #00e676;
+    background-color: __ACCENT__;
     border: 2px solid #111111;
     border-radius: 10px;
     min-width: 16px;
@@ -287,7 +375,7 @@ entry, combobox button {
 }
 
 entry:focus {
-    border-color: #00e676;
+    border-color: __ACCENT__;
 }
 
 .settings-sidebar row,
@@ -295,7 +383,8 @@ list.settings-list row,
 button.accent-btn,
 button.secondary-btn,
 button.danger-btn,
-button.scale-pill {
+button.scale-pill,
+button.color-preset-btn {
     transition: all 140ms ease-out;
 }
 
@@ -305,23 +394,65 @@ window.no-animations button.accent-btn,
 window.no-animations button.secondary-btn,
 window.no-animations button.danger-btn,
 window.no-animations button.scale-pill,
+window.no-animations button.color-preset-btn,
 window.no-animations * {
     transition: none;
 }
 """
 
+_SETTINGS_CSS_PROVIDER = None
 
-def apply_settings_css():
-    """Rejestruje styl CSS OKsavi Linux dla okna OKay Settings."""
-    provider = Gtk.CssProvider()
-    provider.load_from_data(SETTINGS_CSS.encode("utf-8"))
-    screen = Gdk.Screen.get_default()
-    if screen is not None:
-        Gtk.StyleContext.add_provider_for_screen(
-            screen,
-            provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
+
+def get_settings_css(accent_hex: str = DEFAULT_ACCENT_COLOR) -> str:
+    clean = sanitize_hex_color(accent_hex)
+    r, g, b = parse_hex_rgb(clean)
+    hover = compute_hover_hex(clean)
+    contrast = compute_contrast_text(clean)
+    bg_win = blend_hex_color("#111111", clean, 0.035)
+    bg_sidebar = blend_hex_color("#151515", clean, 0.045)
+    bg_card = blend_hex_color("#1a1a1a", clean, 0.045)
+    return (
+        SETTINGS_CSS_TEMPLATE
+        .replace("__ACCENT__", clean)
+        .replace("__ACCENT_RGB__", f"{r}, {g}, {b}")
+        .replace("__ACCENT_HOVER__", hover)
+        .replace("__ACCENT_CONTRAST__", contrast)
+        .replace("__BG_WIN__", bg_win)
+        .replace("__BG_SIDEBAR__", bg_sidebar)
+        .replace("__BG_CARD__", bg_card)
+    )
+
+
+def get_current_accent_color() -> str:
+    panel_json = os.path.join(okay_config_dir(), "panel.json")
+    candidates = (panel_json, okay_template_file("panel.json"))
+    for path in candidates:
+        if path and os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    parsed = json.load(f)
+                if isinstance(parsed, dict) and "accent_color" in parsed:
+                    return sanitize_hex_color(str(parsed["accent_color"]))
+            except Exception:
+                pass
+    return DEFAULT_ACCENT_COLOR
+
+
+def apply_settings_css(accent_hex: str = None):
+    """Rejestruje lub przeładowuje dynamiczny styl CSS OKsavi Linux dla okna OKay Settings."""
+    global _SETTINGS_CSS_PROVIDER
+    target_hex = sanitize_hex_color(accent_hex) if accent_hex else get_current_accent_color()
+    css_data = get_settings_css(target_hex).encode("utf-8")
+    if _SETTINGS_CSS_PROVIDER is None:
+        _SETTINGS_CSS_PROVIDER = Gtk.CssProvider()
+        screen = Gdk.Screen.get_default()
+        if screen is not None:
+            Gtk.StyleContext.add_provider_for_screen(
+                screen,
+                _SETTINGS_CSS_PROVIDER,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
+    _SETTINGS_CSS_PROVIDER.load_from_data(css_data)
 
 
 def run_async(worker_fn, on_done=None, on_error=None):
@@ -505,6 +636,7 @@ DEFAULT_PANEL_CONFIG = {
     "position": "bottom",
     "mode": "panel",
     "animations": True,
+    "accent_color": DEFAULT_ACCENT_COLOR,
     "pinned_apps": [
         {
             "app_id": "foot",
@@ -700,6 +832,8 @@ def normalize_panel_config(cfg: dict) -> dict:
     mode = str(data.get("mode", "panel")).lower()
     data["mode"] = "dock" if mode == "dock" else "panel"
     data["animations"] = bool(data.get("animations", True))
+    raw_accent = str(data.get("accent_color", DEFAULT_ACCENT_COLOR)).strip()
+    data["accent_color"] = sanitize_hex_color(raw_accent, DEFAULT_ACCENT_COLOR)
     if not isinstance(data.get("pinned_apps"), list):
         data["pinned_apps"] = copy.deepcopy(DEFAULT_PANEL_CONFIG["pinned_apps"])
     return data
@@ -1138,3 +1272,190 @@ class UpdateManager:
         if reload_notes:
             out = (out + "\n" if out else "") + "\n".join(reload_notes)
         return out
+
+
+def update_system_accent_color(new_accent: str) -> dict:
+    """Aktualizuje kolor akcentu w całej przestrzeni użytkownika OKay DE:
+    - ~/.config/okay-de/panel.json (klucz accent_color)
+    - ~/.config/labwc/themerc-override (oraz ~/.config/labwc/themerc)
+    - ~/.config/mako/config (border-color, background-color)
+    - ~/.config/fuzzel/fuzzel.ini (match, border)
+    oraz asynchronicznie przeładowuje kompozytor (labwc --reconfigure) i powiadomienia (makoctl reload).
+    """
+    clean_hex = sanitize_hex_color(new_accent)
+    r, g, b = parse_hex_rgb(clean_hex)
+    hover_hex = compute_hover_hex(clean_hex)
+    contrast_text = compute_contrast_text(clean_hex)
+    title_bg = blend_hex_color("#181825", clean_hex, 0.12)
+    mako_bg = blend_hex_color("#1e1e2e", clean_hex, 0.08)
+
+    notes = []
+
+    # 1. ~/.config/okay-de/panel.json
+    ensure_user_configs()
+    panel_file = os.path.join(okay_config_dir(), "panel.json")
+    try:
+        cfg = {}
+        if os.path.isfile(panel_file):
+            with open(panel_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        if not isinstance(cfg, dict):
+            cfg = copy.deepcopy(DEFAULT_PANEL_CONFIG)
+        cfg["accent_color"] = clean_hex
+        atomic_write_json(panel_file, normalize_panel_config(cfg))
+        notes.append("panel.json")
+    except Exception:
+        pass
+
+    # 2. ~/.config/labwc/themerc-override (oraz themerc)
+    labwc_dir = labwc_config_dir()
+    os.makedirs(labwc_dir, exist_ok=True)
+    override_path = os.path.join(labwc_dir, "themerc-override")
+
+    def _patch_themerc_content(raw_text: str) -> str:
+        replacements = [
+            (r"^(window\.active\.border\.color:\s*).*$", rf"\g<1>{clean_hex}"),
+            (r"^(window\.active\.title\.bg\.color:\s*).*$", rf"\g<1>{title_bg}"),
+            (r"^(window\.active\.button\.max\.unpressed\.image\.color:\s*).*$", rf"\g<1>{clean_hex}"),
+            (r"^(window\.active\.button\.max\.hover\.image\.color:\s*).*$", rf"\g<1>{hover_hex}"),
+            (r"^(window\.inactive\.button\.max\.hover\.image\.color:\s*).*$", rf"\g<1>{clean_hex}"),
+            (r"^(menu\.border\.color:\s*).*$", rf"\g<1>{clean_hex}"),
+            (r"^(menu\.items\.active\.bg\.color:\s*).*$", rf"\g<1>{clean_hex}"),
+            (r"^(menu\.items\.active\.text\.color:\s*).*$", rf"\g<1>{contrast_text}"),
+        ]
+        text = raw_text
+        for pattern, repl in replacements:
+            if re.search(pattern, text, flags=re.MULTILINE):
+                text = re.sub(pattern, repl, text, flags=re.MULTILINE)
+            else:
+                key = pattern.split(r"\s*")[0].lstrip("^").rstrip(":")
+                val = repl.rsplit(r">", 1)[-1]
+                text += f"\n{key}: {val}"
+        return text
+
+    existing_themerc = ""
+    if os.path.isfile(override_path):
+        try:
+            with open(override_path, "r", encoding="utf-8") as f:
+                existing_themerc = f.read()
+        except Exception:
+            existing_themerc = ""
+    if not existing_themerc:
+        src = labwc_template_file("themerc-override") or labwc_template_file("themerc")
+        if src and os.path.isfile(src):
+            try:
+                with open(src, "r", encoding="utf-8") as f:
+                    existing_themerc = f.read()
+            except Exception:
+                existing_themerc = ""
+
+    if existing_themerc:
+        updated_themerc = _patch_themerc_content(existing_themerc)
+    else:
+        updated_themerc = (
+            "# OKay DE - Labwc Theme Override\n"
+            "window.cornerRadius: 0\n"
+            "window.titlebar.layout: :iconify,max,close\n"
+            "window.button.width: 48\n"
+            "window.button.height: 10\n"
+            "window.button.spacing: 8\n"
+            "border.width: 2\n"
+            f"window.active.border.color: {clean_hex}\n"
+            "window.inactive.border.color: #313244\n"
+            "titlebar.height: 30\n"
+            "window.titlebar.padding: 4\n"
+            "window.titlebar.padding.width: 10\n"
+            "window.titlebar.padding.height: 10\n"
+            f"window.active.title.bg.color: {title_bg}\n"
+            "window.inactive.title.bg.color: #181825\n"
+            "window.active.label.text.color: transparent\n"
+            "window.inactive.label.text.color: transparent\n"
+            "window.active.button.close.unpressed.image.color: #f38ba8\n"
+            "window.active.button.close.hover.image.color: #eba0ac\n"
+            "window.inactive.button.close.unpressed.image.color: #45475a\n"
+            "window.inactive.button.close.hover.image.color: #f38ba8\n"
+            f"window.active.button.max.unpressed.image.color: {clean_hex}\n"
+            f"window.active.button.max.hover.image.color: {hover_hex}\n"
+            "window.inactive.button.max.unpressed.image.color: #45475a\n"
+            f"window.inactive.button.max.hover.image.color: {clean_hex}\n"
+            "window.active.button.iconify.unpressed.image.color: #585b70\n"
+            "window.active.button.iconify.hover.image.color: #6c7086\n"
+            "window.inactive.button.iconify.unpressed.image.color: #313244\n"
+            "window.inactive.button.iconify.hover.image.color: #585b70\n"
+            "menu.border.width: 1\n"
+            f"menu.border.color: {clean_hex}\n"
+            f"menu.items.bg.color: {title_bg}\n"
+            "menu.items.text.color: #cdd6f4\n"
+            f"menu.items.active.bg.color: {clean_hex}\n"
+            f"menu.items.active.text.color: {contrast_text}\n"
+        )
+    try:
+        atomic_write_text(override_path, updated_themerc, mode=0o644)
+        notes.append("themerc-override")
+    except Exception:
+        pass
+
+    user_themerc = os.path.join(labwc_dir, "themerc")
+    if os.path.isfile(user_themerc):
+        try:
+            with open(user_themerc, "r", encoding="utf-8") as f:
+                t_raw = f.read()
+            atomic_write_text(user_themerc, _patch_themerc_content(t_raw), mode=0o644)
+        except Exception:
+            pass
+
+    # Przeładowanie labwc
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("labwc"):
+        run_cmd(["labwc", "--reconfigure"], timeout=4)
+
+    # 3. ~/.config/mako/config
+    mako_file = os.path.join(xdg_config_home(), "mako", "config")
+    if os.path.isfile(mako_file):
+        try:
+            with open(mako_file, "r", encoding="utf-8") as f:
+                m_raw = f.read()
+            m_updated = re.sub(r"^(background-color=)[0-9a-fA-F#]+([0-9a-fA-F]{2})$", rf"\g<1>{mako_bg}\g<2>", m_raw, flags=re.MULTILINE)
+            lines = []
+            cur_sec = "main"
+            for line in m_updated.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("[") and stripped.endswith("]"):
+                    cur_sec = stripped[1:-1].strip().lower()
+                    lines.append(line)
+                    continue
+                if stripped.startswith("border-color="):
+                    if cur_sec in ("main", "urgency=normal"):
+                        lines.append(f"border-color={clean_hex}")
+                        continue
+                lines.append(line)
+            atomic_write_text(mako_file, "\n".join(lines) + "\n", mode=0o644)
+            notes.append("mako")
+            if shutil.which("makoctl"):
+                run_cmd(["makoctl", "reload"], timeout=3)
+        except Exception:
+            pass
+
+    # 4. ~/.config/fuzzel/fuzzel.ini
+    fuzzel_file = os.path.join(xdg_config_home(), "fuzzel", "fuzzel.ini")
+    if os.path.isfile(fuzzel_file):
+        try:
+            with open(fuzzel_file, "r", encoding="utf-8") as f:
+                f_raw = f.read()
+            hex_no_hash = clean_hex.lstrip("#").lower()
+            f_updated = re.sub(r"^(match=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_raw, flags=re.MULTILINE)
+            f_updated = re.sub(r"^(selection-match=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_updated, flags=re.MULTILINE)
+            f_updated = re.sub(r"^(border=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_updated, flags=re.MULTILINE)
+            f_bg_hex = blend_hex_color("#1b2b30", clean_hex, 0.08).lstrip("#")
+            f_updated = re.sub(r"^(background=)[0-9a-fA-F]+$", rf"\g<1>{f_bg_hex}ff", f_updated, flags=re.MULTILINE)
+            atomic_write_text(fuzzel_file, f_updated, mode=0o644)
+            notes.append("fuzzel")
+        except Exception:
+            pass
+
+    return {
+        "status": "ok",
+        "accent": clean_hex,
+        "notes": notes,
+        "contrast": contrast_text,
+        "hover": hover_hex,
+    }
