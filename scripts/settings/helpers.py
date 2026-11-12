@@ -1803,17 +1803,32 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         except Exception:
             pass
 
-    # 6. Zaokrąglenie narożników w aplikacjach GTK3 / GTK4 (~/.config/gtk-3.0/gtk.css i gtk-4.0/gtk.css)
+    # 6. Wymuszenie zaokrąglenia wszystkich 4 narożników w aplikacjach GTK3 / GTK4
+    # (w tym trybu .ssd / .solid-csd wymuszonego przez serverDecoration="yes" w labwc)
     marker_start = "/* OKAY-DE-CORNERS-START */"
     marker_end = "/* OKAY-DE-CORNERS-END */"
-    gtk_block = (
+    gtk3_block = (
         f"{marker_start}\n"
-        f"window, window.csd, decoration, messagedialog, dialog {{\n"
+        f"window, window.background, window.csd, window.ssd, window.solid-csd,\n"
+        f"decoration, messagedialog, dialog, popover > contents, menu {{\n"
         f"    border-radius: {corner_radius}px;\n"
+        f"}}\n"
+        f"window.background > box, window.background > stack, window.background > paned {{\n"
+        f"    border-bottom-left-radius: {corner_radius}px;\n"
+        f"    border-bottom-right-radius: {corner_radius}px;\n"
         f"}}\n"
         f"{marker_end}\n"
     )
-    for gtk_ver in ("gtk-3.0", "gtk-4.0"):
+    gtk4_block = (
+        f"{marker_start}\n"
+        f"window, window.background, window.csd, window.ssd, window.solid-csd,\n"
+        f"decoration, messagedialog, dialog, popover > contents {{\n"
+        f"    border-radius: {corner_radius}px;\n"
+        f"    overflow: hidden;\n"
+        f"}}\n"
+        f"{marker_end}\n"
+    )
+    for gtk_ver, gtk_block in (("gtk-3.0", gtk3_block), ("gtk-4.0", gtk4_block)):
         gtk_css = os.path.join(xdg_config_home(), gtk_ver, "gtk.css")
         try:
             existing_css = ""
@@ -1833,9 +1848,38 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         except Exception:
             pass
 
-    # 7. Przeładowanie labwc
+    # 6b. Synchronizacja zaokrąglenia w fuzzel (~/.config/fuzzel/fuzzel.ini) oraz mako (~/.config/mako/config)
+    fuzzel_ini = os.path.join(xdg_config_home(), "fuzzel", "fuzzel.ini")
+    if os.path.isfile(fuzzel_ini):
+        try:
+            with open(fuzzel_ini, "r", encoding="utf-8") as f:
+                f_txt = f.read()
+            if re.search(r"^radius\s*=.*$", f_txt, flags=re.MULTILINE):
+                f_txt = re.sub(r"^(radius\s*=\s*).*$", rf"\g<1>{corner_radius}", f_txt, flags=re.MULTILINE)
+            elif re.search(r"^\[border\]", f_txt, flags=re.MULTILINE):
+                f_txt = re.sub(r"^(\[border\]\s*\n)", rf"\g<1>radius={corner_radius}\n", f_txt, count=1, flags=re.MULTILINE)
+            atomic_write_text(fuzzel_ini, f_txt, mode=0o644)
+        except Exception:
+            pass
+
+    mako_cfg = os.path.join(xdg_config_home(), "mako", "config")
+    if os.path.isfile(mako_cfg):
+        try:
+            with open(mako_cfg, "r", encoding="utf-8") as f:
+                m_txt = f.read()
+            if re.search(r"^border-radius\s*=.*$", m_txt, flags=re.MULTILINE):
+                m_txt = re.sub(r"^(border-radius\s*=\s*).*$", rf"\g<1>{corner_radius}", m_txt, flags=re.MULTILINE)
+            else:
+                m_txt = m_txt.rstrip() + f"\nborder-radius={corner_radius}\n"
+            atomic_write_text(mako_cfg, m_txt, mode=0o644)
+        except Exception:
+            pass
+
+    # 7. Przeładowanie labwc oraz mako
     if os.environ.get("WAYLAND_DISPLAY") and shutil.which("labwc"):
         run_cmd(["labwc", "--reconfigure"], timeout=4)
+    if shutil.which("makoctl"):
+        run_cmd(["makoctl", "reload"], timeout=2)
 
     return {
         "status": "ok",
