@@ -393,12 +393,14 @@ window#okay-panel.dock-mode #start-button {
 /* Zunifikowana sekcja zadań */
 .task-item {
     background-color: transparent;
-    border: 1px solid transparent;
+    border-top: 2px solid transparent;
     border-bottom: 2px solid transparent;
+    border-left: 0;
+    border-right: 0;
     border-radius: 7px;
-    padding: 0 4px;
+    padding: 0 5px;
     margin: 4px 2px;
-    min-width: 32px;
+    min-width: 30px;
     min-height: 28px;
     color: #bac2de;
     transition: all 140ms ease-out;
@@ -406,7 +408,7 @@ window#okay-panel.dock-mode #start-button {
 
 window#okay-panel.dock-mode .task-item {
     border-radius: 9px;
-    padding: 0 4px;
+    padding: 0 5px;
     margin: 3px 2px;
     min-width: 34px;
     min-height: 32px;
@@ -414,7 +416,7 @@ window#okay-panel.dock-mode .task-item {
 
 .task-item:hover {
     background-color: rgba(205, 214, 244, 0.09);
-    border-color: transparent;
+    border-top-color: transparent;
     border-bottom-color: transparent;
     color: #ffffff;
 }
@@ -486,8 +488,7 @@ window#okay-panel.dock-mode .task-item {
     padding: 0 4px;
     min-width: 14px;
     min-height: 14px;
-    margin-bottom: -1px;
-    margin-right: -3px;
+    margin: 0;
 }
 
 .task-item.app-focused .stack-badge {
@@ -2230,7 +2231,12 @@ class OkayPanel(Gtk.Window):
             img = Gtk.Image.new_from_icon_name(fallback_icon, Gtk.IconSize.DND)
             img.set_pixel_size(icon_px)
 
+        img.set_halign(Gtk.Align.CENTER)
+        img.set_valign(Gtk.Align.CENTER)
+
         overlay = Gtk.Overlay()
+        overlay.set_halign(Gtk.Align.CENTER)
+        overlay.set_valign(Gtk.Align.CENTER)
         overlay.add(img)
 
         badge = Gtk.Label(label="")
@@ -2242,6 +2248,9 @@ class OkayPanel(Gtk.Window):
         overlay.set_overlay_pass_through(badge, True)
 
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        box.set_valign(Gtk.Align.CENTER)
+        if not (show_label and not is_dock):
+            box.set_halign(Gtk.Align.CENTER)
         box.pack_start(overlay, False, False, 0)
 
         lbl = None

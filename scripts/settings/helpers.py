@@ -160,7 +160,6 @@ window#okay-settings {
 .page-subtitle {
     color: #bac2de;
     font-size: 13px;
-    line-height: 1.4;
 }
 
 .card-frame {
@@ -187,7 +186,6 @@ window#okay-settings {
 .row-subtitle {
     color: #bac2de;
     font-size: 12px;
-    line-height: 1.45;
 }
 
 .status-ok {
@@ -462,7 +460,10 @@ def apply_settings_css(accent_hex: str = None):
                 _SETTINGS_CSS_PROVIDER,
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
-    _SETTINGS_CSS_PROVIDER.load_from_data(css_data)
+    try:
+        _SETTINGS_CSS_PROVIDER.load_from_data(css_data)
+    except Exception as exc:
+        print(f"[okay-settings] Ostrzeżenie ładowania CSS: {exc}", file=sys.stderr)
 
 
 def run_async(worker_fn, on_done=None, on_error=None):
@@ -1086,6 +1087,7 @@ def ensure_user_configs() -> None:
                 break
 
     # 7. Konfiguracja fuzzel (~/.config/fuzzel/fuzzel.ini)
+    created_fuzzel = False
     fuzzel_dir = os.path.join(xdg_config_home(), "fuzzel")
     fuzzel_ini = os.path.join(fuzzel_dir, "fuzzel.ini")
     if not os.path.exists(fuzzel_ini):
@@ -1094,15 +1096,18 @@ def ensure_user_configs() -> None:
         if f_tmpl and os.path.isfile(f_tmpl):
             try:
                 atomic_copy_file(f_tmpl, fuzzel_ini, mode=0o644)
+                created_fuzzel = True
             except Exception:
                 pass
         else:
             try:
                 atomic_write_text(fuzzel_ini, _DEFAULT_FUZZEL_INI, mode=0o644)
+                created_fuzzel = True
             except Exception:
                 pass
 
     # 8. Konfiguracja mako (~/.config/mako/config)
+    created_mako = False
     mako_dir = os.path.join(xdg_config_home(), "mako")
     mako_cfg = os.path.join(mako_dir, "config")
     if not os.path.exists(mako_cfg):
@@ -1111,11 +1116,21 @@ def ensure_user_configs() -> None:
         if m_tmpl and os.path.isfile(m_tmpl):
             try:
                 atomic_copy_file(m_tmpl, mako_cfg, mode=0o644)
+                created_mako = True
             except Exception:
                 pass
         else:
             try:
                 atomic_write_text(mako_cfg, _DEFAULT_MAKO_CONFIG, mode=0o644)
+                created_mako = True
+            except Exception:
+                pass
+
+    if created_fuzzel or created_mako:
+        cur_accent = get_current_accent_color()
+        if cur_accent.lower() != DEFAULT_ACCENT_COLOR:
+            try:
+                update_system_accent_color(cur_accent)
             except Exception:
                 pass
 
@@ -1648,6 +1663,7 @@ def update_system_accent_color(new_accent: str) -> dict:
             (r"^(window\.active\.button\.max\.hover\.image\.color:\s*).*$", rf"\g<1>{hover_hex}"),
             (r"^(window\.inactive\.button\.max\.hover\.image\.color:\s*).*$", rf"\g<1>{clean_hex}"),
             (r"^(menu\.border\.color:\s*).*$", rf"\g<1>{clean_hex}"),
+            (r"^(menu\.items\.bg\.color:\s*).*$", rf"\g<1>{title_bg}"),
             (r"^(menu\.items\.active\.bg\.color:\s*).*$", rf"\g<1>{clean_hex}"),
             (r"^(menu\.items\.active\.text\.color:\s*).*$", rf"\g<1>{contrast_text}"),
         ]
@@ -1732,6 +1748,16 @@ def update_system_accent_color(new_accent: str) -> dict:
         except Exception:
             pass
 
+    for theme_sub in ("labwc", "openbox-3"):
+        theme_rc = os.path.join(xdg_data_home(), "themes", "OKay", theme_sub, "themerc")
+        if os.path.isfile(theme_rc):
+            try:
+                with open(theme_rc, "r", encoding="utf-8") as f:
+                    tr_raw = f.read()
+                atomic_write_text(theme_rc, _patch_themerc_content(tr_raw), mode=0o644)
+            except Exception:
+                pass
+
     # Synchronizacja wektorowych przycisków okna labwc z nowym kolorem akcentu
     try:
         apply_window_decorations(buttons_style=cur_btn_style, corner_radius=cur_radius, accent_hex=clean_hex)
@@ -1791,13 +1817,44 @@ def update_system_accent_color(new_accent: str) -> dict:
             else:
                 f_raw = _DEFAULT_FUZZEL_INI
         hex_no_hash = clean_hex.lstrip("#").lower()
-        f_updated = re.sub(r"^(prompt=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_raw, flags=re.MULTILINE)
-        f_updated = re.sub(r"^(match=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_updated, flags=re.MULTILINE)
-        f_updated = re.sub(r"^(selection-match=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_updated, flags=re.MULTILINE)
-        f_updated = re.sub(r"^(border=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_updated, flags=re.MULTILINE)
-        f_bg_hex = blend_hex_color("#1b2b30", clean_hex, 0.08).lstrip("#")
-        f_updated = re.sub(r"^(background=)[0-9a-fA-F]+$", rf"\g<1>{f_bg_hex}ff", f_updated, flags=re.MULTILINE)
-        atomic_write_text(fuzzel_file, f_updated, mode=0o644)
+        f_bg_hex = blend_hex_color("#1b2b30", clean_hex, 0.08).lstrip("#").lower()
+        target_colors = {
+            "prompt": f"{hex_no_hash}ff",
+            "match": f"{hex_no_hash}ff",
+            "selection-match": f"{hex_no_hash}ff",
+            "border": f"{hex_no_hash}ff",
+            "background": f"{f_bg_hex}ff",
+        }
+        f_lines = []
+        cur_sec = ""
+        seen_keys = set()
+        for raw_line in f_raw.splitlines():
+            s = raw_line.strip()
+            if s.startswith("[") and s.endswith("]"):
+                if cur_sec == "colors":
+                    for k, v in target_colors.items():
+                        if k not in seen_keys:
+                            f_lines.append(f"{k}={v}")
+                cur_sec = s[1:-1].strip().lower()
+                f_lines.append(raw_line)
+                continue
+            if cur_sec == "colors" and "=" in s and not s.startswith("#") and not s.startswith(";"):
+                k = s.split("=", 1)[0].strip().lower()
+                if k in target_colors:
+                    f_lines.append(f"{k}={target_colors[k]}")
+                    seen_keys.add(k)
+                    continue
+            f_lines.append(raw_line)
+        if cur_sec == "colors":
+            for k, v in target_colors.items():
+                if k not in seen_keys:
+                    f_lines.append(f"{k}={v}")
+        elif not any(l.strip().lower() == "[colors]" for l in f_lines):
+            f_lines.append("")
+            f_lines.append("[colors]")
+            for k, v in target_colors.items():
+                f_lines.append(f"{k}={v}")
+        atomic_write_text(fuzzel_file, "\n".join(f_lines) + "\n", mode=0o644)
         notes.append("fuzzel")
     except Exception:
         pass
