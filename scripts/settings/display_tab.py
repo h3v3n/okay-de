@@ -11,6 +11,7 @@ import shutil
 from gi.repository import Gtk
 
 from .helpers import (
+    clear_container,
     run_async,
     run_cmd,
     make_scrolled_page,
@@ -301,10 +302,10 @@ class DisplayTab(Gtk.Box):
 
     def _populate_outputs_list(self):
         prev_name = self._selected_output["name"] if self._selected_output else None
-        for child in self.outputs_list.get_children():
-            self.outputs_list.remove(child)
+        clear_container(self.outputs_list)
 
         if not self._outputs:
+            self._selected_output = None
             row = Gtk.ListBoxRow()
             row.set_selectable(False)
             lbl = Gtk.Label(label="Nie wykryto monitorów w sesji Wayland.")

@@ -359,6 +359,13 @@ def run_cmd(cmd, timeout=8) -> tuple:
         return 1, "", str(exc)
 
 
+def clear_container(container) -> None:
+    """Usuwa i niszczy wszystkie widżety podrzędne kontenera GTK3, zwalniając zasoby."""
+    for child in container.get_children():
+        container.remove(child)
+        child.destroy()
+
+
 def make_scrolled_page() -> tuple:
     """Tworzy przewijalną stronę z wewnętrznym kontenerem pionowym Gtk.Box."""
     sw = Gtk.ScrolledWindow()
@@ -496,6 +503,7 @@ DEFAULT_PANEL_CONFIG = {
     "icon_only": True,
     "show_labels": False,
     "position": "bottom",
+    "mode": "panel",
     "animations": True,
     "pinned_apps": [
         {
@@ -689,6 +697,8 @@ def normalize_panel_config(cfg: dict) -> dict:
     data["show_labels"] = not icon_only
     pos = str(data.get("position", "bottom")).lower()
     data["position"] = "top" if pos == "top" else "bottom"
+    mode = str(data.get("mode", "panel")).lower()
+    data["mode"] = "dock" if mode == "dock" else "panel"
     data["animations"] = bool(data.get("animations", True))
     if not isinstance(data.get("pinned_apps"), list):
         data["pinned_apps"] = copy.deepcopy(DEFAULT_PANEL_CONFIG["pinned_apps"])

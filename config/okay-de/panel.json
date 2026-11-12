@@ -2,6 +2,7 @@
   "icon_only": true,
   "show_labels": false,
   "position": "bottom",
+  "mode": "panel",
   "animations": true,
   "pinned_apps": [
     {

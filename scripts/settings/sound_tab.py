@@ -9,6 +9,7 @@ import shutil
 from gi.repository import Gtk, GLib
 
 from .helpers import (
+    clear_container,
     run_async,
     run_cmd,
     make_scrolled_page,
@@ -244,8 +245,7 @@ class SoundTab(Gtk.Box):
         run_async(_worker, _on_done, lambda e: (self.btn_refresh.set_sensitive(True), self.lbl_status.set_text(f"Błąd: {e}")))
 
     def _populate_device_list(self, listbox: Gtk.ListBox, devices: list, is_sink: bool):
-        for child in listbox.get_children():
-            listbox.remove(child)
+        clear_container(listbox)
 
         if not devices:
             row = Gtk.ListBoxRow()

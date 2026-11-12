@@ -76,6 +76,19 @@ class PanelTab(Gtk.Box):
             False, False, 0
         )
 
+        self.combo_mode = Gtk.ComboBoxText()
+        self.combo_mode.append("panel", "Pasek zadań (pełna szerokość)")
+        self.combo_mode.append("dock", "Pływający Dock (wyśrodkowany)")
+        self.combo_mode.connect("changed", self._on_setting_changed)
+        box_panel.pack_start(
+            make_setting_row(
+                "Styl paska",
+                "Tryb pełnego paska zadań albo wyśrodkowanego pływającego Docka (z grupowaniem okien)",
+                self.combo_mode
+            ),
+            False, False, 0
+        )
+
         self.combo_position = Gtk.ComboBoxText()
         self.combo_position.append("bottom", "Dół ekranu (domyślna)")
         self.combo_position.append("top", "Góra ekranu")
@@ -162,6 +175,7 @@ class PanelTab(Gtk.Box):
         cfg = self._read_panel_json()
         self._updating_ui = True
         self.switch_icon_only.set_active(bool(cfg["icon_only"]))
+        self.combo_mode.set_active_id(cfg["mode"])
         self.combo_position.set_active_id(cfg["position"])
         self.switch_animations.set_active(bool(cfg["animations"]))
         self._updating_ui = False
@@ -178,11 +192,13 @@ class PanelTab(Gtk.Box):
             return
         cfg = self._read_panel_json()
         icon_only = bool(self.switch_icon_only.get_active())
+        mode = self.combo_mode.get_active_id() or "panel"
         pos = self.combo_position.get_active_id() or "bottom"
         animations = bool(self.switch_animations.get_active())
 
         cfg["icon_only"] = icon_only
         cfg["show_labels"] = not icon_only
+        cfg["mode"] = "dock" if mode == "dock" else "panel"
         cfg["position"] = pos
         cfg["animations"] = animations
 
@@ -196,7 +212,7 @@ class PanelTab(Gtk.Box):
         try:
             atomic_write_json(panel_file, cfg)
             self.lbl_status.set_text(
-                f"Zapisano panel.json (tylko ikony={icon_only}, pozycja={pos}, animacje={animations}). Pasek odświeży się automatycznie."
+                f"Zapisano panel.json (styl={cfg['mode']}, pozycja={pos}, tylko ikony={icon_only}, animacje={animations}). Pasek odświeży się automatycznie."
             )
         except Exception as exc:
             self.lbl_status.set_text(f"Błąd zapisu {panel_file}: {exc}")

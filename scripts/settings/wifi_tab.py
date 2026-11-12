@@ -10,6 +10,7 @@ import shutil
 from gi.repository import Gtk
 
 from .helpers import (
+    clear_container,
     run_async,
     run_cmd,
     make_scrolled_page,
@@ -274,8 +275,7 @@ class WifiTab(Gtk.Box):
         run_async(_worker, _on_done, _on_err)
 
     def _populate_networks(self, wifi_enabled: bool, err_msg: str = ""):
-        for child in self.listbox.get_children():
-            self.listbox.remove(child)
+        clear_container(self.listbox)
 
         if not wifi_enabled:
             row = Gtk.ListBoxRow()

@@ -179,42 +179,68 @@ for _candidate in (
     if os.path.isdir(os.path.join(_candidate, "panel")) and _candidate not in sys.path:
         sys.path.insert(0, _candidate)
 
-from panel import StatusNotifierTray, QuickSettingsPopover, apply_animation_class, prepare_fade_in, start_fade_in
+from panel import (
+    StatusNotifierTray,
+    QuickSettingsPopover,
+    WindowPreviewPopup,
+    apply_animation_class,
+    prepare_fade_in,
+    start_fade_in,
+)
 
 
 # ============================================================================
-# Style CSS (Catppuccin Mocha #1e1e2e + OKsavi Neon Green #00e676)
+# Style CSS (Nowoczesny Taskbar / Dock + Catppuccin Mocha + OKsavi #00e676)
 # ============================================================================
 
 PANEL_CSS = """
 * {
     font-family: "JetBrains Mono", sans-serif;
     font-size: 11px;
-    border-radius: 0px;
 }
 
 window#okay-panel {
-    background-color: #1e1e2e;
-    border-top: 1px solid #313244;
+    background-color: transparent;
     color: #cdd6f4;
+}
+
+.panel-surface {
+    background-color: rgba(24, 24, 37, 0.94);
+    border-top: 1px solid rgba(137, 180, 250, 0.16);
+    padding: 0 8px;
+    min-height: 42px;
+}
+
+window#okay-panel.top-panel .panel-surface {
+    border-top: none;
+    border-bottom: 1px solid rgba(137, 180, 250, 0.16);
+}
+
+window#okay-panel.dock-mode .panel-surface {
+    background-color: rgba(24, 24, 37, 0.92);
+    border: 1px solid rgba(137, 180, 250, 0.28);
+    border-radius: 16px;
+    padding: 3px 10px;
+    min-height: 46px;
+    box-shadow: 0 6px 18px rgba(17, 17, 27, 0.45);
 }
 
 button {
     background-color: transparent;
     background-image: none;
     border: none;
-    border-radius: 0px;
+    border-radius: 8px;
     color: #cdd6f4;
-    padding: 0 4px;
-    margin: 0;
-    min-height: 36px;
+    padding: 0 6px;
+    margin: 4px 1px;
+    min-height: 32px;
     outline: none;
     box-shadow: none;
     transition: all 140ms ease-out;
 }
 
 button:hover {
-    background-color: #313244;
+    background-color: rgba(49, 50, 68, 0.85);
 }
 
 /* Przycisk Start ("OK") w zieleni OKsavi */
@@ -223,9 +249,16 @@ button:hover {
     color: #11111b;
     font-weight: bold;
     font-size: 12px;
-    padding: 0 14px;
-    margin-right: 6px;
-    min-height: 38px;
+    border-radius: 9px;
+    padding: 0 12px;
+    margin: 5px 8px 5px 2px;
+    min-height: 30px;
+}
+
+window#okay-panel.dock-mode #start-button {
+    border-radius: 11px;
+    margin: 4px 6px 4px 2px;
+    min-height: 34px;
 }
 
 #start-button:hover {
@@ -236,81 +269,132 @@ button:hover {
 /* Zunifikowana sekcja zadań */
 .task-item {
     background-color: transparent;
-    border: none;
-    border-bottom: 3px solid transparent;
+    border: 1px solid transparent;
+    border-bottom: 2px solid transparent;
+    border-radius: 9px;
     padding: 0 10px;
-    margin: 0 2px;
+    margin: 4px 2px;
     min-width: 40px;
-    min-height: 35px;
+    min-height: 32px;
     color: #bac2de;
     transition: all 140ms ease-out;
 }
 
+window#okay-panel.dock-mode .task-item {
+    border-radius: 12px;
+    padding: 0 9px;
+    margin: 3px 3px;
+    min-width: 42px;
+    min-height: 36px;
+}
+
 .task-item:hover {
-    background-color: #313244;
+    background-color: rgba(49, 50, 68, 0.85);
+    border-color: rgba(137, 180, 250, 0.22);
     color: #ffffff;
 }
 
-/* Przypięta zamknięta aplikacja (launcher w kontenerze zadań) */
+/* Przypięta zamknięta aplikacja */
 .task-item.app-pinned {
-    border-bottom: 3px solid transparent;
-    opacity: 0.90;
+    opacity: 0.88;
 }
 
-/* Otwarta nieaktywna aplikacja - subtelna biała kreska u dołu */
+.task-item.app-pinned:hover {
+    opacity: 1.0;
+}
+
+/* Otwarta nieaktywna aplikacja */
 .task-item.app-open {
-    border-bottom: 2px solid rgba(205, 214, 244, 0.55);
+    background-color: rgba(49, 50, 68, 0.42);
+    border-bottom: 2px solid rgba(137, 180, 250, 0.72);
 }
 
-/* Aktywne / sfokusowane okno - akcent OKsavi + pełna jasna biała kreska */
+/* Aktywne / sfokusowane okno */
 .task-item.app-focused {
-    background-color: rgba(0, 230, 118, 0.14);
-    border-bottom: 3px solid #00e676;
+    background-color: rgba(0, 230, 118, 0.16);
+    border: 1px solid rgba(0, 230, 118, 0.28);
+    border-bottom: 2px solid #00e676;
     color: #ffffff;
     font-weight: bold;
 }
 
-/* Zminimalizowane okno - przygaszona ikona i krótsza/ciemniejsza kreska */
+/* Zminimalizowane okno */
 .task-item.app-minimized {
-    opacity: 0.55;
+    opacity: 0.56;
     background-color: transparent;
-    border-bottom: 2px solid rgba(205, 214, 244, 0.25);
+    border-bottom: 2px solid rgba(205, 214, 244, 0.28);
     color: #6c7086;
+}
+
+/* Stackowana aplikacja (wiele okien w jednej ikonie) */
+.task-item.app-stacked {
+    box-shadow: inset 0 -2px 0 rgba(137, 180, 250, 0.40);
+}
+
+.task-item.app-focused.app-stacked {
+    box-shadow: inset 0 -2px 0 rgba(0, 230, 118, 0.50);
+}
+
+.stack-badge {
+    background-color: #89b4fa;
+    color: #11111b;
+    font-size: 9px;
+    font-weight: bold;
+    border-radius: 7px;
+    padding: 0 4px;
+    min-width: 14px;
+    min-height: 14px;
+    margin-bottom: -1px;
+    margin-right: -3px;
+}
+
+.task-item.app-focused .stack-badge {
+    background-color: #00e676;
+    color: #11111b;
 }
 
 .task-label {
     margin-left: 6px;
 }
 
+.dock-divider {
+    background-color: rgba(137, 180, 250, 0.22);
+    min-width: 1px;
+    margin: 9px 6px;
+}
+
 /* Prawa strona panelu: Tray (SNI), Sieć, Bateria, Głośność, Zegar */
 .status-item, .tray-item {
     padding: 0 7px;
-    margin: 0 1px;
+    margin: 4px 1px;
+    border-radius: 8px;
     color: #cdd6f4;
     transition: all 140ms ease-out;
 }
 
 .status-item:hover, .tray-item:hover {
-    background-color: #313244;
+    background-color: rgba(49, 50, 68, 0.85);
 }
 
 #clock-button {
     padding: 0 10px;
-    margin: 0 2px;
+    margin: 4px 2px;
+    border-radius: 8px;
     color: #cdd6f4;
     font-weight: bold;
     transition: all 140ms ease-out;
 }
 
 #clock-button:hover {
-    background-color: #313244;
+    background-color: rgba(49, 50, 68, 0.85);
 }
 
 #desktop-button {
-    border-left: 1px solid #313244;
-    min-width: 14px;
+    border-left: 1px solid rgba(137, 180, 250, 0.18);
+    border-radius: 6px;
+    min-width: 12px;
     padding: 0 6px;
-    margin-left: 4px;
+    margin: 6px 0 6px 4px;
     transition: all 140ms ease-out;
 }
 
@@ -322,6 +406,7 @@ button:hover {
 menu {
     background-color: #1e1e2e;
     border: 1px solid #313244;
+    border-radius: 8px;
     padding: 4px 0px;
 }
 
@@ -479,6 +564,111 @@ window#okay-quick-settings entry {
     transition: all 140ms ease-out;
 }
 
+/* Podgląd zgrupowanych (stackowanych) okien jednej aplikacji */
+window#okay-window-preview {
+    background-color: transparent;
+    color: #cdd6f4;
+}
+
+.preview-card {
+    background-color: rgba(24, 24, 37, 0.96);
+    border: 1px solid rgba(137, 180, 250, 0.36);
+    border-radius: 14px;
+    padding: 10px 12px;
+    box-shadow: 0 8px 24px rgba(17, 17, 27, 0.55);
+}
+
+.preview-app-title {
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.preview-count-pill {
+    background-color: rgba(137, 180, 250, 0.18);
+    color: #89b4fa;
+    border-radius: 8px;
+    padding: 1px 8px;
+    font-size: 10px;
+    font-weight: bold;
+}
+
+.preview-win-tile {
+    background-color: #1e1e2e;
+    border: 1px solid #313244;
+    border-radius: 10px;
+    padding: 6px;
+    transition: all 140ms ease-out;
+}
+
+.preview-win-tile:hover {
+    border-color: rgba(137, 180, 250, 0.70);
+    background-color: #242438;
+}
+
+.preview-win-tile.preview-win-focused {
+    border: 1px solid #00e676;
+    background-color: rgba(0, 230, 118, 0.08);
+}
+
+.preview-win-tile.preview-win-minimized {
+    opacity: 0.72;
+}
+
+.preview-win-chrome {
+    border-bottom: 1px solid rgba(49, 50, 68, 0.8);
+    padding-bottom: 4px;
+}
+
+.preview-win-dots {
+    color: #6c7086;
+    font-size: 8px;
+    letter-spacing: 1px;
+}
+
+.preview-state-active {
+    color: #00e676;
+    font-size: 9px;
+    font-weight: bold;
+}
+
+.preview-state-idle {
+    color: #7f849c;
+    font-size: 9px;
+}
+
+button.preview-close-btn {
+    min-width: 18px;
+    min-height: 18px;
+    padding: 0 4px;
+    margin: 0;
+    border-radius: 6px;
+    color: #a6adc8;
+    font-size: 10px;
+}
+
+button.preview-close-btn:hover {
+    background-color: #f38ba8;
+    color: #11111b;
+}
+
+button.preview-win-body {
+    background-color: #181825;
+    border-radius: 7px;
+    padding: 6px 8px;
+    margin: 0;
+    min-height: 62px;
+}
+
+button.preview-win-body:hover {
+    background-color: rgba(49, 50, 68, 0.72);
+}
+
+.preview-win-title {
+    color: #cdd6f4;
+    font-size: 10px;
+}
+
 .no-animations,
 .no-animations *,
 window.no-animations button,
@@ -489,6 +679,7 @@ window.no-animations #start-button,
 window.no-animations #clock-button,
 window.no-animations #desktop-button,
 window.no-animations .qs-list row,
+window.no-animations .preview-win-tile,
 window.no-animations menuitem,
 menu.no-animations menuitem {
     transition: none;
@@ -527,6 +718,7 @@ class PanelConfigManager:
         "icon_only": True,
         "show_labels": False,
         "position": "bottom",
+        "mode": "panel",
         "animations": True,
         "pinned_apps": [
             {
@@ -603,6 +795,8 @@ class PanelConfigManager:
             data["icon_only"] = not show_labels
             pos = str(data.get("position", "bottom")).lower()
             data["position"] = "top" if pos == "top" else "bottom"
+            mode = str(data.get("mode", "panel")).lower()
+            data["mode"] = "dock" if mode == "dock" else "panel"
             data["animations"] = bool(data.get("animations", True))
             if "pinned_apps" not in data or not isinstance(data["pinned_apps"], list):
                 data["pinned_apps"] = copy.deepcopy(cls.DEFAULT_CONFIG["pinned_apps"])
@@ -618,6 +812,8 @@ class PanelConfigManager:
         data["icon_only"] = not show_labels
         pos = str(data.get("position", "bottom")).lower()
         data["position"] = "top" if pos == "top" else "bottom"
+        mode = str(data.get("mode", "panel")).lower()
+        data["mode"] = "dock" if mode == "dock" else "panel"
         data["animations"] = bool(data.get("animations", True))
         fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", dir=cls.CONFIG_DIR)
         try:
@@ -841,7 +1037,7 @@ class WaylandToplevelClient:
     def __init__(self, on_change_cb=None):
         self.on_change_cb = on_change_cb
         self.sock = None
-        self.recv_buf = b""
+        self.recv_buf = bytearray()
         # Kolejne ID obiektów klienta w Wayland muszą być przydzielane ściśle sekwencyjnie (bez luk)
         self._next_id = 3
         self._protocol_error = False
@@ -987,7 +1183,7 @@ class WaylandToplevelClient:
                 if not chunk:
                     self._close_socket()
                     break
-                self.recv_buf += chunk
+                self.recv_buf.extend(chunk)
                 _, sync_hit = self._process_buffer(target_sync_id=sync_obj_id)
                 if sync_hit:
                     done = True
@@ -1008,7 +1204,7 @@ class WaylandToplevelClient:
                 if not chunk:
                     self._close_socket()
                     return False
-                self.recv_buf += chunk
+                self.recv_buf.extend(chunk)
         except BlockingIOError:
             pass
         except Exception as e:
@@ -1044,8 +1240,8 @@ class WaylandToplevelClient:
                 break
             if len(self.recv_buf) < size:
                 break
-            payload = self.recv_buf[8:size]
-            self.recv_buf = self.recv_buf[size:]
+            payload = bytes(self.recv_buf[8:size])
+            del self.recv_buf[:size]
 
             try:
                 if obj_id == self.DISPLAY_ID:
@@ -1162,6 +1358,14 @@ class WaylandToplevelClient:
             })
         return res
 
+    def activate_window(self, handle_id: int, is_minimized: bool):
+        if not self.connected or handle_id not in self.handles:
+            return
+        if is_minimized:
+            self._send(self._pack_msg(handle_id, 3))
+        if self.seat_bound and self.seat_id is not None:
+            self._send(self._pack_msg(handle_id, 4, struct.pack("<I", self.seat_id)))
+
     def activate_or_minimize(self, handle_id: int, is_focused: bool, is_minimized: bool):
         if not self.connected or handle_id not in self.handles:
             return
@@ -1262,6 +1466,21 @@ class WindowManager:
         return out
 
     @classmethod
+    def activate_window(cls, handle_id: int, app_id: str, title: str, is_minimized: bool, multiple: bool = False):
+        if cls._wl_client and cls._wl_client.connected and handle_id:
+            cls._wl_client.activate_window(handle_id, is_minimized)
+            return
+        if not shutil.which("wlrctl"):
+            return
+        sel = [f"app_id:{app_id}", f"title:{title}"] if (multiple and title) else [f"app_id:{app_id}"]
+        try:
+            if is_minimized:
+                subprocess.Popen(["wlrctl", "toplevel", "minimize", "false"] + sel)
+            subprocess.Popen(["wlrctl", "toplevel", "focus"] + sel)
+        except Exception:
+            pass
+
+    @classmethod
     def activate_or_minimize(cls, handle_id: int, app_id: str, title: str, is_focused: bool, is_minimized: bool, multiple: bool = False):
         if cls._wl_client and cls._wl_client.connected and handle_id:
             cls._wl_client.activate_or_minimize(handle_id, is_focused, is_minimized)
@@ -1318,21 +1537,24 @@ class OkayPanel(Gtk.Window):
         self.set_name("okay-panel")
         self.set_title("okay-panel")
 
-        # Natywna konfiguracja Wayland Layer-Shell (dół ekranu, 100% szerokości, exclusive zone)
+        # Natywna konfiguracja Wayland Layer-Shell
         GtkLayerShell.init_for_window(self)
         GtkLayerShell.set_layer(self, GtkLayerShell.Layer.TOP)
         GtkLayerShell.set_namespace(self, "okay-panel")
         GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.NONE)
         GtkLayerShell.auto_exclusive_zone_enable(self)
-        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, True)
-        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.LEFT, True)
-        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.RIGHT, True)
 
         self.set_decorated(False)
         self.set_skip_taskbar_hint(True)
         self.set_skip_pager_hint(True)
-        self.set_default_size(-1, 38)
-        self.set_size_request(-1, 38)
+        self.set_default_size(-1, 42)
+        self.set_size_request(-1, 42)
+
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual() if screen is not None else None
+        if visual is not None:
+            self.set_visual(visual)
+            self.set_app_paintable(True)
 
         css_provider = Gtk.CssProvider()
         css_provider.load_from_data(PANEL_CSS.encode("utf-8"))
@@ -1342,26 +1564,31 @@ class OkayPanel(Gtk.Window):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
-        # Główny kontener poziomy
+        # Główny kontener poziomy z powierzchnią .panel-surface (taskbar / pływający dock)
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.main_box.get_style_context().add_class("panel-surface")
         self.add(self.main_box)
 
-        # Lewa strona: Przycisk Start ("OK") + JEDNA ZUNIFIKOWANA SEKCJA ZADAŃ
+        # Lewa strona: Przycisk Start ("OK") + zunifikowana sekcja zadań ze stackowaniem
         self.left_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.main_box.pack_start(self.left_box, False, False, 0)
 
         self._build_start_button()
 
-        # Jedyny kontener zadań (łączy przypięte ikony + dynamiczne otwarte okna)
         self.tasks_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self.left_box.pack_start(self.tasks_box, False, False, 0)
 
-        # Elastyczny separator środkowy
+        # Elastyczny separator środkowy (panel) lub cienka linia podziału (dock)
         self.spacer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         self.spacer.set_hexpand(True)
         self.main_box.pack_start(self.spacer, True, True, 0)
 
-        # Prawa strona: Bateria, Głośność, Zegar, Pokaż pulpit
+        self.dock_sep = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.dock_sep.get_style_context().add_class("dock-divider")
+        self.dock_sep.set_no_show_all(True)
+        self.main_box.pack_start(self.dock_sep, False, False, 0)
+
+        # Prawa strona: Tray (SNI), Sieć, Bateria, Głośność, Zegar, Pokaż pulpit
         self.right_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self.main_box.pack_end(self.right_box, False, False, 0)
 
@@ -1370,8 +1597,8 @@ class OkayPanel(Gtk.Window):
             self._config_mtime = os.path.getmtime(PanelConfigManager.CONFIG_FILE) if os.path.exists(PanelConfigManager.CONFIG_FILE) else 0
         except OSError:
             self._config_mtime = -1
-        self._last_layout_key = None
-        self._last_titles_key = None
+        self._last_struct_key = None
+        self._last_state_key = None
         self._task_buttons = []
         self._last_clock_str = ""
         self._last_bat_state = ("init",)
@@ -1379,9 +1606,10 @@ class OkayPanel(Gtk.Window):
         self._last_vol_data = None
         self._vol_wake = threading.Event()
         self._quick_settings = None
+        self._preview_popup = None
 
         self._build_right_section()
-        self._apply_position()
+        self._apply_layout_mode()
         self._apply_animations()
 
         # Obserwacja ~/.config/okay-de/panel.json przez Gio/inotify
@@ -1413,7 +1641,8 @@ class OkayPanel(Gtk.Window):
 
     def _on_config_file_changed(self, *_args):
         self._config_mtime = -1
-        self._last_layout_key = None
+        self._last_struct_key = None
+        self._last_state_key = None
         self._update_tasks()
 
     def _on_wayland_change(self) -> bool:
@@ -1434,14 +1663,33 @@ class OkayPanel(Gtk.Window):
     def _get_panel_pos(self) -> str:
         return str(self.panel_config.get("position", "bottom")).lower()
 
+    def _get_panel_mode(self) -> str:
+        return "dock" if str(self.panel_config.get("mode", "panel")).lower() == "dock" else "panel"
+
     def _animations_enabled(self) -> bool:
         return bool(self.panel_config.get("animations", True))
+
+    def _hide_preview(self):
+        if self._preview_popup is not None:
+            self._preview_popup.hide_now()
+
+    def _ensure_preview_popup(self) -> WindowPreviewPopup:
+        if self._preview_popup is None:
+            self._preview_popup = WindowPreviewPopup(
+                on_activate_window_cb=self._activate_preview_window,
+                on_close_window_cb=self._close_preview_window,
+                get_icon_pixbuf_cb=AppHelper.get_scaled_pixbuf,
+                animations_enabled_cb=self._animations_enabled,
+            )
+        return self._preview_popup
 
     def _apply_animations(self):
         enabled = self._animations_enabled()
         apply_animation_class(self, enabled)
         if self._quick_settings is not None:
             apply_animation_class(self._quick_settings, enabled)
+        if self._preview_popup is not None:
+            apply_animation_class(self._preview_popup, enabled)
         try:
             gtk_settings = Gtk.Settings.get_default()
             if gtk_settings is not None:
@@ -1450,6 +1698,7 @@ class OkayPanel(Gtk.Window):
             pass
 
     def _toggle_quick_settings(self, *_args):
+        self._hide_preview()
         if self._quick_settings is None:
             self._quick_settings = QuickSettingsPopover(
                 self._get_panel_pos,
@@ -1608,50 +1857,243 @@ class OkayPanel(Gtk.Window):
             return True
         return False
 
-    def _make_task_button(self, icon_name: str, label_text: str, tooltip: str, show_label: bool,
-                          is_pinned: bool, is_running: bool, is_focused: bool, is_minimized: bool) -> Gtk.Button:
-        btn = Gtk.Button()
-        ctx = btn.get_style_context()
-        ctx.add_class("task-item")
+    def _apply_layout_mode(self):
+        pos = self._get_panel_pos()
+        is_top = (pos == "top")
+        is_dock = (self._get_panel_mode() == "dock")
 
-        if is_running:
-            ctx.add_class("app-open")
-            if is_focused:
-                ctx.add_class("app-focused")
-            elif is_minimized:
-                ctx.add_class("app-minimized")
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.TOP, is_top)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, not is_top)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.LEFT, not is_dock)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.RIGHT, not is_dock)
+
+        margin_v = 8 if is_dock else 0
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.TOP, margin_v if is_top else 0)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.BOTTOM, margin_v if not is_top else 0)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.LEFT, 0)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.RIGHT, 0)
+
+        ctx = self.get_style_context()
+        if is_top:
+            ctx.add_class("top-panel")
         else:
-            ctx.add_class("app-pinned")
+            ctx.remove_class("top-panel")
 
-        btn.set_tooltip_text(tooltip)
+        if is_dock:
+            ctx.add_class("dock-mode")
+            self.spacer.set_hexpand(False)
+            self.spacer.hide()
+            self.dock_sep.show()
+            self.set_size_request(-1, 46)
+            self.resize(1, 1)
+        else:
+            ctx.remove_class("dock-mode")
+            self.dock_sep.hide()
+            self.spacer.set_hexpand(True)
+            self.spacer.show()
+            self.set_size_request(-1, 42)
+            self.resize(1, 42)
 
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self._hide_preview()
+
+    @staticmethod
+    def _make_group_item(group_key: str, app_id: str, name: str, cmd: str, icon: str,
+                         is_pinned: bool, pin_index: int, wins: list) -> dict:
+        win_count = len(wins)
+        is_running = win_count > 0
+        focused_win = next((w for w in wins if w["focused"]), None)
+        active_win = focused_win or (wins[0] if wins else None)
+        is_focused = focused_win is not None
+        is_minimized = is_running and all(w["minimized"] for w in wins)
+        title = active_win["title"] if active_win else name
+
+        if not is_running:
+            label_text = name
+            tooltip = f"{name}\nLPM: Uruchom | PPM: Opcje"
+        elif win_count == 1:
+            label_text = title or name
+            tooltip = title or name
+        else:
+            label_text = f"{name} ({win_count})"
+            tooltip = None
+
+        return {
+            "group_key": group_key,
+            "handle_id": active_win["handle_id"] if active_win else 0,
+            "app_id": app_id,
+            "title": title,
+            "label_text": label_text,
+            "tooltip": tooltip,
+            "cmd": cmd,
+            "icon": icon,
+            "name": name,
+            "is_pinned": is_pinned,
+            "pin_index": pin_index,
+            "windows": wins,
+            "win_count": win_count,
+            "is_running": is_running,
+            "is_focused": is_focused,
+            "is_minimized": is_minimized,
+            "multiple": win_count > 1,
+        }
+
+    def _group_windows_into_items(self, windows: list, pinned_apps: list) -> list:
+        items = []
+        used_indices = set()
+
+        # A. Przypięte aplikacje (wszystkie otwarte okna danej aplikacji stackują się w jednym przycisku)
+        for pin_idx, pin in enumerate(pinned_apps):
+            pin_app_id = pin.get("app_id", "")
+            pin_cmd = pin.get("cmd", pin_app_id)
+            pin_name = pin.get("name", pin_app_id)
+            pin_icon = pin.get("icon", "")
+
+            matched_wins = []
+            for idx, w in enumerate(windows):
+                if idx in used_indices:
+                    continue
+                if self._matches_pin(w["app_id"], pin):
+                    matched_wins.append(w)
+                    used_indices.add(idx)
+
+            rep_id = matched_wins[0]["app_id"] if matched_wins else pin_app_id
+            icon_name = AppHelper.get_icon_name(rep_id, pin_icon)
+            items.append(self._make_group_item(
+                group_key=f"pin:{pin_idx}",
+                app_id=rep_id,
+                name=pin_name or rep_id,
+                cmd=pin_cmd,
+                icon=icon_name,
+                is_pinned=True,
+                pin_index=pin_idx,
+                wins=matched_wins,
+            ))
+
+        # B. Pozostałe nieprzypięte aplikacje grupowane po znormalizowanym app_id
+        unpinned_groups = {}
+        unpinned_order = []
+        for idx, w in enumerate(windows):
+            if idx in used_indices:
+                continue
+            w_id = w["app_id"]
+            norm_id = w_id.lower().strip() or f"_win_{w['handle_id']}"
+            if norm_id not in unpinned_groups:
+                unpinned_groups[norm_id] = []
+                unpinned_order.append((norm_id, w_id))
+            unpinned_groups[norm_id].append(w)
+
+        for norm_id, rep_id in unpinned_order:
+            wins = unpinned_groups[norm_id]
+            meta = AppHelper.get_app_metadata(rep_id)
+            icon_name = AppHelper.get_icon_name(rep_id, meta.get("icon", ""))
+            items.append(self._make_group_item(
+                group_key=f"app:{norm_id}",
+                app_id=rep_id,
+                name=meta.get("name", rep_id),
+                cmd=meta.get("cmd", rep_id),
+                icon=icon_name,
+                is_pinned=False,
+                pin_index=-1,
+                wins=wins,
+            ))
+
+        return items
+
+    def _make_task_button(self, item: dict, show_label: bool, is_dock: bool) -> Gtk.Button:
+        btn = Gtk.Button()
+        btn.get_style_context().add_class("task-item")
+        btn.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+
+        icon_px = 24 if is_dock else 20
+        icon_name = item["icon"]
         img = None
         if os.path.isabs(icon_name) and os.path.exists(icon_name):
             try:
-                pb = AppHelper.get_scaled_pixbuf(icon_name, 22)
+                pb = AppHelper.get_scaled_pixbuf(icon_name, icon_px)
                 img = Gtk.Image.new_from_pixbuf(pb)
             except Exception:
                 img = None
         if img is None:
             fallback_icon = icon_name if not os.path.isabs(icon_name) else "application-x-executable"
             img = Gtk.Image.new_from_icon_name(fallback_icon, Gtk.IconSize.DND)
-        box.pack_start(img, False, False, 0)
+            img.set_pixel_size(icon_px)
 
-        if show_label and label_text:
-            short_title = (label_text[:18] + "...") if len(label_text) > 18 else label_text
-            lbl = Gtk.Label(label=short_title)
+        overlay = Gtk.Overlay()
+        overlay.add(img)
+
+        badge = Gtk.Label(label="")
+        badge.get_style_context().add_class("stack-badge")
+        badge.set_halign(Gtk.Align.END)
+        badge.set_valign(Gtk.Align.END)
+        badge.set_no_show_all(True)
+        overlay.add_overlay(badge)
+        overlay.set_overlay_pass_through(badge, True)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        box.pack_start(overlay, False, False, 0)
+
+        lbl = None
+        if show_label and not is_dock:
+            lbl = Gtk.Label(label="")
             lbl.get_style_context().add_class("task-label")
             box.pack_start(lbl, False, False, 0)
 
         btn.add(box)
+        btn._lbl_widget = lbl
+        btn._badge_widget = badge
+        btn._last_classes = set()
+        btn._last_tooltip = object()
+        btn._item = item
+
+        btn.connect("button-press-event", self._on_task_press)
+        btn.connect("enter-notify-event", self._on_task_enter)
+        btn.connect("leave-notify-event", self._on_task_leave)
+
+        self._sync_task_button_ui(btn, item, show_label, is_dock)
         return btn
 
-    def _apply_position(self):
-        pos = str(self.panel_config.get("position", "bottom")).lower()
-        is_top = (pos == "top")
-        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.TOP, is_top)
-        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, not is_top)
+    @staticmethod
+    def _sync_task_button_ui(btn: Gtk.Button, item: dict, show_label: bool, is_dock: bool) -> None:
+        btn._item = item
+        desired = set()
+        if item["is_running"]:
+            desired.add("app-open")
+            if item["is_focused"]:
+                desired.add("app-focused")
+            elif item["is_minimized"]:
+                desired.add("app-minimized")
+            if item["win_count"] >= 2:
+                desired.add("app-stacked")
+        else:
+            desired.add("app-pinned")
+
+        prev = btn._last_classes
+        if desired != prev:
+            ctx = btn.get_style_context()
+            for cls_name in prev - desired:
+                ctx.remove_class(cls_name)
+            for cls_name in desired - prev:
+                ctx.add_class(cls_name)
+            btn._last_classes = desired
+
+        badge = btn._badge_widget
+        if item["win_count"] >= 2:
+            badge.set_text(str(item["win_count"]))
+            badge.show()
+        else:
+            badge.hide()
+
+        lbl = btn._lbl_widget
+        if lbl is not None:
+            raw = item["label_text"] if (show_label and not is_dock) else ""
+            short_title = (raw[:18] + "...") if len(raw) > 18 else raw
+            if lbl.get_text() != short_title:
+                lbl.set_text(short_title)
+
+        tt = item["tooltip"]
+        if btn._last_tooltip != tt:
+            btn._last_tooltip = tt
+            btn.set_tooltip_text(tt)
 
     def _update_tasks(self) -> bool:
         # 1. Sprawdzenie zmian w ~/.config/okay-de/panel.json
@@ -1660,215 +2102,175 @@ class OkayPanel(Gtk.Window):
             if mtime != self._config_mtime:
                 self._config_mtime = mtime
                 self.panel_config = PanelConfigManager.load()
-                self._apply_position()
+                self._apply_layout_mode()
                 self._apply_animations()
-                self._last_layout_key = None
+                self._last_struct_key = None
+                self._last_state_key = None
         except Exception:
             pass
 
         windows = WindowManager.get_open_windows()
-        show_labels = bool(self.panel_config.get("show_labels", False))
+        is_dock = (self._get_panel_mode() == "dock")
+        show_labels = bool(self.panel_config.get("show_labels", False)) and not is_dock
         pinned_apps = self.panel_config.get("pinned_apps", [])
 
-        layout_key = (
-            show_labels,
-            tuple((w["handle_id"], w["app_id"], w["title"] if show_labels else "", w["focused"], w["minimized"]) for w in windows),
-            tuple((p.get("app_id", ""), p.get("cmd", ""), p.get("name", "")) for p in pinned_apps)
-        )
-        titles_key = tuple(w["title"] for w in windows)
+        groups = self._group_windows_into_items(windows, pinned_apps)
 
-        # Szybka ścieżka przy trybie samych ikon: zmiana samego tytułu okna nie przebudowuje widżetów GTK
-        if self._last_layout_key == layout_key:
-            if show_labels or self._last_titles_key == titles_key:
-                return True
-            self._last_titles_key = titles_key
-            used_idx = set()
-            btn_idx = 0
-            for pin in pinned_apps:
-                matched = None
-                for idx, w in enumerate(windows):
-                    if idx not in used_idx and self._matches_pin(w["app_id"], pin):
-                        matched = w
-                        used_idx.add(idx)
-                        break
-                if btn_idx < len(self._task_buttons):
-                    btn, item = self._task_buttons[btn_idx]
-                    if matched is not None:
-                        new_t = matched["title"]
-                        if item.get("title") != new_t:
-                            item["title"] = new_t
-                            btn.set_tooltip_text(new_t or pin.get("name", ""))
-                btn_idx += 1
-            for idx, w in enumerate(windows):
-                if idx in used_idx:
-                    continue
-                if btn_idx < len(self._task_buttons):
-                    btn, item = self._task_buttons[btn_idx]
-                    new_t = w["title"]
-                    if item.get("title") != new_t:
-                        item["title"] = new_t
-                        btn.set_tooltip_text(new_t or w["app_id"])
-                btn_idx += 1
+        struct_key = (
+            is_dock,
+            show_labels,
+            tuple((g["group_key"], g["icon"], g["is_pinned"]) for g in groups),
+        )
+        state_key = tuple(
+            (
+                g["group_key"],
+                g["win_count"],
+                g["is_focused"],
+                g["is_minimized"],
+                tuple((w["handle_id"], w["title"], w["focused"], w["minimized"]) for w in g["windows"]),
+            )
+            for g in groups
+        )
+
+        # Szybka ścieżka 1: brak jakichkolwiek zmian okien/konfiguracji
+        if struct_key == self._last_struct_key and state_key == self._last_state_key:
             return True
 
-        self._last_layout_key = layout_key
-        self._last_titles_key = titles_key
+        # Szybka ścieżka 2: struktura przycisków identyczna — aktualizuj stan CSS, badge, etykiety i otwarty podgląd in-place
+        if struct_key == self._last_struct_key and len(self._task_buttons) == len(groups):
+            self._last_state_key = state_key
+            cur_preview_key = self._preview_popup.current_group_key() if self._preview_popup else ""
+            preview_matched = False
+            for (btn, _old_item), grp in zip(self._task_buttons, groups):
+                self._sync_task_button_ui(btn, grp, show_labels, is_dock)
+                if cur_preview_key and cur_preview_key == grp["group_key"]:
+                    preview_matched = True
+                    self._preview_popup.refresh_group(grp, self._preview_position_info(btn, grp["win_count"]))
+            self._task_buttons = [(btn, grp) for (btn, _), grp in zip(self._task_buttons, groups)]
+            if cur_preview_key and not preview_matched:
+                self._hide_preview()
+            return True
 
-        # Wyczyść obecne przyciski (wraz ze zwolnieniem zasobów GTK3)
+        # Pełna przebudowa paska tylko przy dodaniu/usunięciu aplikacji lub zmianie trybu/układu
+        self._last_struct_key = struct_key
+        self._last_state_key = state_key
+        self._hide_preview()
+
         self._task_buttons = []
         for child in self.tasks_box.get_children():
             self.tasks_box.remove(child)
             child.destroy()
 
-        app_counts = {}
-        for w in windows:
-            app_counts[w["app_id"]] = app_counts.get(w["app_id"], 0) + 1
-
-        used_window_indices = set()
-
-        # A. Renderowanie przypiętych aplikacji (przekształcają się w aktywne okno po uruchomieniu!)
-        for pin_idx, pin in enumerate(pinned_apps):
-            pin_app_id = pin.get("app_id", "")
-            pin_cmd = pin.get("cmd", pin_app_id)
-            pin_name = pin.get("name", pin_app_id)
-            pin_icon = pin.get("icon", "")
-
-            # Szukaj pierwszego nieprzypisanego otwartego okna pasującego do tej przypiętej ikony
-            matched_win = None
-            for idx, w in enumerate(windows):
-                if idx in used_window_indices:
-                    continue
-                if self._matches_pin(w["app_id"], pin):
-                    matched_win = w
-                    used_window_indices.add(idx)
-                    break
-
-            if matched_win is not None:
-                h_id = matched_win["handle_id"]
-                w_id = matched_win["app_id"]
-                w_title = matched_win["title"]
-                is_focused = matched_win["focused"]
-                is_minimized = matched_win["minimized"]
-                multiple = app_counts.get(w_id, 1) > 1
-                icon_name = AppHelper.get_icon_name(w_id, pin_icon)
-
-                btn = self._make_task_button(
-                    icon_name=icon_name,
-                    label_text=w_title or pin_name,
-                    tooltip=f"{w_title or pin_name}",
-                    show_label=show_labels,
-                    is_pinned=True,
-                    is_running=True,
-                    is_focused=is_focused,
-                    is_minimized=is_minimized
-                )
-                item = {
-                    "handle_id": h_id,
-                    "app_id": w_id,
-                    "title": w_title,
-                    "cmd": pin_cmd,
-                    "icon": icon_name,
-                    "name": pin_name,
-                    "is_pinned": True,
-                    "pin_index": pin_idx,
-                    "is_running": True,
-                    "is_focused": is_focused,
-                    "is_minimized": is_minimized,
-                    "multiple": multiple
-                }
-            else:
-                icon_name = AppHelper.get_icon_name(pin_app_id, pin_icon)
-                btn = self._make_task_button(
-                    icon_name=icon_name,
-                    label_text=pin_name,
-                    tooltip=f"{pin_name}\nLPM: Uruchom | PPM: Opcje",
-                    show_label=show_labels,
-                    is_pinned=True,
-                    is_running=False,
-                    is_focused=False,
-                    is_minimized=False
-                )
-                item = {
-                    "handle_id": 0,
-                    "app_id": pin_app_id,
-                    "title": pin_name,
-                    "cmd": pin_cmd,
-                    "icon": icon_name,
-                    "name": pin_name,
-                    "is_pinned": True,
-                    "pin_index": pin_idx,
-                    "is_running": False,
-                    "is_focused": False,
-                    "is_minimized": False,
-                    "multiple": False
-                }
-
-            btn.connect("button-press-event", self._on_task_press, item)
-            self._task_buttons.append((btn, item))
-            self.tasks_box.pack_start(btn, False, False, 0)
-
-        # B. Renderowanie pozostałych otwartych okien (nieprzypiętych lub kolejnych okien tej samej aplikacji)
-        for idx, w in enumerate(windows):
-            if idx in used_window_indices:
-                continue
-            h_id = w["handle_id"]
-            w_id = w["app_id"]
-            w_title = w["title"]
-            is_focused = w["focused"]
-            is_minimized = w["minimized"]
-            multiple = app_counts.get(w_id, 1) > 1
-
-            meta = AppHelper.get_app_metadata(w_id)
-            icon_name = AppHelper.get_icon_name(w_id, meta.get("icon", ""))
-
-            btn = self._make_task_button(
-                icon_name=icon_name,
-                label_text=w_title or meta.get("name", w_id),
-                tooltip=f"{w_title or w_id}",
-                show_label=show_labels,
-                is_pinned=False,
-                is_running=True,
-                is_focused=is_focused,
-                is_minimized=is_minimized
-            )
-            item = {
-                "handle_id": h_id,
-                "app_id": w_id,
-                "title": w_title,
-                "cmd": meta.get("cmd", w_id),
-                "icon": icon_name,
-                "name": meta.get("name", w_id),
-                "is_pinned": False,
-                "pin_index": -1,
-                "is_running": True,
-                "is_focused": is_focused,
-                "is_minimized": is_minimized,
-                "multiple": multiple
-            }
-            btn.connect("button-press-event", self._on_task_press, item)
-            self._task_buttons.append((btn, item))
+        for grp in groups:
+            btn = self._make_task_button(grp, show_labels, is_dock)
+            self._task_buttons.append((btn, grp))
             self.tasks_box.pack_start(btn, False, False, 0)
 
         self.tasks_box.show_all()
+        if is_dock:
+            self.resize(1, 1)
         _trim_heap()
         return True
 
-    def _on_task_press(self, widget, event, item: dict):
+    def _preview_position_info(self, anchor_btn, win_count: int) -> dict:
+        pos = self._get_panel_pos()
+        is_dock = (self._get_panel_mode() == "dock")
+        mon_w = 1920
+        try:
+            gdk_win = self.get_window()
+            disp = self.get_display()
+            if gdk_win is not None and disp is not None:
+                mon_w = disp.get_monitor_at_window(gdk_win).get_geometry().width
+            else:
+                scr = self.get_screen()
+                if scr is not None:
+                    mon_w = scr.get_width()
+        except Exception:
+            pass
+
+        panel_w = max(1, self.get_allocated_width())
+        panel_left = max(0, (mon_w - panel_w) // 2) if is_dock else 0
+        try:
+            ok, bx, _by = anchor_btn.translate_coordinates(self, 0, 0)
+            if not ok:
+                bx = anchor_btn.get_allocation().x
+        except Exception:
+            bx = anchor_btn.get_allocation().x
+
+        btn_center_x = panel_left + bx + (anchor_btn.get_allocated_width() // 2)
+        cols = min(4, max(1, int(win_count)))
+        est_w = cols * 172 + 24
+        margin_left = max(8, min(mon_w - est_w - 8, btn_center_x - est_w // 2))
+        return {"position": pos, "margin_left": margin_left}
+
+    def _on_task_enter(self, btn, _event):
+        item = btn._item
+        if item["win_count"] >= 2:
+            self._ensure_preview_popup().schedule_show(btn, item, self._preview_position_info)
+        elif self._preview_popup is not None and self._preview_popup.get_visible():
+            self._preview_popup.schedule_hide(120)
+        return False
+
+    def _on_task_leave(self, _btn, event):
+        if getattr(event, "detail", None) == Gdk.NotifyType.INFERIOR:
+            return False
+        if self._preview_popup is not None:
+            self._preview_popup.schedule_hide()
+        return False
+
+    def _activate_preview_window(self, win: dict):
+        WindowManager.activate_window(
+            win["handle_id"],
+            win["app_id"],
+            win["title"],
+            win["minimized"],
+            multiple=True,
+        )
+
+    def _close_preview_window(self, win: dict):
+        WindowManager.close_window(
+            win["handle_id"],
+            win["app_id"],
+            win["title"],
+            multiple=True,
+        )
+
+    def _on_task_press(self, widget, event):
+        item = widget._item
         if event.button == 1:
+            self._hide_preview()
             if not item["is_running"]:
                 self._launch_cmd(item.get("cmd", ""))
-            else:
+            elif item["win_count"] == 1:
+                w = item["windows"][0]
                 WindowManager.activate_or_minimize(
-                    item["handle_id"],
-                    item["app_id"],
-                    item["title"],
-                    item["is_focused"],
-                    item["is_minimized"],
-                    item["multiple"]
+                    w["handle_id"],
+                    w["app_id"],
+                    w["title"],
+                    w["focused"],
+                    w["minimized"],
+                    multiple=False,
                 )
-        elif event.button == 2 and item["is_running"]:
-            WindowManager.close_window(item["handle_id"], item["app_id"], item["title"], item["multiple"])
+            else:
+                wins = item["windows"]
+                cur_idx = next((i for i, w in enumerate(wins) if w["focused"]), -1)
+                nxt = wins[(cur_idx + 1) % len(wins)] if cur_idx >= 0 else wins[0]
+                WindowManager.activate_window(
+                    nxt["handle_id"],
+                    nxt["app_id"],
+                    nxt["title"],
+                    nxt["minimized"],
+                    multiple=True,
+                )
+        elif event.button == 2:
+            self._hide_preview()
+            if item["win_count"] == 1:
+                w = item["windows"][0]
+                WindowManager.close_window(w["handle_id"], w["app_id"], w["title"], multiple=False)
+            elif item["cmd"]:
+                self._launch_cmd(item["cmd"])
         elif event.button == 3:
+            self._hide_preview()
             self._show_context_menu(widget, event, item)
         return True
 
@@ -1891,26 +2293,42 @@ class OkayPanel(Gtk.Window):
             mi_launch.connect("activate", lambda _w, c=item["cmd"]: self._launch_cmd(c))
             menu.append(mi_launch)
 
-        # Opcja 3 i 4: Kontrola otwartego okna
-        if item["is_running"]:
+        # Opcja 3 i 4: Kontrola pojedynczego okna lub całej zgrupowanej aplikacji
+        wins = item.get("windows", [])
+        if wins:
             menu.append(Gtk.SeparatorMenuItem())
-            if item["is_minimized"]:
-                mi_state = Gtk.MenuItem(label="Przywróć okno")
-                mi_state.connect("activate", lambda _: WindowManager.set_minimized(item["handle_id"], item["app_id"], item["title"], False, item["multiple"]))
-            else:
-                mi_state = Gtk.MenuItem(label="Minimalizuj okno")
-                mi_state.connect("activate", lambda _: WindowManager.set_minimized(item["handle_id"], item["app_id"], item["title"], True, item["multiple"]))
-            menu.append(mi_state)
+            multi = len(wins) > 1
+            if len(wins) == 1:
+                w = wins[0]
+                if w["minimized"]:
+                    mi_state = Gtk.MenuItem(label="Przywróć okno")
+                    mi_state.connect("activate", lambda _m, win=w: WindowManager.set_minimized(win["handle_id"], win["app_id"], win["title"], False, False))
+                else:
+                    mi_state = Gtk.MenuItem(label="Minimalizuj okno")
+                    mi_state.connect("activate", lambda _m, win=w: WindowManager.set_minimized(win["handle_id"], win["app_id"], win["title"], True, False))
+                menu.append(mi_state)
 
-            mi_close = Gtk.MenuItem(label="Zamknij okno")
-            mi_close.connect("activate", lambda _: WindowManager.close_window(item["handle_id"], item["app_id"], item["title"], item["multiple"]))
-            menu.append(mi_close)
+                mi_close = Gtk.MenuItem(label="Zamknij okno")
+                mi_close.connect("activate", lambda _m, win=w: WindowManager.close_window(win["handle_id"], win["app_id"], win["title"], False))
+                menu.append(mi_close)
+            else:
+                if any(w["minimized"] for w in wins):
+                    mi_rest = Gtk.MenuItem(label=f"Przywróć wszystkie ({len(wins)})")
+                    mi_rest.connect("activate", lambda _m, ws=list(wins), m=multi: [WindowManager.set_minimized(w["handle_id"], w["app_id"], w["title"], False, m) for w in ws])
+                    menu.append(mi_rest)
+                if any(not w["minimized"] for w in wins):
+                    mi_min = Gtk.MenuItem(label=f"Minimalizuj wszystkie ({len(wins)})")
+                    mi_min.connect("activate", lambda _m, ws=list(wins), m=multi: [WindowManager.set_minimized(w["handle_id"], w["app_id"], w["title"], True, m) for w in ws])
+                    menu.append(mi_min)
+                mi_close = Gtk.MenuItem(label=f"Zamknij wszystkie ({len(wins)})")
+                mi_close.connect("activate", lambda _m, ws=list(wins), m=multi: [WindowManager.close_window(w["handle_id"], w["app_id"], w["title"], m) for w in ws])
+                menu.append(mi_close)
 
         anim = self._animations_enabled()
         apply_animation_class(menu, anim)
         menu.show_all()
         prepare_fade_in(menu, anim)
-        if str(self.panel_config.get("position", "bottom")).lower() == "top":
+        if self._get_panel_pos() == "top":
             menu.popup_at_widget(widget, Gdk.Gravity.SOUTH, Gdk.Gravity.NORTH, event)
         else:
             menu.popup_at_widget(widget, Gdk.Gravity.NORTH, Gdk.Gravity.SOUTH, event)
@@ -1930,7 +2348,7 @@ class OkayPanel(Gtk.Window):
             cfg["pinned_apps"] = pins
             PanelConfigManager.save(cfg)
             self._config_mtime = -1
-            self._last_layout_key = None
+            self._last_struct_key = None
             self._update_tasks()
 
     def _unpin_app(self, item: dict):
@@ -1944,7 +2362,7 @@ class OkayPanel(Gtk.Window):
         cfg["pinned_apps"] = pins
         PanelConfigManager.save(cfg)
         self._config_mtime = -1
-        self._last_layout_key = None
+        self._last_struct_key = None
         self._update_tasks()
 
     # ------------------------------------------------------------------------
