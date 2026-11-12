@@ -330,6 +330,14 @@ PYEOF
     fi
     rm -f "$XDG_CACHE/fuzzel" 2>/dev/null || true
 
+    # Migracja istniejącego autostart/rc.xml użytkownika dla okay-desktop
+    if [ -f "$LABWC_CFG/autostart" ] && ! grep -q "okay-desktop" "$LABWC_CFG/autostart" 2>/dev/null; then
+        printf '\n# Natywny pulpit OKay DE\n(\n    sleep 0.3\n    DESKTOP_LOG="${XDG_RUNTIME_DIR:-/tmp}/okay-desktop.log"\n    if [ -x "$HOME/.local/bin/okay-desktop" ]; then\n        "$HOME/.local/bin/okay-desktop" > "$DESKTOP_LOG" 2>&1 &\n    elif command -v okay-desktop >/dev/null 2>&1; then\n        okay-desktop > "$DESKTOP_LOG" 2>&1 &\n    fi\n) &\n' >> "$LABWC_CFG/autostart"
+    fi
+    if [ -f "$LABWC_CFG/rc.xml" ] && ! grep -q 'identifier="okay-desktop"' "$LABWC_CFG/rc.xml" 2>/dev/null; then
+        sed -i 's|<windowRule identifier="okay-panel" serverDecoration="no" />|<windowRule identifier="okay-panel" serverDecoration="no" />\n    <windowRule identifier="okay-desktop" serverDecoration="no" />|' "$LABWC_CFG/rc.xml" 2>/dev/null || true
+    fi
+
     # Czyszczenie przestarzałych plików okay-dock (bez ubijania aktywnego okay-settings w trakcie aktualizacji)
     rm -rf "$OKAY_CFG_DIR/dock" 2>/dev/null || true
     rm -f "$BIN_DIR/okay-dock" "$BIN_DIR/oksavi-ghost-runner" 2>/dev/null || true

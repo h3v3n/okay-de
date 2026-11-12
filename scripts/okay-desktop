@@ -18,6 +18,7 @@ import shlex
 import signal
 import shutil
 import subprocess
+import urllib.parse
 
 os.environ.setdefault("MALLOC_ARENA_MAX", "2")
 os.environ.setdefault("NO_AT_BRIDGE", "1")
@@ -341,6 +342,14 @@ class OkayDesktop(Gtk.Window):
         )
         self.event_box.add(self.flow)
         self.event_box.connect("button-press-event", self._on_desktop_button_press)
+        self.event_box.drag_dest_set(
+            Gtk.DestDefaults.ALL,
+            [],
+            Gdk.DragAction.COPY | Gdk.DragAction.MOVE | Gdk.DragAction.LINK,
+        )
+        self.event_box.drag_dest_add_uri_targets()
+        self.event_box.drag_dest_add_text_targets()
+        self.event_box.connect("drag-data-received", self._on_drag_data_received)
         self.connect("key-press-event", self._on_key_press)
         self.add(self.event_box)
 
@@ -527,6 +536,82 @@ class OkayDesktop(Gtk.Window):
                 _spawn_reap([opener, "open", path])
             elif opener:
                 _spawn_reap([opener, path])
+
+    def _unique_dest_path(self, base_name: str) -> str:
+        candidate = os.path.join(self.desktop_dir, base_name)
+        if not os.path.exists(candidate):
+            return candidate
+        stem, ext = os.path.splitext(base_name)
+        idx = 2
+        while True:
+            alt = os.path.join(self.desktop_dir, f"{stem} ({idx}){ext}")
+            if not os.path.exists(alt):
+                return alt
+            idx += 1
+
+    def _on_drag_data_received(self, _widget, context, _x, _y, data, _info, time_val):
+        uris = list(data.get_uris() or [])
+        if not uris:
+            txt = data.get_text() or ""
+            for line in txt.splitlines():
+                line = line.strip()
+                if line.startswith("file://") or line.startswith("/"):
+                    uris.append(line)
+
+        if not uris:
+            Gtk.drag_finish(context, False, False, time_val)
+            return
+
+        action = context.get_selected_action()
+        desktop_real = os.path.realpath(self.desktop_dir)
+        changed = False
+
+        for raw_uri in uris:
+            src_path = ""
+            if raw_uri.startswith("file://"):
+                try:
+                    src_path = Gio.File.new_for_uri(raw_uri).get_path() or ""
+                except Exception:
+                    src_path = ""
+                if not src_path:
+                    parsed = urllib.parse.urlparse(raw_uri)
+                    src_path = urllib.parse.unquote(parsed.path or "")
+            elif raw_uri.startswith("/"):
+                src_path = raw_uri
+
+            if not src_path or not os.path.exists(src_path):
+                continue
+
+            src_real = os.path.realpath(src_path)
+            if os.path.dirname(src_real) == desktop_real:
+                continue
+
+            base_name = os.path.basename(src_path.rstrip(os.sep))
+            if not base_name:
+                continue
+
+            is_system_desktop = src_real.startswith(("/usr/share/applications/", "/usr/local/share/applications/"))
+            dst_path = self._unique_dest_path(base_name)
+
+            try:
+                if action == Gdk.DragAction.LINK:
+                    os.symlink(src_path, dst_path)
+                elif action == Gdk.DragAction.MOVE and not is_system_desktop:
+                    shutil.move(src_path, dst_path)
+                else:
+                    if os.path.isdir(src_path):
+                        shutil.copytree(src_path, dst_path)
+                    else:
+                        shutil.copy2(src_path, dst_path)
+                if dst_path.endswith(".desktop") and os.path.isfile(dst_path):
+                    os.chmod(dst_path, 0o755)
+                changed = True
+            except Exception as exc:
+                print(f"[okay-desktop] Błąd upuszczania '{src_path}': {exc}", file=sys.stderr)
+
+        Gtk.drag_finish(context, changed, False, time_val)
+        if changed:
+            self._reload_desktop()
 
     def _on_child_activated(self, _flow, child):
         item = self._tiles.get(child)
