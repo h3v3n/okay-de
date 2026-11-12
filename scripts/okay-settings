@@ -26,15 +26,22 @@ try:
 except Exception:
     pass
 
-# Rozwiązanie ścieżki modułu `settings` dla uruchomień z repo, ~/.local oraz /usr
+# Rozwiązanie ścieżki modułu `settings`: priorytet repo -> ~/.local -> /usr/local -> /usr
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-for _candidate in (
+_XDG_DATA = os.environ.get("XDG_DATA_HOME", "").strip()
+_USER_SHARE_DIR = os.path.join(
+    os.path.expanduser(_XDG_DATA) if _XDG_DATA else os.path.expanduser("~/.local/share"),
+    "okay-de",
+)
+for _candidate in reversed((
     _SCRIPT_DIR,
-    os.path.expanduser("~/.local/share/okay-de"),
+    _USER_SHARE_DIR,
     "/usr/local/share/okay-de",
     "/usr/share/okay-de",
-):
-    if os.path.isdir(os.path.join(_candidate, "settings")) and _candidate not in sys.path:
+)):
+    if os.path.isdir(os.path.join(_candidate, "settings")):
+        if _candidate in sys.path:
+            sys.path.remove(_candidate)
         sys.path.insert(0, _candidate)
 
 try:
