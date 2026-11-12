@@ -7,8 +7,10 @@ dla modułów centrum sterowania OKay Settings.
 
 import os
 import sys
+import copy
 import glob
 import json
+import stat
 import time
 import shutil
 import tarfile
@@ -486,36 +488,413 @@ class SystemHelper:
         return "Nieznana"
 
 
+# ============================================================================
+# Ścieżki XDG Base Directory, szablony read-only i zapis atomowy
+# ============================================================================
+
+DEFAULT_PANEL_CONFIG = {
+    "icon_only": True,
+    "show_labels": False,
+    "position": "bottom",
+    "animations": True,
+    "pinned_apps": [
+        {
+            "app_id": "foot",
+            "name": "Terminal (foot)",
+            "cmd": "foot",
+            "icon": "utilities-terminal",
+        },
+        {
+            "app_id": "pcmanfm",
+            "name": "Menedżer plików",
+            "cmd": "pcmanfm",
+            "icon": "system-file-manager",
+        },
+        {
+            "app_id": "okay-settings",
+            "name": "Ustawienia OKay",
+            "cmd": "okay-settings",
+            "icon": "preferences-system",
+        },
+    ],
+}
+
+_LABWC_CONFIG_FILES = (
+    "rc.xml",
+    "autostart",
+    "environment",
+    "menu.xml",
+    "themerc",
+    "themerc-override",
+)
+
+_LABWC_ASSET_EXTS = (".xbm", ".svg")
+
+
+def xdg_config_home() -> str:
+    val = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    return os.path.expanduser(val) if val else os.path.expanduser("~/.config")
+
+
+def xdg_data_home() -> str:
+    val = os.environ.get("XDG_DATA_HOME", "").strip()
+    return os.path.expanduser(val) if val else os.path.expanduser("~/.local/share")
+
+
+def xdg_bin_home() -> str:
+    return os.path.expanduser("~/.local/bin")
+
+
+def okay_config_dir() -> str:
+    return os.path.join(xdg_config_home(), "okay-de")
+
+
+def labwc_config_dir() -> str:
+    return os.path.join(xdg_config_home(), "labwc")
+
+
+def okay_data_dir() -> str:
+    return os.path.join(xdg_data_home(), "okay-de")
+
+
+def _repo_root_from_script() -> str:
+    here = os.path.dirname(os.path.realpath(__file__))
+    candidate = os.path.abspath(os.path.join(here, "..", ".."))
+    if os.path.isfile(os.path.join(candidate, "install.sh")):
+        return candidate
+    return ""
+
+
+def find_existing_file(*candidates: str) -> str:
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return ""
+
+
+def okay_template_dirs() -> tuple:
+    dirs = [
+        "/etc/okay-de",
+        "/etc/xdg/okay-de",
+        "/usr/share/okay-de/defaults/okay-de",
+        "/usr/share/okay-de",
+        "/usr/local/share/okay-de/defaults/okay-de",
+        "/usr/local/share/okay-de",
+        os.path.join(okay_data_dir(), "defaults", "okay-de"),
+        os.path.join(okay_data_dir(), "repo", "config", "okay-de"),
+    ]
+    repo_root = _repo_root_from_script()
+    if repo_root:
+        dirs.append(os.path.join(repo_root, "config", "okay-de"))
+    return tuple(dirs)
+
+
+def labwc_template_dirs() -> tuple:
+    dirs = [
+        "/etc/okay-de/labwc",
+        "/etc/xdg/labwc",
+        "/usr/share/okay-de/defaults/labwc",
+        "/usr/share/okay-de/labwc",
+        "/usr/local/share/okay-de/defaults/labwc",
+        "/usr/local/share/okay-de/labwc",
+        os.path.join(okay_data_dir(), "defaults", "labwc"),
+        os.path.join(okay_data_dir(), "repo", "config", "labwc"),
+    ]
+    repo_root = _repo_root_from_script()
+    if repo_root:
+        dirs.append(os.path.join(repo_root, "config", "labwc"))
+    return tuple(dirs)
+
+
+def okay_template_file(rel_path: str) -> str:
+    return find_existing_file(*(os.path.join(d, rel_path) for d in okay_template_dirs()))
+
+
+def labwc_template_file(rel_path: str) -> str:
+    return find_existing_file(*(os.path.join(d, rel_path) for d in labwc_template_dirs()))
+
+
+def wallpaper_template_file() -> str:
+    candidates = [
+        "/etc/okay-de/wallpaper.png",
+        "/usr/share/okay-de/defaults/backgrounds/default.png",
+        "/usr/share/okay-de/wallpaper.png",
+        "/usr/share/backgrounds/okay-de/default.png",
+        "/usr/local/share/backgrounds/okay-de/default.png",
+        os.path.join(okay_data_dir(), "defaults", "backgrounds", "default.png"),
+        os.path.join(okay_data_dir(), "repo", "backgrounds", "default.png"),
+    ]
+    repo_root = _repo_root_from_script()
+    if repo_root:
+        candidates.append(os.path.join(repo_root, "backgrounds", "default.png"))
+    return find_existing_file(*candidates)
+
+
+def atomic_write_bytes(dest_path: str, content: bytes, mode: int = None) -> None:
+    """Zapisuje bajty atomowo przez plik tymczasowy w tym samym katalogu i os.replace()."""
+    abs_dest = os.path.abspath(dest_path)
+    parent = os.path.dirname(abs_dest)
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", dir=parent)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(content)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        if mode is not None:
+            os.chmod(tmp_path, mode)
+        os.replace(tmp_path, abs_dest)
+    except Exception:
+        try:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def atomic_write_text(dest_path: str, text: str, mode: int = None) -> None:
+    atomic_write_bytes(dest_path, text.encode("utf-8"), mode=mode)
+
+
+def atomic_write_json(dest_path: str, data: dict) -> None:
+    atomic_write_text(dest_path, json.dumps(data, indent=2, ensure_ascii=False) + "\n", mode=0o644)
+
+
+def atomic_copy_file(src_path: str, dest_path: str, mode: int = None) -> None:
+    with open(src_path, "rb") as f:
+        data = f.read()
+    if mode is None:
+        try:
+            mode = stat.S_IMODE(os.stat(src_path).st_mode)
+        except OSError:
+            mode = None
+    atomic_write_bytes(dest_path, data, mode=mode)
+
+
+def normalize_panel_config(cfg: dict) -> dict:
+    data = copy.deepcopy(DEFAULT_PANEL_CONFIG)
+    if isinstance(cfg, dict):
+        data.update(cfg)
+    if "icon_only" in data:
+        icon_only = bool(data["icon_only"])
+    elif "show_labels" in data:
+        icon_only = not bool(data["show_labels"])
+    else:
+        icon_only = True
+    data["icon_only"] = icon_only
+    data["show_labels"] = not icon_only
+    pos = str(data.get("position", "bottom")).lower()
+    data["position"] = "top" if pos == "top" else "bottom"
+    data["animations"] = bool(data.get("animations", True))
+    if not isinstance(data.get("pinned_apps"), list):
+        data["pinned_apps"] = copy.deepcopy(DEFAULT_PANEL_CONFIG["pinned_apps"])
+    return data
+
+
+def _merge_missing_dict(target: dict, source: dict) -> bool:
+    changed = False
+    for k, v in source.items():
+        if k not in target:
+            target[k] = copy.deepcopy(v)
+            changed = True
+        elif isinstance(target[k], dict) and isinstance(v, dict):
+            if _merge_missing_dict(target[k], v):
+                changed = True
+    return changed
+
+
+def merge_missing_json_defaults(user_json_path: str, defaults: dict, template_path: str = "", normalizer=None) -> dict:
+    """Zachowuje ustawienia użytkownika w pliku JSON i dopisuje wyłącznie brakujące klucze domyślne."""
+    base = copy.deepcopy(defaults)
+    if template_path and os.path.isfile(template_path):
+        try:
+            with open(template_path, "r", encoding="utf-8") as f:
+                tmpl_data = json.load(f)
+            if isinstance(tmpl_data, dict):
+                base.update(tmpl_data)
+        except Exception:
+            pass
+
+    def _write_fresh() -> dict:
+        fresh = normalizer(base) if normalizer is not None else base
+        atomic_write_json(user_json_path, fresh)
+        return fresh
+
+    if not os.path.exists(user_json_path):
+        return _write_fresh()
+
+    try:
+        with open(user_json_path, "r", encoding="utf-8") as f:
+            user_data = json.load(f)
+    except Exception:
+        try:
+            atomic_copy_file(user_json_path, user_json_path + ".bak", mode=0o644)
+        except Exception:
+            pass
+        return _write_fresh()
+
+    if not isinstance(user_data, dict):
+        return _write_fresh()
+
+    if _merge_missing_dict(user_data, base):
+        atomic_write_json(user_json_path, user_data)
+    return user_data
+
+
+def ensure_user_configs() -> None:
+    """Inicjalizuje ~/.config/okay-de oraz ~/.config/labwc z szablonów systemowych (read-only) przy pierwszym starcie."""
+    okay_dir = okay_config_dir()
+    labwc_dir = labwc_config_dir()
+    os.makedirs(okay_dir, exist_ok=True)
+    os.makedirs(labwc_dir, exist_ok=True)
+
+    # 1. Konfiguracja panelu i animacji (~/.config/okay-de/panel.json)
+    panel_json = os.path.join(okay_dir, "panel.json")
+    if not os.path.exists(panel_json):
+        try:
+            merge_missing_json_defaults(
+                panel_json,
+                DEFAULT_PANEL_CONFIG,
+                okay_template_file("panel.json"),
+                normalizer=normalize_panel_config,
+            )
+        except Exception:
+            pass
+
+    # 2. Tapeta pulpitu (~/.config/okay-de/wallpaper.png)
+    user_wp = os.path.join(okay_dir, "wallpaper.png")
+    if not os.path.exists(user_wp):
+        wp_tmpl = wallpaper_template_file()
+        if wp_tmpl:
+            try:
+                atomic_copy_file(wp_tmpl, user_wp, mode=0o644)
+            except Exception:
+                pass
+
+    # 3. Wersja lokalna (~/.config/okay-de/version)
+    user_ver = os.path.join(okay_dir, "version")
+    if not os.path.exists(user_ver):
+        ver_tmpl = find_existing_file(
+            "/etc/okay-de/version",
+            "/usr/share/okay-de/version",
+            os.path.join(okay_data_dir(), "defaults", "version"),
+        )
+        if ver_tmpl:
+            try:
+                atomic_copy_file(ver_tmpl, user_ver, mode=0o644)
+            except Exception:
+                pass
+
+    # 4. Pliki labwc (~/.config/labwc/{rc.xml, autostart, environment, menu.xml, themerc, ...})
+    for fname in _LABWC_CONFIG_FILES:
+        dst = os.path.join(labwc_dir, fname)
+        if not os.path.exists(dst):
+            src = labwc_template_file(fname)
+            if src:
+                try:
+                    atomic_copy_file(src, dst, mode=0o755 if fname == "autostart" else 0o644)
+                except Exception:
+                    pass
+
+    # 5. Maski przycisków okna labwc (*.xbm, *.svg)
+    seen_assets = set()
+    for tdir in labwc_template_dirs():
+        if not os.path.isdir(tdir):
+            continue
+        try:
+            for entry in os.listdir(tdir):
+                if entry.endswith(_LABWC_ASSET_EXTS) and entry not in seen_assets:
+                    seen_assets.add(entry)
+                    dst = os.path.join(labwc_dir, entry)
+                    if not os.path.exists(dst):
+                        try:
+                            atomic_copy_file(os.path.join(tdir, entry), dst, mode=0o644)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    # 6. Motyw użytkownika (~/.local/share/themes/OKay) z szablonu systemowego (read-only)
+    user_theme_dir = os.path.join(xdg_data_home(), "themes", "OKay")
+    if not os.path.exists(user_theme_dir):
+        for sys_theme in (
+            "/usr/share/themes/OKay",
+            "/usr/local/share/themes/OKay",
+            "/usr/share/okay-de/themes/OKay",
+            os.path.join(okay_data_dir(), "repo", "themes", "OKay"),
+        ):
+            if os.path.isdir(sys_theme):
+                try:
+                    shutil.copytree(sys_theme, user_theme_dir)
+                except Exception:
+                    pass
+                break
+
+
 class UpdateManager:
-    """Zarządza sprawdzaniem i instalacją aktualizacji OKay DE z GitHub."""
+    """Zarządza sprawdzaniem i bezrootową instalacją aktualizacji OKay DE w przestrzeni użytkownika."""
 
     GITHUB_REPO = "h3v3n/okay-de"
+    GIT_CLONE_URL = "https://github.com/h3v3n/okay-de.git"
     API_COMMITS_URL = "https://api.github.com/repos/h3v3n/okay-de/commits/main"
     TARBALL_URL = "https://github.com/h3v3n/okay-de/archive/refs/heads/main.tar.gz"
-    LOCAL_VERSION_FILE = os.path.expanduser("~/.config/okay-de/version")
-    SYSTEM_VERSION_FILE = "/etc/okay-de/version"
+    SYSTEM_VERSION_FILES = ("/etc/okay-de/version", "/usr/share/okay-de/version")
+
+    @classmethod
+    def user_repo_dir(cls) -> str:
+        return os.path.join(okay_data_dir(), "repo")
+
+    @classmethod
+    def local_version_file(cls) -> str:
+        return os.path.join(okay_config_dir(), "version")
 
     @classmethod
     def get_local_commit(cls) -> str:
-        for v_file in (cls.LOCAL_VERSION_FILE, cls.SYSTEM_VERSION_FILE):
+        candidates = (cls.local_version_file(),) + cls.SYSTEM_VERSION_FILES
+        for v_file in candidates:
             if os.path.exists(v_file):
                 try:
                     with open(v_file, "r", encoding="utf-8") as f:
                         val = f.read().strip()
-                        if val:
-                            return val[:7]
+                    if val:
+                        return val[:7]
                 except Exception:
                     pass
+        repo_dir = cls.user_repo_dir()
+        if os.path.isdir(os.path.join(repo_dir, ".git")) and shutil.which("git"):
+            rc, out, _ = run_cmd(["git", "-C", repo_dir, "rev-parse", "--short", "HEAD"], timeout=5)
+            if rc == 0 and out.strip():
+                return out.strip()[:7]
         return "nieznana"
 
     @classmethod
-    def check_remote_commit(cls) -> dict:
+    def check_remote_commit(cls, local_source_dir: str = "") -> dict:
+        if local_source_dir:
+            src = os.path.abspath(local_source_dir)
+            if not os.path.isfile(os.path.join(src, "install.sh")):
+                raise RuntimeError(f"Brak skryptu install.sh w katalogu źródłowym: {src}")
+            if os.path.isdir(os.path.join(src, ".git")) and shutil.which("git"):
+                rc, out, _ = run_cmd(["git", "-C", src, "log", "-1", "--format=%h%n%s%n%cs"], timeout=6)
+                if rc == 0:
+                    lines = out.splitlines()
+                    return {
+                        "sha": (lines[0] if len(lines) > 0 else "local")[:7],
+                        "message": lines[1] if len(lines) > 1 else "Lokalne źródło",
+                        "date": lines[2] if len(lines) > 2 else "",
+                        "source": src,
+                    }
+            return {"sha": "local", "message": f"Lokalny katalog ({src})", "date": "", "source": src}
+
         req = urllib.request.Request(
             cls.API_COMMITS_URL,
             headers={
-                "User-Agent": "OKay-Settings-Updater/1.0",
-                "Accept": "application/vnd.github.v3+json"
-            }
+                "User-Agent": "OKay-Settings-Updater/2.0",
+                "Accept": "application/vnd.github.v3+json",
+            },
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -523,46 +902,193 @@ class UpdateManager:
         commit = data.get("commit", {})
         msg = (commit.get("message", "") or "").splitlines()[0]
         date = commit.get("committer", {}).get("date", "")[:10]
-        return {"sha": sha, "message": msg, "date": date}
+        return {"sha": sha, "message": msg, "date": date, "source": cls.GIT_CLONE_URL}
+
+    @staticmethod
+    def _safe_extract_tar(tar_path: str, dest_dir: str) -> None:
+        real_dest = os.path.realpath(dest_dir)
+        with tarfile.open(tar_path, "r:gz") as tf:
+            if sys.version_info >= (3, 12):
+                tf.extractall(dest_dir, filter="data")
+                return
+            for member in tf.getmembers():
+                target = os.path.realpath(os.path.join(real_dest, member.name))
+                if target != real_dest and not target.startswith(real_dest + os.sep):
+                    raise RuntimeError(f"Niebezpieczna ścieżka w archiwum: {member.name}")
+                if member.issym() or member.islnk():
+                    raise RuntimeError(f"Niedozwolone dowiązanie w archiwum: {member.name}")
+                tf.extract(member, dest_dir)
+
+    @staticmethod
+    def _atomic_swap_dir(staging_dir: str, target_dir: str) -> None:
+        parent = os.path.dirname(os.path.abspath(target_dir))
+        os.makedirs(parent, exist_ok=True)
+        backup_dir = target_dir + ".bak"
+        if os.path.exists(backup_dir):
+            shutil.rmtree(backup_dir, ignore_errors=True)
+        had_existing = os.path.exists(target_dir)
+        if had_existing:
+            os.replace(target_dir, backup_dir)
+        try:
+            os.replace(staging_dir, target_dir)
+        except Exception:
+            if had_existing and os.path.exists(backup_dir) and not os.path.exists(target_dir):
+                try:
+                    os.replace(backup_dir, target_dir)
+                except OSError:
+                    pass
+            raise
+        if os.path.exists(backup_dir):
+            shutil.rmtree(backup_dir, ignore_errors=True)
 
     @classmethod
-    def download_and_install(cls, expected_sha: str = "") -> str:
-        with tempfile.TemporaryDirectory(prefix="okay-de-upd-") as tmpdir:
-            tar_path = os.path.join(tmpdir, "main.tar.gz")
-            req = urllib.request.Request(cls.TARBALL_URL, headers={"User-Agent": "OKay-Settings-Updater/1.0"})
-            with urllib.request.urlopen(req, timeout=30) as resp, open(tar_path, "wb") as out:
+    def _git_head_sha(cls, repo_dir: str, fallback: str = "") -> str:
+        if os.path.isdir(os.path.join(repo_dir, ".git")) and shutil.which("git"):
+            rc, out, _ = run_cmd(["git", "-C", repo_dir, "rev-parse", "--short", "HEAD"], timeout=5)
+            if rc == 0 and out.strip():
+                return out.strip()[:7]
+        return (fallback or "")[:7] or "local"
+
+    @classmethod
+    def _prepare_user_repo(cls, expected_sha: str = "", local_source_dir: str = "") -> tuple:
+        data_dir = okay_data_dir()
+        os.makedirs(data_dir, exist_ok=True)
+        repo_dir = cls.user_repo_dir()
+
+        if local_source_dir:
+            src = os.path.abspath(local_source_dir)
+            if not os.path.isfile(os.path.join(src, "install.sh")):
+                raise RuntimeError(f"Brak skryptu install.sh w lokalnym źródle: {src}")
+            if src != os.path.abspath(repo_dir):
+                stage_parent = tempfile.mkdtemp(prefix=".repo-stage-", dir=data_dir)
+                try:
+                    staged = os.path.join(stage_parent, "repo")
+                    shutil.copytree(src, staged, symlinks=False, ignore=shutil.ignore_patterns(".tmp-*", "*.tmp"))
+                    cls._atomic_swap_dir(staged, repo_dir)
+                finally:
+                    shutil.rmtree(stage_parent, ignore_errors=True)
+            sha = cls._git_head_sha(repo_dir, fallback=expected_sha or "local")
+            return repo_dir, sha
+
+        # 1. Preferowana ścieżka git w ~/.local/share/okay-de/repo
+        if shutil.which("git"):
+            if os.path.isdir(os.path.join(repo_dir, ".git")):
+                rc_f, _o, _e = run_cmd(["git", "-C", repo_dir, "fetch", "--depth=1", "origin", "main"], timeout=35)
+                if rc_f == 0:
+                    rc_r, _o2, _e2 = run_cmd(["git", "-C", repo_dir, "reset", "--hard", "origin/main"], timeout=15)
+                    if rc_r == 0 and os.path.isfile(os.path.join(repo_dir, "install.sh")):
+                        return repo_dir, cls._git_head_sha(repo_dir, fallback=expected_sha)
+
+            stage_parent = tempfile.mkdtemp(prefix=".repo-git-", dir=data_dir)
+            try:
+                staged_git = os.path.join(stage_parent, "repo")
+                rc_c, _o, _e = run_cmd(
+                    ["git", "clone", "--depth=1", "--branch", "main", cls.GIT_CLONE_URL, staged_git],
+                    timeout=45,
+                )
+                if rc_c == 0 and os.path.isfile(os.path.join(staged_git, "install.sh")):
+                    cls._atomic_swap_dir(staged_git, repo_dir)
+                    return repo_dir, cls._git_head_sha(repo_dir, fallback=expected_sha)
+            finally:
+                shutil.rmtree(stage_parent, ignore_errors=True)
+
+        # 2. Fallback: pobranie archiwum tar.gz z GitHub bezpośrednio do przestrzeni użytkownika
+        stage_parent = tempfile.mkdtemp(prefix=".repo-tar-", dir=data_dir)
+        try:
+            tar_path = os.path.join(stage_parent, "main.tar.gz")
+            req = urllib.request.Request(cls.TARBALL_URL, headers={"User-Agent": "OKay-Settings-Updater/2.0"})
+            with urllib.request.urlopen(req, timeout=35) as resp, open(tar_path, "wb") as out:
                 shutil.copyfileobj(resp, out)
 
-            with tarfile.open(tar_path, "r:gz") as tf:
-                if sys.version_info >= (3, 12):
-                    tf.extractall(tmpdir, filter="data")
-                else:
-                    tf.extractall(tmpdir)
+            extract_dir = os.path.join(stage_parent, "extracted")
+            os.makedirs(extract_dir, exist_ok=True)
+            cls._safe_extract_tar(tar_path, extract_dir)
 
             src_dir = None
-            for entry in os.listdir(tmpdir):
-                full = os.path.join(tmpdir, entry)
-                if os.path.isdir(full) and os.path.exists(os.path.join(full, "install.sh")):
+            for entry in os.listdir(extract_dir):
+                full = os.path.join(extract_dir, entry)
+                if os.path.isdir(full) and os.path.isfile(os.path.join(full, "install.sh")):
                     src_dir = full
                     break
-
             if not src_dir:
                 raise RuntimeError("Nie znaleziono skryptu install.sh w paczce aktualizacji.")
 
-            proc = subprocess.run(
-                ["bash", "install.sh", "--user"],
-                cwd=src_dir,
-                capture_output=True,
-                text=True,
-                timeout=60,
-                check=False
+            cls._atomic_swap_dir(src_dir, repo_dir)
+        finally:
+            shutil.rmtree(stage_parent, ignore_errors=True)
+
+        return repo_dir, (expected_sha[:7] if expected_sha else "main")
+
+    @classmethod
+    def _reload_user_session(cls) -> list:
+        notes = []
+        if os.environ.get("WAYLAND_DISPLAY"):
+            if shutil.which("labwc"):
+                rc_l, _o, err_l = run_cmd(["labwc", "--reconfigure"], timeout=5)
+                if rc_l == 0:
+                    notes.append("Przeładowano konfigurację kompozytora (labwc --reconfigure).")
+                else:
+                    notes.append(f"Ostrzeżenie labwc --reconfigure: {err_l.strip() or rc_l}")
+            panel_bin = os.path.join(xdg_bin_home(), "okay-panel")
+            if not (os.path.isfile(panel_bin) and os.access(panel_bin, os.X_OK)):
+                panel_bin = shutil.which("okay-panel") or ""
+            if panel_bin:
+                try:
+                    subprocess.Popen(
+                        [panel_bin, "--restart"],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    notes.append("Zrestartowano pasek zadań (okay-panel).")
+                except Exception as exc:
+                    notes.append(f"Nie udało się uruchomić okay-panel: {exc}")
+        return notes
+
+    @classmethod
+    def download_and_install(cls, expected_sha: str = "", local_source_dir: str = "") -> str:
+        repo_dir, actual_sha = cls._prepare_user_repo(expected_sha=expected_sha, local_source_dir=local_source_dir)
+
+        env = os.environ.copy()
+        env["OKAY_DE_FROM_UPDATER"] = "1"
+        env["OKAY_UPDATER_PID"] = str(os.getpid())
+        env["OKAY_DE_SKIP_RELOAD"] = "1"
+        if actual_sha:
+            env["OKAY_DE_VERSION"] = actual_sha
+
+        proc = subprocess.run(
+            ["bash", "./install.sh", "--user"],
+            cwd=repo_dir,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr or proc.stdout or "Błąd instalatora install.sh --user")
+
+        # Zachowaj plik użytkownika panel.json i dopisz tylko ewentualne nowe klucze domyślne
+        user_panel = os.path.join(okay_config_dir(), "panel.json")
+        repo_panel = os.path.join(repo_dir, "config", "okay-de", "panel.json")
+        try:
+            merge_missing_json_defaults(
+                user_panel,
+                DEFAULT_PANEL_CONFIG,
+                repo_panel,
+                normalizer=normalize_panel_config,
             )
-            if proc.returncode != 0:
-                raise RuntimeError(proc.stderr or proc.stdout or "Błąd instalatora install.sh")
+        except Exception:
+            pass
+        ensure_user_configs()
 
-            if expected_sha:
-                os.makedirs(os.path.dirname(cls.LOCAL_VERSION_FILE), exist_ok=True)
-                with open(cls.LOCAL_VERSION_FILE, "w", encoding="utf-8") as f:
-                    f.write(expected_sha[:7] + "\n")
+        if actual_sha:
+            atomic_write_text(cls.local_version_file(), actual_sha + "\n", mode=0o644)
 
-            return proc.stdout
+        reload_notes = cls._reload_user_session()
+        out = proc.stdout.strip()
+        if reload_notes:
+            out = (out + "\n" if out else "") + "\n".join(reload_notes)
+        return out

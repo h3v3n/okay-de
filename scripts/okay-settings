@@ -56,6 +56,7 @@ except ImportError as err:
 
 from settings import (
     apply_settings_css,
+    ensure_user_configs,
     WifiTab,
     DisplayTab,
     InputTab,
@@ -63,6 +64,7 @@ from settings import (
     PanelTab,
     SystemTab,
 )
+from settings.helpers import okay_config_dir, okay_template_file
 
 
 class OkaySettingsWindow(Gtk.ApplicationWindow):
@@ -76,6 +78,8 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
         self.set_size_request(760, 500)
         self.set_position(Gtk.WindowPosition.CENTER)
 
+        # Inicjalizacja ~/.config/okay-de i ~/.config/labwc z szablonów systemowych (read-only)
+        ensure_user_configs()
         apply_settings_css()
 
         root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
@@ -111,12 +115,13 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
         root.pack_start(self.stack, True, True, 0)
 
         # Rejestracja modularnych zakładek (leniwe ładowanie ciężkich backendów po otwarciu danej karty)
+        self._panel_tab = PanelTab(self, defer_load=True, on_animations_changed=self.apply_animations_setting)
         tabs = [
             ("wifi", "Wi-Fi i Sieć", WifiTab(self, defer_load=True)),
             ("display", "Monitory", DisplayTab(self, defer_load=True)),
             ("input", "Mysz i Touchpad", InputTab(self, defer_load=True)),
             ("sound", "Dźwięk", SoundTab(self, defer_load=True)),
-            ("panel", "Pulpit i Panel", PanelTab(self, defer_load=True, on_animations_changed=self.apply_animations_setting)),
+            ("panel", "Pulpit i Panel", self._panel_tab),
             ("system", "System i Aktualizacje", SystemTab(self)),
         ]
         for tab_id, title, widget in tabs:
@@ -133,11 +138,10 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
 
     @staticmethod
     def _read_animations_setting() -> bool:
-        for path in (
-            os.path.expanduser("~/.config/okay-de/panel.json"),
-            "/etc/xdg/okay-de/panel.json",
-        ):
-            if os.path.exists(path):
+        user_panel = os.path.join(okay_config_dir(), "panel.json")
+        candidates = (user_panel, okay_template_file("panel.json"))
+        for path in candidates:
+            if path and os.path.exists(path):
                 try:
                     with open(path, "r", encoding="utf-8") as f:
                         data = json.load(f)
@@ -145,8 +149,15 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
                         return bool(data.get("animations", True))
                 except Exception:
                     pass
+                if path == user_panel:
+                    continue
                 break
         return True
+
+    def refresh_after_update(self):
+        self.apply_animations_setting(self._read_animations_setting())
+        if getattr(self._panel_tab, "_loaded", False):
+            self._panel_tab.load_config()
 
     def apply_animations_setting(self, enabled: bool):
         enabled = bool(enabled)

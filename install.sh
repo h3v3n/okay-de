@@ -57,9 +57,15 @@ if [ "$MODE" = "--system" ]; then
         install -m 644 scripts/panel/*.py /usr/local/share/okay-de/panel/
     fi
 
-    # Instalacja domyślnej konfiguracji panelu w /etc/xdg/okay-de/panel.json
-    install -d /etc/xdg/okay-de
+    # Instalacja domyślnej konfiguracji panelu i szablonów systemowych (read-only fallback)
+    install -d /etc/xdg/okay-de /etc/okay-de /usr/share/okay-de/defaults/okay-de /usr/share/okay-de/defaults/labwc /usr/share/okay-de/defaults/backgrounds
     install -m 644 config/okay-de/panel.json /etc/xdg/okay-de/panel.json
+    install -m 644 config/okay-de/panel.json /etc/okay-de/panel.json
+    install -m 644 config/okay-de/panel.json /usr/share/okay-de/defaults/okay-de/panel.json
+    install -m 644 config/labwc/* /usr/share/okay-de/defaults/labwc/ 2>/dev/null || true
+    if [ -f backgrounds/default.png ]; then
+        install -m 644 backgrounds/default.png /usr/share/okay-de/defaults/backgrounds/default.png
+    fi
 
     # Rejestracja plików .desktop w /usr/share/applications, naprawa starych ścieżek Exec i aktualizacja bazy
     for sys_desktop in /usr/share/applications/*.desktop /usr/local/share/applications/*.desktop; do
@@ -87,37 +93,72 @@ if [ "$MODE" = "--system" ]; then
     install -d /usr/share/backgrounds/okay-de
     install -m 644 backgrounds/default.png /usr/share/backgrounds/okay-de/default.png
 
-    # Zapis wersji commita dla środowiska
-    install -d /etc/okay-de
-    if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        git rev-parse --short HEAD > /etc/okay-de/version 2>/dev/null || echo "9eede97" > /etc/okay-de/version
-    else
-        echo "9eede97" > /etc/okay-de/version
+    # Zapis wersji commita dla szablonu systemowego
+    install -d /etc/okay-de /usr/share/okay-de
+    SYS_VER="${OKAY_DE_VERSION:-local}"
+    if [ -z "${OKAY_DE_VERSION:-}" ] && command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        SYS_VER="$(git rev-parse --short HEAD 2>/dev/null || echo local)"
     fi
+    printf '%s\n' "$SYS_VER" > /etc/okay-de/version
+    printf '%s\n' "$SYS_VER" > /usr/share/okay-de/version
 
     echo "Instalacja systemowa zakończona sukcesem."
 elif [ "$MODE" = "--user" ]; then
-    echo "Instalowanie konfiguracji OKay DE dla bieżącego użytkownika ($HOME/.config)..."
+    XDG_CFG="${XDG_CONFIG_HOME:-$HOME/.config}"
+    XDG_DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
+    XDG_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}"
+    BIN_DIR="$HOME/.local/bin"
+    OKAY_CFG_DIR="$XDG_CFG/okay-de"
+    LABWC_CFG_DIR="$XDG_CFG/labwc"
+    OKAY_DATA_DIR="$XDG_DATA/okay-de"
 
-    # Weryfikacja obecności oficjalnych bibliotek GTK3 / Layer-Shell
-    if command -v pacman >/dev/null 2>&1; then
-        PKGS_TO_INSTALL=()
-        if ! pacman -Qi gtk-layer-shell >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk-layer-shell"); fi
-        if ! pacman -Qi python-gobject >/dev/null 2>&1; then PKGS_TO_INSTALL+=("python-gobject"); fi
-        if ! pacman -Qi gtk3 >/dev/null 2>&1; then PKGS_TO_INSTALL+=("gtk3"); fi
-        if ! pacman -Qi wlr-randr >/dev/null 2>&1; then PKGS_TO_INSTALL+=("wlr-randr"); fi
-        if [ ${#PKGS_TO_INSTALL[@]} -gt 0 ]; then
-            echo "Wykryto brak pakietów dla paska zadań i ustawień: ${PKGS_TO_INSTALL[*]}"
-            INSTALLED=0
-            if command -v sudo >/dev/null 2>&1; then
-                echo "Instalowanie pakietów przez sudo pacman..."
-                sudo -n pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" && INSTALLED=1 || true
-            fi
-            if [ "$INSTALLED" -eq 0 ] && command -v pkexec >/dev/null 2>&1; then
-                echo "Instalowanie pakietów przez pkexec pacman..."
-                pkexec pacman -S --needed --noconfirm "${PKGS_TO_INSTALL[@]}" && INSTALLED=1 || true
-            fi
+    echo "Instalowanie OKay DE w przestrzeni użytkownika ($OKAY_CFG_DIR, $BIN_DIR, $OKAY_DATA_DIR)..."
+
+    # Funkcje pomocnicze: zapis atomowy oraz kopiowanie bez nadpisywania ustawień użytkownika
+    atomic_copy_file() {
+        local src="$1" dst="$2" mode="${3:-644}"
+        mkdir -p "$(dirname "$dst")"
+        local tmp
+        tmp="$(mktemp "$(dirname "$dst")/.tmp-XXXXXX")"
+        cp "$src" "$tmp"
+        chmod "$mode" "$tmp"
+        mv -f "$tmp" "$dst"
+    }
+
+    copy_if_missing() {
+        local src="$1" dst="$2" mode="${3:-644}"
+        if [ ! -e "$dst" ] && [ -f "$src" ]; then
+            atomic_copy_file "$src" "$dst" "$mode"
         fi
+    }
+
+    copy_dir_missing() {
+        local src_dir="$1" dst_dir="$2" mode="${3:-644}"
+        [ -d "$src_dir" ] || return 0
+        mkdir -p "$dst_dir"
+        for item in "$src_dir"/*; do
+            [ -e "$item" ] || continue
+            local base
+            base="$(basename "$item")"
+            if [ -d "$item" ]; then
+                copy_dir_missing "$item" "$dst_dir/$base" "$mode"
+            elif [ -f "$item" ]; then
+                copy_if_missing "$item" "$dst_dir/$base" "$mode"
+            fi
+        done
+    }
+
+    # Lekka weryfikacja zależności (wyłącznie informacyjna, zero sudo/pkexec)
+    MISSING_DEPS=()
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "import gi; gi.require_version('Gtk', '3.0'); gi.require_version('GtkLayerShell', '0.1')" 2>/dev/null || MISSING_DEPS+=("gtk3/python-gobject/gtk-layer-shell")
+    else
+        MISSING_DEPS+=("python3")
+    fi
+    command -v wlr-randr >/dev/null 2>&1 || MISSING_DEPS+=("wlr-randr")
+    command -v wpctl >/dev/null 2>&1 || MISSING_DEPS+=("wireplumber")
+    if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
+        echo "Uwaga: Brak części zależności systemowych (${MISSING_DEPS[*]}). Kontynuuję bez uprawnień root." >&2
     fi
 
     # Zapewnienie ścieżki ~/.local/bin w profilu powłoki
@@ -125,155 +166,205 @@ elif [ "$MODE" = "--user" ]; then
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
     fi
 
-    # Usunięcie konfliktowych konfiguracji waybar / sfwbar
-    rm -rf "$HOME/.config/sfwbar" "$HOME/.config/waybar" "$HOME/.config/okay-de/panel" 2>/dev/null || true
+    # Usunięcie starych konfliktowych konfiguracji wyłącznie w katalogu użytkownika
+    rm -rf "$XDG_CFG/sfwbar" "$XDG_CFG/waybar" "$OKAY_CFG_DIR/panel" 2>/dev/null || true
     pkill -9 -x waybar 2>/dev/null || true
     pkill -9 -x sfwbar 2>/dev/null || true
 
-    # Tworzenie katalogów docelowych
-    mkdir -p "$HOME/.config/labwc"
-    mkdir -p "$HOME/.config/foot"
-    mkdir -p "$HOME/.config/fuzzel"
-    mkdir -p "$HOME/.config/mako"
-    mkdir -p "$HOME/.config/gtk-3.0"
-    mkdir -p "$HOME/.config/gtk-4.0"
-    mkdir -p "$HOME/.config/pcmanfm"
-    mkdir -p "$HOME/.config/okay-de"
-    mkdir -p "$HOME/.local/bin"
-    mkdir -p "$HOME/.local/share/applications"
-    mkdir -p "$HOME/.local/share/themes"
-    mkdir -p "$HOME/Desktop"
+    # Tworzenie katalogów docelowych XDG użytkownika
+    mkdir -p "$LABWC_CFG_DIR" \
+             "$XDG_CFG/foot" \
+             "$XDG_CFG/fuzzel" \
+             "$XDG_CFG/mako" \
+             "$XDG_CFG/gtk-3.0" \
+             "$XDG_CFG/gtk-4.0" \
+             "$XDG_CFG/pcmanfm" \
+             "$OKAY_CFG_DIR" \
+             "$BIN_DIR" \
+             "$OKAY_DATA_DIR/settings" \
+             "$OKAY_DATA_DIR/panel" \
+             "$OKAY_DATA_DIR/defaults/okay-de" \
+             "$OKAY_DATA_DIR/defaults/labwc" \
+             "$OKAY_DATA_DIR/defaults/backgrounds" \
+             "$XDG_DATA/applications" \
+             "$XDG_DATA/themes" \
+             "$HOME/Desktop"
 
-    # Domyślny plik panel.json (tylko jeśli nie istnieje, aby zachować przypięte aplikacje użytkownika)
-    if [ ! -f "$HOME/.config/okay-de/panel.json" ] && [ -f config/okay-de/panel.json ]; then
-        cp config/okay-de/panel.json "$HOME/.config/okay-de/panel.json"
+    # Szablony read-only dla pierwszego uruchomienia okay-settings w przestrzeni użytkownika
+    if [ -f config/okay-de/panel.json ]; then
+        atomic_copy_file config/okay-de/panel.json "$OKAY_DATA_DIR/defaults/okay-de/panel.json" 644
+    fi
+    if [ -d config/labwc ]; then
+        for lf in config/labwc/*; do
+            [ -f "$lf" ] || continue
+            lbase="$(basename "$lf")"
+            if [ "$lbase" = "autostart" ]; then
+                atomic_copy_file "$lf" "$OKAY_DATA_DIR/defaults/labwc/$lbase" 755
+            else
+                atomic_copy_file "$lf" "$OKAY_DATA_DIR/defaults/labwc/$lbase" 644
+            fi
+        done
+    fi
+    if [ -f backgrounds/default.png ]; then
+        atomic_copy_file backgrounds/default.png "$OKAY_DATA_DIR/defaults/backgrounds/default.png" 644
     fi
 
-    # Kopiowanie konfiguracji (zachowujemy rc.xml użytkownika, jeśli zawiera spersonalizowaną sekcję <libinput>)
-    RC_BACKUP=""
-    if [ -f "$HOME/.config/labwc/rc.xml" ] && grep -q '<libinput>' "$HOME/.config/labwc/rc.xml" 2>/dev/null; then
-        RC_BACKUP=$(mktemp)
-        cp "$HOME/.config/labwc/rc.xml" "$RC_BACKUP"
+    # Konfiguracja ~/.config/okay-de/panel.json: zachowaj ustawienia użytkownika i dopisz ewentualne brakujące klucze
+    if [ -f config/okay-de/panel.json ]; then
+        if [ ! -f "$OKAY_CFG_DIR/panel.json" ]; then
+            atomic_copy_file config/okay-de/panel.json "$OKAY_CFG_DIR/panel.json" 644
+        elif command -v python3 >/dev/null 2>&1; then
+            python3 - "$OKAY_CFG_DIR/panel.json" config/okay-de/panel.json <<'PYEOF'
+import copy, json, os, sys, tempfile
+user_p, tmpl_p = sys.argv[1], sys.argv[2]
+try:
+    with open(user_p, "r", encoding="utf-8") as f:
+        user_d = json.load(f)
+    with open(tmpl_p, "r", encoding="utf-8") as f:
+        tmpl_d = json.load(f)
+    if isinstance(user_d, dict) and isinstance(tmpl_d, dict):
+        def merge_missing(dst, src):
+            changed = False
+            for k, v in src.items():
+                if k not in dst:
+                    dst[k] = copy.deepcopy(v)
+                    changed = True
+                elif isinstance(dst[k], dict) and isinstance(v, dict):
+                    if merge_missing(dst[k], v):
+                        changed = True
+            return changed
+        if merge_missing(user_d, tmpl_d):
+            fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=os.path.dirname(os.path.abspath(user_p)))
+            with os.fdopen(fd, "w", encoding="utf-8") as out:
+                json.dump(user_d, out, indent=2, ensure_ascii=False)
+                out.write("\n")
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(tmp, user_p)
+except Exception:
+    pass
+PYEOF
+        fi
     fi
-    cp -r config/labwc/* "$HOME/.config/labwc/" 2>/dev/null || true
-    if [ -n "$RC_BACKUP" ] && [ -f "$RC_BACKUP" ]; then
-        mv "$RC_BACKUP" "$HOME/.config/labwc/rc.xml"
-    fi
-    cp -r config/foot/* "$HOME/.config/foot/" 2>/dev/null || true
-    cp -r config/fuzzel/* "$HOME/.config/fuzzel/" 2>/dev/null || true
-    cp -r config/mako/* "$HOME/.config/mako/" 2>/dev/null || true
-    cp -r config/gtk-3.0/* "$HOME/.config/gtk-3.0/" 2>/dev/null || true
-    cp -r config/gtk-4.0/* "$HOME/.config/gtk-4.0/" 2>/dev/null || true
-    cp -r config/pcmanfm/* "$HOME/.config/pcmanfm/" 2>/dev/null || true
-    cp -r themes/* "$HOME/.local/share/themes/" 2>/dev/null || true
 
-    # Kopiowanie domyślnej tapety użytkownika jeśli jeszcze nie istnieje
-    if [ ! -f "$HOME/.config/okay-de/wallpaper.png" ] && [ -f backgrounds/default.png ]; then
-        echo "Kopiowanie domyślnej tapety do $HOME/.config/okay-de/wallpaper.png..."
-        cp backgrounds/default.png "$HOME/.config/okay-de/wallpaper.png"
+    # Konfiguracja ~/.config/labwc: zachowujemy istniejące pliki użytkownika, kopiujemy brakujące i ikony przycisków
+    if [ -d config/labwc ]; then
+        for lf in config/labwc/*; do
+            [ -f "$lf" ] || continue
+            lbase="$(basename "$lf")"
+            case "$lbase" in
+                *.xbm|*.svg)
+                    atomic_copy_file "$lf" "$LABWC_CFG_DIR/$lbase" 644
+                    ;;
+                autostart)
+                    copy_if_missing "$lf" "$LABWC_CFG_DIR/$lbase" 755
+                    chmod +x "$LABWC_CFG_DIR/autostart" 2>/dev/null || true
+                    ;;
+                *)
+                    copy_if_missing "$lf" "$LABWC_CFG_DIR/$lbase" 644
+                    ;;
+            esac
+        done
     fi
 
-    # Bezpieczne kopiowanie skryptów i aplikacji do ~/.local/bin oraz modułów panel/settings
-    rm -rf "$HOME/.local/share/okay-de/settings" "$HOME/.local/share/okay-de/panel" 2>/dev/null || true
-    rm -f "$HOME/.local/bin/okay-settings" 2>/dev/null || true
+    copy_dir_missing config/foot "$XDG_CFG/foot" 644
+    copy_dir_missing config/fuzzel "$XDG_CFG/fuzzel" 644
+    copy_dir_missing config/mako "$XDG_CFG/mako" 644
+    copy_dir_missing config/gtk-3.0 "$XDG_CFG/gtk-3.0" 644
+    copy_dir_missing config/gtk-4.0 "$XDG_CFG/gtk-4.0" 644
+    copy_dir_missing config/pcmanfm "$XDG_CFG/pcmanfm" 644
+    cp -r themes/* "$XDG_DATA/themes/" 2>/dev/null || true
+
+    # Domyślna tapeta użytkownika (tylko jeśli nie istnieje)
+    copy_if_missing backgrounds/default.png "$OKAY_CFG_DIR/wallpaper.png" 644
+
+    # Atomowa instalacja skryptów wykonawczych i modułów w ~/.local/bin i ~/.local/share/okay-de
+    rm -rf "$OKAY_DATA_DIR/settings" "$OKAY_DATA_DIR/panel" 2>/dev/null || true
+    mkdir -p "$OKAY_DATA_DIR/settings" "$OKAY_DATA_DIR/panel"
     if [ -d scripts ]; then
         for s in scripts/*; do
             if [ -f "$s" ]; then
-                cp "$s" "$HOME/.local/bin/"
-                chmod +x "$HOME/.local/bin/$(basename "$s")"
+                atomic_copy_file "$s" "$BIN_DIR/$(basename "$s")" 755
             fi
         done
         if [ -d scripts/settings ]; then
-            mkdir -p "$HOME/.local/share/okay-de/settings"
-            cp scripts/settings/*.py "$HOME/.local/share/okay-de/settings/"
+            for pyf in scripts/settings/*.py; do
+                [ -f "$pyf" ] && atomic_copy_file "$pyf" "$OKAY_DATA_DIR/settings/$(basename "$pyf")" 644
+            done
         fi
         if [ -d scripts/panel ]; then
-            mkdir -p "$HOME/.local/share/okay-de/panel"
-            cp scripts/panel/*.py "$HOME/.local/share/okay-de/panel/"
+            for pyf in scripts/panel/*.py; do
+                [ -f "$pyf" ] && atomic_copy_file "$pyf" "$OKAY_DATA_DIR/panel/$(basename "$pyf")" 644
+            done
         fi
     fi
-    chmod +x "$HOME/.config/labwc/autostart" 2>/dev/null || true
 
-    # Czyszczenie starych/osieroconych wpisów .desktop oraz naprawa ścieżek Exec
-    rm -f "$HOME/.local/share/applications/okay-dock.desktop" \
-          "$HOME/.local/share/applications/okay-de-settings.desktop" \
-          "$HOME/.local/share/applications/oksavi-settings.desktop" \
-          "$HOME/.local/share/applications/okay-de.desktop" 2>/dev/null || true
+    # Czyszczenie starych wpisów .desktop wyłącznie w katalogu użytkownika i naprawa ścieżek Exec
+    rm -f "$XDG_DATA/applications/okay-dock.desktop" \
+          "$XDG_DATA/applications/okay-de-settings.desktop" \
+          "$XDG_DATA/applications/oksavi-settings.desktop" \
+          "$XDG_DATA/applications/okay-de.desktop" 2>/dev/null || true
     rm -f "$HOME/Desktop/okay-dock.desktop" \
           "$HOME/Desktop/okay-de-settings.desktop" \
           "$HOME/Desktop/oksavi-settings.desktop" 2>/dev/null || true
 
-    for existing_desktop in "$HOME/.local/share/applications/"*.desktop; do
+    for existing_desktop in "$XDG_DATA/applications/"*.desktop "$HOME/Desktop/"*.desktop; do
         if [ -f "$existing_desktop" ] && grep -qE '^Exec=(/usr/bin/|/usr/local/bin/)okay-settings' "$existing_desktop" 2>/dev/null; then
             sed -i -E 's|^Exec=(/usr/bin/|/usr/local/bin/)okay-settings|Exec=okay-settings|' "$existing_desktop" 2>/dev/null || true
         fi
     done
 
-    # Kopiowanie aktualnych wpisów .desktop aplikacji i odświeżenie bazy oraz cache fuzzel
     if [ -d sessions ]; then
         for d in sessions/*.desktop; do
             if [ -f "$d" ] && [ "$(basename "$d")" != "okay-de.desktop" ]; then
-                cp "$d" "$HOME/.local/share/applications/"
+                atomic_copy_file "$d" "$XDG_DATA/applications/$(basename "$d")" 644
             fi
         done
     fi
     if command -v update-desktop-database >/dev/null 2>&1; then
-        update-desktop-database "$HOME/.local/share/applications/" 2>/dev/null || true
+        update-desktop-database "$XDG_DATA/applications/" 2>/dev/null || true
     fi
-    rm -f "$HOME/.cache/fuzzel" 2>/dev/null || true
+    rm -f "$XDG_CACHE/fuzzel" 2>/dev/null || true
 
-    # Całkowite usunięcie pozostałości starego paska docka (okay-dock) i instancji starego okay-settings
-    rm -rf "$HOME/.config/okay-dock" 2>/dev/null || true
-    rm -f "$HOME/.local/bin/okay-dock" "$HOME/.local/bin/oksavi-ghost-runner" 2>/dev/null || true
+    # Czyszczenie przestarzałych plików okay-dock (bez ubijania aktywnego okay-settings w trakcie aktualizacji)
+    rm -rf "$OKAY_CFG_DIR/dock" 2>/dev/null || true
+    rm -f "$BIN_DIR/okay-dock" "$BIN_DIR/oksavi-ghost-runner" 2>/dev/null || true
     pkill -9 -x okay-dock 2>/dev/null || true
-    pkill -9 -x okay-settings 2>/dev/null || true
+    if [ "${OKAY_DE_FROM_UPDATER:-0}" != "1" ]; then
+        pkill -9 -x okay-settings 2>/dev/null || true
+    fi
 
-    # Przeładowanie lub uruchomienie paska zadań OKay DE (tylko w aktywnej sesji Wayland)
-    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
-        if [ -x "$HOME/.local/bin/okay-panel" ]; then
-            "$HOME/.local/bin/okay-panel" --restart >/dev/null 2>&1 &
-        elif [ -x /usr/local/bin/okay-panel ]; then
-            /usr/local/bin/okay-panel --restart >/dev/null 2>&1 &
-        elif [ -x /usr/bin/okay-panel ]; then
-            /usr/bin/okay-panel --restart >/dev/null 2>&1 &
+    # Domyślne ikony na pulpicie użytkownika (nie nadpisuj już istniejących)
+    copy_if_missing sessions/foot.desktop "$HOME/Desktop/foot.desktop" 644
+    copy_if_missing sessions/pcmanfm.desktop "$HOME/Desktop/pcmanfm.desktop" 644
+    copy_if_missing sessions/okay-settings.desktop "$HOME/Desktop/okay-settings.desktop" 644
+
+    # Atomowy zapis wersji commita dla profilu użytkownika i kopii defaults
+    USER_VER="${OKAY_DE_VERSION:-local}"
+    if [ -z "${OKAY_DE_VERSION:-}" ] && command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        USER_VER="$(git rev-parse --short HEAD 2>/dev/null || echo local)"
+    fi
+    TMP_VER="$(mktemp "$OKAY_CFG_DIR/.tmp-ver-XXXXXX")"
+    printf '%s\n' "$USER_VER" > "$TMP_VER"
+    mv -f "$TMP_VER" "$OKAY_CFG_DIR/version"
+    atomic_copy_file "$OKAY_CFG_DIR/version" "$OKAY_DATA_DIR/defaults/version" 644
+
+    # Przeładowanie sesji Wayland bez błędu (labwc --reconfigure oraz restart okay-panel)
+    if [ "${OKAY_DE_SKIP_RELOAD:-0}" != "1" ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        if command -v labwc >/dev/null 2>&1 && pgrep -u "$(id -u)" -x labwc >/dev/null 2>&1; then
+            labwc --reconfigure >/dev/null 2>&1 || true
+        fi
+        if [ -x "$BIN_DIR/okay-panel" ]; then
+            nohup "$BIN_DIR/okay-panel" --restart </dev/null >/dev/null 2>&1 &
         elif command -v okay-panel >/dev/null 2>&1; then
-            okay-panel --restart >/dev/null 2>&1 &
+            nohup okay-panel --restart </dev/null >/dev/null 2>&1 &
         fi
     fi
 
-    # Inicjalizacja domyślnych ikon na pulpicie użytkownika
-    echo "Kopiowanie domyślnych ikon na pulpit ($HOME/Desktop)..."
-    cp sessions/foot.desktop "$HOME/Desktop/"
-    cp sessions/pcmanfm.desktop "$HOME/Desktop/"
-    cp sessions/okay-settings.desktop "$HOME/Desktop/"
-    chmod 644 "$HOME/Desktop/"*.desktop
-
-    # Zapis wersji commita dla profilu użytkownika
-    if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        git rev-parse --short HEAD > "$HOME/.config/okay-de/version" 2>/dev/null || echo "9eede97" > "$HOME/.config/okay-de/version"
-    else
-        echo "9eede97" > "$HOME/.config/okay-de/version"
-    fi
-
-    echo "Konfiguracja użytkownika zainstalowana pomyślnie."
-    echo "Wymagane pakiety: gtk3, gtk-layer-shell, python-gobject, wlr-randr, wireplumber."
-    echo "Sugerowane pakiety narzędzi: swaybg, networkmanager, pavucontrol, papirus-icon-theme."
-    echo "Upewnij się, że \$HOME/.local/bin znajduje się w Twojej zmiennej PATH."
-
-    STALE_SYS=0
-    if [ -f /usr/bin/okay-settings ] && ! cmp -s scripts/okay-settings /usr/bin/okay-settings 2>/dev/null; then
-        STALE_SYS=1
-    fi
-    if [ -f /usr/local/bin/okay-settings ] && ! cmp -s scripts/okay-settings /usr/local/bin/okay-settings 2>/dev/null; then
-        STALE_SYS=1
-    fi
-    if [ "$STALE_SYS" -eq 1 ]; then
-        echo ""
-        echo "======================================================================"
-        echo "UWAGA: Wykryto starszą instalację systemową okay-settings (/usr/bin lub /usr/local/bin)."
-        echo "Aby upewnić się, że całe środowisko korzysta z najnowszej wersji:"
-        echo "uruchom: sudo ./install.sh --system"
-        echo "======================================================================"
+    echo "Konfiguracja użytkownika zainstalowana pomyślnie (bez uprawnień root)."
+    echo "Ścieżki XDG: config=$OKAY_CFG_DIR, bin=$BIN_DIR, data=$OKAY_DATA_DIR"
+    if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+        echo "Uwaga: Upewnij się, że $BIN_DIR znajduje się na początku zmiennej PATH."
     fi
 else
     echo "Użycie: $0 [--user | --system]"

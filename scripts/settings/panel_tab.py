@@ -13,17 +13,27 @@ import subprocess
 from gi.repository import Gtk
 
 from .helpers import (
+    okay_config_dir,
+    okay_template_file,
+    wallpaper_template_file,
+    xdg_bin_home,
+    atomic_write_json,
+    atomic_copy_file,
+    normalize_panel_config,
+    ensure_user_configs,
     make_scrolled_page,
     make_page_header,
     make_card,
     make_setting_row,
 )
 
-PANEL_CONFIG_DIR = os.path.expanduser("~/.config/okay-de")
-PANEL_CONFIG_FILE = os.path.join(PANEL_CONFIG_DIR, "panel.json")
-SYSTEM_PANEL_CONFIG = "/etc/xdg/okay-de/panel.json"
-USER_WALLPAPER = os.path.join(PANEL_CONFIG_DIR, "wallpaper.png")
-SYSTEM_WALLPAPER = "/usr/share/backgrounds/okay-de/default.png"
+
+def _panel_json_path() -> str:
+    return os.path.join(okay_config_dir(), "panel.json")
+
+
+def _user_wallpaper_path() -> str:
+    return os.path.join(okay_config_dir(), "wallpaper.png")
 
 
 class PanelTab(Gtk.Box):
@@ -113,7 +123,7 @@ class PanelTab(Gtk.Box):
         box_desk.pack_start(
             make_setting_row(
                 "Tapeta pulpitu",
-                f"Aktualny plik: {USER_WALLPAPER}",
+                f"Aktualny plik: {_user_wallpaper_path()}",
                 wp_btns
             ),
             False, False, 0
@@ -134,34 +144,19 @@ class PanelTab(Gtk.Box):
             self.load_config()
 
     def _read_panel_json(self) -> dict:
-        data = {
-            "icon_only": True,
-            "show_labels": False,
-            "position": "bottom",
-            "animations": True,
-            "pinned_apps": []
-        }
-        src = PANEL_CONFIG_FILE if os.path.exists(PANEL_CONFIG_FILE) else SYSTEM_PANEL_CONFIG
-        if os.path.exists(src):
+        ensure_user_configs()
+        panel_file = _panel_json_path()
+        src = panel_file if os.path.exists(panel_file) else okay_template_file("panel.json")
+        loaded = {}
+        if src and os.path.exists(src):
             try:
                 with open(src, "r", encoding="utf-8") as f:
-                    loaded = json.load(f)
-                if isinstance(loaded, dict):
-                    data.update(loaded)
+                    parsed = json.load(f)
+                if isinstance(parsed, dict):
+                    loaded = parsed
             except Exception:
                 pass
-        if "icon_only" in data:
-            icon_only = bool(data["icon_only"])
-        elif "show_labels" in data:
-            icon_only = not bool(data["show_labels"])
-        else:
-            icon_only = True
-        data["icon_only"] = icon_only
-        data["show_labels"] = not icon_only
-        pos = str(data.get("position", "bottom")).lower()
-        data["position"] = "top" if pos == "top" else "bottom"
-        data["animations"] = bool(data.get("animations", True))
-        return data
+        return normalize_panel_config(loaded)
 
     def load_config(self):
         cfg = self._read_panel_json()
@@ -176,7 +171,7 @@ class PanelTab(Gtk.Box):
         self.lbl_pins_info.set_text(
             f"Przypięte aplikacje ({len(pins)}): {names}" if pins else "Brak przypiętych aplikacji."
         )
-        self.lbl_status.set_text(f"Konfiguracja wczytana z: {PANEL_CONFIG_FILE}")
+        self.lbl_status.set_text(f"Konfiguracja wczytana z: {_panel_json_path()}")
 
     def _on_setting_changed(self, *_args):
         if self._updating_ui:
@@ -197,24 +192,23 @@ class PanelTab(Gtk.Box):
             except Exception:
                 pass
 
+        panel_file = _panel_json_path()
         try:
-            os.makedirs(PANEL_CONFIG_DIR, exist_ok=True)
-            tmp_file = PANEL_CONFIG_FILE + ".tmp"
-            with open(tmp_file, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, indent=2, ensure_ascii=False)
-            os.replace(tmp_file, PANEL_CONFIG_FILE)
+            atomic_write_json(panel_file, cfg)
             self.lbl_status.set_text(
                 f"Zapisano panel.json (tylko ikony={icon_only}, pozycja={pos}, animacje={animations}). Pasek odświeży się automatycznie."
             )
         except Exception as exc:
-            self.lbl_status.set_text(f"Błąd zapisu {PANEL_CONFIG_FILE}: {exc}")
+            self.lbl_status.set_text(f"Błąd zapisu {panel_file}: {exc}")
 
     def _on_restart_panel_clicked(self, _btn):
         try:
-            panel_bin = shutil.which("okay-panel") or os.path.expanduser("~/.local/bin/okay-panel")
-            if os.path.exists(panel_bin):
+            local_panel = os.path.join(xdg_bin_home(), "okay-panel")
+            panel_bin = local_panel if os.path.isfile(local_panel) and os.access(local_panel, os.X_OK) else (shutil.which("okay-panel") or "")
+            if panel_bin and os.path.exists(panel_bin):
                 subprocess.Popen(
                     [panel_bin, "--restart"],
+                    stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     start_new_session=True
@@ -226,14 +220,15 @@ class PanelTab(Gtk.Box):
             self.lbl_status.set_text(f"Błąd uruchamiania panelu: {exc}")
 
     def _apply_wallpaper(self, img_path: str):
+        user_wp = _user_wallpaper_path()
         try:
-            os.makedirs(PANEL_CONFIG_DIR, exist_ok=True)
-            if os.path.abspath(img_path) != os.path.abspath(USER_WALLPAPER):
-                shutil.copyfile(img_path, USER_WALLPAPER)
+            if os.path.abspath(img_path) != os.path.abspath(user_wp):
+                atomic_copy_file(img_path, user_wp, mode=0o644)
             if shutil.which("swaybg"):
                 subprocess.run(["pkill", "-x", "swaybg"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.Popen(
-                    ["swaybg", "-c", "#1e1e2e", "-i", USER_WALLPAPER, "-m", "fill"],
+                    ["swaybg", "-c", "#1e1e2e", "-i", user_wp, "-m", "fill"],
+                    stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     start_new_session=True
@@ -265,7 +260,8 @@ class PanelTab(Gtk.Box):
             dialog.destroy()
 
     def _on_reset_wallpaper(self, _btn):
-        if os.path.exists(SYSTEM_WALLPAPER):
-            self._apply_wallpaper(SYSTEM_WALLPAPER)
+        sys_wp = wallpaper_template_file()
+        if sys_wp:
+            self._apply_wallpaper(sys_wp)
         else:
-            self.lbl_status.set_text(f"Nie znaleziono domyślnej tapety w {SYSTEM_WALLPAPER}.")
+            self.lbl_status.set_text("Nie znaleziono domyślnej tapety systemowej (read-only).")

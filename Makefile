@@ -84,9 +84,14 @@ install:
 	install -m 644 config/pcmanfm/default/desktop-items-0.conf $(DESTDIR)/etc/xdg/pcmanfm/default/desktop-items-0.conf
 	install -m 644 config/pcmanfm/default/pcmanfm.conf $(DESTDIR)/etc/xdg/pcmanfm/default/pcmanfm.conf
 
-	# Konfiguracja zunifikowanego paska zadań OKay DE
-	install -d $(DESTDIR)/etc/xdg/okay-de
+	# Konfiguracja zunifikowanego paska zadań OKay DE i szablony read-only
+	install -d $(DESTDIR)/etc/xdg/okay-de $(DESTDIR)/etc/okay-de
 	install -m 644 config/okay-de/panel.json $(DESTDIR)/etc/xdg/okay-de/panel.json
+	install -m 644 config/okay-de/panel.json $(DESTDIR)/etc/okay-de/panel.json
+	install -d $(DESTDIR)$(PREFIX)/share/okay-de/defaults/okay-de $(DESTDIR)$(PREFIX)/share/okay-de/defaults/labwc $(DESTDIR)$(PREFIX)/share/okay-de/defaults/backgrounds
+	install -m 644 config/okay-de/panel.json $(DESTDIR)$(PREFIX)/share/okay-de/defaults/okay-de/panel.json
+	install -m 644 config/labwc/* $(DESTDIR)$(PREFIX)/share/okay-de/defaults/labwc/
+	install -m 644 backgrounds/default.png $(DESTDIR)$(PREFIX)/share/okay-de/defaults/backgrounds/default.png
 
 	# Reguły uprawnień administracyjnych (Polkit & Sudoers)
 	install -d $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d
@@ -124,6 +129,7 @@ uninstall:
 	rm -f $(DESTDIR)/etc/xdg/gtk-4.0/settings.ini
 	rm -rf $(DESTDIR)/etc/xdg/pcmanfm
 	rm -rf $(DESTDIR)/etc/xdg/okay-de
+	rm -rf $(DESTDIR)/etc/okay-de
 	rm -rf $(DESTDIR)/etc/xdg/sfwbar
 	rm -rf $(DESTDIR)/etc/xdg/waybar
 

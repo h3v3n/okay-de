@@ -6,6 +6,7 @@ Styl: Catppuccin Mocha (#1e1e2e) + akcent OKsavi (#00e676).
 """
 
 import re
+import os
 import time
 import shutil
 import threading
@@ -542,6 +543,8 @@ class QuickSettingsPopover(Gtk.Window):
     def _on_open_settings(self, _btn):
         self.hide_popover()
         try:
-            subprocess.Popen(["okay-settings"], start_new_session=True)
+            local_bin = os.path.expanduser("~/.local/bin/okay-settings")
+            exe = local_bin if os.path.isfile(local_bin) and os.access(local_bin, os.X_OK) else "okay-settings"
+            subprocess.Popen([exe], start_new_session=True)
         except Exception:
             pass

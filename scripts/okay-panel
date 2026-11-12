@@ -25,6 +25,7 @@ import signal
 import shutil
 import socket
 import struct
+import tempfile
 import threading
 import subprocess
 from datetime import datetime
@@ -159,19 +160,7 @@ try:
     from gi.repository import GtkLayerShell
     HAS_LAYER_SHELL = True
 except (ValueError, ImportError):
-    if shutil.which("pacman"):
-        installed = False
-        if shutil.which("sudo"):
-            res = subprocess.run(["sudo", "-n", "pacman", "-S", "--needed", "--noconfirm", "gtk-layer-shell"], check=False)
-            installed = (res.returncode == 0)
-        if not installed and shutil.which("pkexec"):
-            subprocess.run(["pkexec", "pacman", "-S", "--needed", "--noconfirm", "gtk-layer-shell"], check=False)
-    try:
-        gi.require_version("GtkLayerShell", "0.1")
-        from gi.repository import GtkLayerShell
-        HAS_LAYER_SHELL = True
-    except (ValueError, ImportError):
-        HAS_LAYER_SHELL = False
+    HAS_LAYER_SHELL = False
 
 if not HAS_LAYER_SHELL:
     print("BŁĄD KRYTYCZNY: okay-panel wymaga pakietu 'gtk-layer-shell'. Zainstaluj: sudo pacman -S gtk-layer-shell", file=sys.stderr)
@@ -511,11 +500,28 @@ menu.no-animations menuitem {
 # Zarządzanie konfiguracją ~/.config/okay-de/panel.json
 # ============================================================================
 
+def _xdg_config_home() -> str:
+    val = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    return os.path.expanduser(val) if val else os.path.expanduser("~/.config")
+
+
+def _xdg_data_home() -> str:
+    val = os.environ.get("XDG_DATA_HOME", "").strip()
+    return os.path.expanduser(val) if val else os.path.expanduser("~/.local/share")
+
+
 class PanelConfigManager:
-    CONFIG_DIR = os.path.expanduser("~/.config/okay-de")
+    CONFIG_DIR = os.path.join(_xdg_config_home(), "okay-de")
     CONFIG_FILE = os.path.join(CONFIG_DIR, "panel.json")
     LEGACY_PINS_FILE = os.path.join(CONFIG_DIR, "pinned_apps.json")
-    SYSTEM_CONFIG_FILE = "/etc/xdg/okay-de/panel.json"
+    SYSTEM_CONFIG_FILES = (
+        "/etc/okay-de/panel.json",
+        "/etc/xdg/okay-de/panel.json",
+        "/usr/share/okay-de/defaults/okay-de/panel.json",
+        "/usr/share/okay-de/panel.json",
+        "/usr/local/share/okay-de/defaults/okay-de/panel.json",
+        os.path.join(_xdg_data_home(), "okay-de", "defaults", "okay-de", "panel.json"),
+    )
 
     DEFAULT_CONFIG = {
         "icon_only": True,
@@ -548,11 +554,12 @@ class PanelConfigManager:
     def load(cls) -> dict:
         os.makedirs(cls.CONFIG_DIR, exist_ok=True)
         if not os.path.exists(cls.CONFIG_FILE):
-            # Sprawdź konfigurację systemową lub migruj ze starszego pinned_apps.json
+            # Skopiuj domyślną konfigurację z szablonu systemowego (read-only) lub migruj starszy plik
             initial = copy.deepcopy(cls.DEFAULT_CONFIG)
-            if os.path.exists(cls.SYSTEM_CONFIG_FILE):
+            sys_tmpl = next((p for p in cls.SYSTEM_CONFIG_FILES if p and os.path.isfile(p)), "")
+            if sys_tmpl:
                 try:
-                    with open(cls.SYSTEM_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    with open(sys_tmpl, "r", encoding="utf-8") as f:
                         loaded = json.load(f)
                     if isinstance(loaded, dict):
                         initial = loaded
@@ -612,10 +619,24 @@ class PanelConfigManager:
         pos = str(data.get("position", "bottom")).lower()
         data["position"] = "top" if pos == "top" else "bottom"
         data["animations"] = bool(data.get("animations", True))
-        tmp_path = cls.CONFIG_FILE + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        os.replace(tmp_path, cls.CONFIG_FILE)
+        fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", dir=cls.CONFIG_DIR)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            os.replace(tmp_path, cls.CONFIG_FILE)
+        except Exception:
+            try:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 # ============================================================================
@@ -1502,6 +1523,10 @@ class OkayPanel(Gtk.Window):
         try:
             args = shlex.split(cmd_str)
             if args:
+                if os.sep not in args[0]:
+                    local_exe = os.path.expanduser(f"~/.local/bin/{args[0]}")
+                    if os.path.isfile(local_exe) and os.access(local_exe, os.X_OK):
+                        args[0] = local_exe
                 subprocess.Popen(args, start_new_session=True)
         except Exception as e:
             print(f"[okay-panel] Błąd uruchamiania '{cmd_str}': {e}", file=sys.stderr)

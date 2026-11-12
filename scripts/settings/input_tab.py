@@ -6,12 +6,18 @@ Parsuje i modyfikuje sekcję <libinput> w ~/.config/labwc/rc.xml,
 a następnie wysyła sygnał przeładowania przez `labwc --reconfigure`.
 """
 
+import io
 import os
 import shutil
 import xml.etree.ElementTree as ET
 from gi.repository import Gtk
 
 from .helpers import (
+    labwc_config_dir,
+    labwc_template_file,
+    atomic_write_bytes,
+    atomic_copy_file,
+    ensure_user_configs,
     run_async,
     run_cmd,
     make_scrolled_page,
@@ -20,8 +26,9 @@ from .helpers import (
     make_setting_row,
 )
 
-USER_RC_XML = os.path.expanduser("~/.config/labwc/rc.xml")
-SYSTEM_RC_XML = "/etc/xdg/labwc/rc.xml"
+
+def _user_rc_xml() -> str:
+    return os.path.join(labwc_config_dir(), "rc.xml")
 
 
 def _parse_xml_bool(val: str, default: bool = False) -> bool:
@@ -119,11 +126,11 @@ class InputTab(Gtk.Box):
             self.load_from_rc()
 
     def _resolve_source_xml(self) -> str:
-        if os.path.exists(USER_RC_XML):
-            return USER_RC_XML
-        if os.path.exists(SYSTEM_RC_XML):
-            return SYSTEM_RC_XML
-        return ""
+        ensure_user_configs()
+        user_rc = _user_rc_xml()
+        if os.path.exists(user_rc):
+            return user_rc
+        return labwc_template_file("rc.xml")
 
     @staticmethod
     def _find_libinput_device(root: ET.Element):
@@ -170,7 +177,7 @@ class InputTab(Gtk.Box):
             except Exception as exc:
                 self.lbl_status.set_text(f"Błąd odczytu rc.xml ({exc}) — użyto wartości domyślnych.")
         else:
-            self.lbl_status.set_text("Brak rc.xml — przy zapisie zostanie utworzony ~/.config/labwc/rc.xml.")
+            self.lbl_status.set_text(f"Brak rc.xml — przy zapisie zostanie utworzony {_user_rc_xml()}.")
 
         self.speed_scale.set_value(speed)
         self.switch_tap.set_active(tap)
@@ -180,21 +187,22 @@ class InputTab(Gtk.Box):
         speed = round(self.speed_scale.get_value(), 2)
         tap = self.switch_tap.get_active()
         natural = self.switch_natural.get_active()
+        user_rc = _user_rc_xml()
 
         try:
-            os.makedirs(os.path.dirname(USER_RC_XML), exist_ok=True)
             src = self._resolve_source_xml()
+            tmpl_rc = labwc_template_file("rc.xml")
             root = None
             if src:
                 try:
                     tree = ET.parse(src)
                     root = tree.getroot()
                 except ET.ParseError:
-                    if src == USER_RC_XML:
-                        shutil.copyfile(USER_RC_XML, USER_RC_XML + ".bak")
-                    if os.path.exists(SYSTEM_RC_XML):
+                    if src == user_rc:
+                        atomic_copy_file(user_rc, user_rc + ".bak", mode=0o644)
+                    if tmpl_rc and os.path.exists(tmpl_rc):
                         try:
-                            tree = ET.parse(SYSTEM_RC_XML)
+                            tree = ET.parse(tmpl_rc)
                             root = tree.getroot()
                         except ET.ParseError:
                             root = None
@@ -223,15 +231,15 @@ class InputTab(Gtk.Box):
             if hasattr(ET, "indent"):
                 ET.indent(tree, space="  ")
 
-            tmp_rc = USER_RC_XML + ".tmp"
-            tree.write(tmp_rc, encoding="utf-8", xml_declaration=True)
-            os.replace(tmp_rc, USER_RC_XML)
+            buf = io.BytesIO()
+            tree.write(buf, encoding="utf-8", xml_declaration=True)
+            atomic_write_bytes(user_rc, buf.getvalue() + b"\n", mode=0o644)
         except Exception as exc:
-            self.lbl_status.set_text(f"Błąd zapisu {USER_RC_XML}: {exc}")
+            self.lbl_status.set_text(f"Błąd zapisu {user_rc}: {exc}")
             return
 
         if not shutil.which("labwc"):
-            self.lbl_status.set_text("Zapisano rc.xml (nie znaleziono polecenia `labwc` do przeładowania).")
+            self.lbl_status.set_text(f"Zapisano {user_rc} (nie znaleziono polecenia `labwc` do przeładowania).")
             return
 
         self.btn_save.set_sensitive(False)
@@ -244,7 +252,7 @@ class InputTab(Gtk.Box):
             rc, _out, err = res
             self.btn_save.set_sensitive(True)
             if rc == 0:
-                self.lbl_status.set_text("Zapisano ~/.config/labwc/rc.xml i przeładowano labwc.")
+                self.lbl_status.set_text(f"Zapisano {user_rc} i przeładowano labwc.")
             else:
                 self.lbl_status.set_text(f"Zapisano rc.xml, ale `labwc --reconfigure` zwrócił błąd: {err.strip()}")
 

@@ -95,8 +95,14 @@ sudo pacman -S swaybg networkmanager pavucontrol
 
 ## Instalacja
 
-### Opcja 1: Instalacja systemowa (rekomendowana)
-Wdraża konfiguracje do `/etc/xdg/`, skrypty do `/usr/bin/` i `/usr/local/bin/`, szablony do `/etc/skel/Desktop/` oraz wpisy `.desktop`:
+### Opcja 1: Instalacja w profilu użytkownika (rekomendowana, bez uprawnień root)
+Instaluje binaria do `~/.local/bin`, moduły oraz szablony read-only do `~/.local/share/okay-de/`, a konfiguracje do `~/.config/okay-de/` i `~/.config/labwc/` (z zachowaniem istniejących ustawień użytkownika):
+```bash
+./install.sh --user
+```
+
+### Opcja 2: Instalacja systemowa (opcjonalna, szablony read-only dla nowych kont)
+Wdraża pakiety bazowe i szablony domyślne (read-only) do `/etc/xdg/`, `/etc/okay-de/` i `/usr/share/okay-de/defaults/`:
 ```bash
 sudo make install
 ```
@@ -105,22 +111,14 @@ lub:
 sudo ./install.sh --system
 ```
 
-### Opcja 2: Instalacja w profilu użytkownika
-Kopiuje konfiguracje do `~/.config/`, skrypty do `~/.local/bin/`, ikony na `$HOME/Desktop/` oraz pliki `.desktop`:
-```bash
-./install.sh --user
-```
-
 ---
 
 ## Aktualizacje
 
-Środowisko OKay DE można aktualizować bezpośrednio z oficjalnego repozytorium GitHub:
-- **Graficznie:** Otwórz `OKay Settings` (skrót `Super + I`), przejdź do zakładki **System i Aktualizacje** i kliknij **Sprawdź aktualizacje**. Jeśli pojawi się nowszy commit na gałęzi `main`, kliknij **Pobierz i zainstaluj**.
+Środowisko OKay DE aktualizuje się w 100% w przestrzeni użytkownika (`~/.local/share/okay-de/repo` -> `./install.sh --user`) bez użycia `sudo` czy `pkexec`:
+- **Graficznie:** Otwórz `OKay Settings` (skrót `Super + I`), przejdź do zakładki **System i Aktualizacje** i kliknij **Sprawdź aktualizacje** -> **Pobierz i zainstaluj** (lub **Z lokalnego folderu...** dla lokalnych źródeł). Istniejąca konfiguracja w `~/.config/okay-de/` zostaje zachowana (dopisane są jedynie brakujące klucze domyślne), a na końcu automatycznie przeładowują się `labwc` oraz `okay-panel`.
 - **Z wiersza poleceń:**
   ```bash
   git pull origin main
-  ./install.sh --user   # lub: sudo ./install.sh --system
-  labwc --reconfigure
-  okay-panel --restart &
+  ./install.sh --user
   ```
