@@ -29,9 +29,9 @@ case "$CHOICE" in
         fi
         ;;
     *"Wyloguj"*)
-        # Bezpieczne zakończenie procesu kompozytora labwc
+        # Bezpieczne zakończenie procesu kompozytora Wayfire / labwc
         CUR_USER="$(id -un)"
-        pkill -TERM -u "$CUR_USER" -x labwc || killall labwc || true
+        pkill -TERM -u "$CUR_USER" -x wayfire || pkill -TERM -u "$CUR_USER" -x labwc || killall wayfire labwc 2>/dev/null || true
         ;;
     *"Uruchom ponownie"*)
         systemctl reboot || loginctl reboot

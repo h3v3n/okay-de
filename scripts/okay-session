@@ -1,8 +1,8 @@
 #!/bin/sh
 
-# OKay DE - Główny skrypt startowy sesji środowiska graficznego
+# OKay DE - Główny skrypt startowy sesji środowiska graficznego (Wayfire)
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
-export XDG_CURRENT_DESKTOP=OKay:labwc
+export XDG_CURRENT_DESKTOP=OKay:wayfire
 export XDG_SESSION_DESKTOP=OKay
 export XDG_SESSION_TYPE=wayland
 
@@ -39,9 +39,36 @@ fi
 command -v xdg-user-dirs-update >/dev/null 2>&1 && xdg-user-dirs-update
 mkdir -p "$HOME/Desktop"
 
+# Inicjalizacja domyślnej konfiguracji ~/.config/wayfire.ini z szablonu (jeśli brak)
+WF_INI="${XDG_CONFIG_HOME:-$HOME/.config}/wayfire.ini"
+if [ ! -f "$WF_INI" ]; then
+    for cand in \
+        "${XDG_DATA_HOME:-$HOME/.local/share}/okay-de/defaults/wayfire/wayfire.ini" \
+        "/usr/share/okay-de/defaults/wayfire/wayfire.ini" \
+        "/etc/xdg/okay-de/wayfire.ini"; do
+        if [ -f "$cand" ]; then
+            mkdir -p "$(dirname "$WF_INI")"
+            cp "$cand" "$WF_INI" 2>/dev/null || true
+            break
+        fi
+    done
+fi
+
+# Jeśli dostępny jest plugin pixdecor (wayfire-plugins-extra), automatycznie aktywuj go zamiast decoration
+if [ -f "$WF_INI" ] && { [ -f /usr/lib/wayfire/libpixdecor.so ] || [ -f /usr/local/lib/wayfire/libpixdecor.so ]; }; then
+    if grep -qE '^plugins\s*=.*\bdecoration\b' "$WF_INI" 2>/dev/null && ! grep -qE '^plugins\s*=.*\bpixdecor\b' "$WF_INI" 2>/dev/null; then
+        sed -i -E 's/(^plugins\s*=.*)\bdecoration\b/\1pixdecor/' "$WF_INI" 2>/dev/null || true
+    fi
+fi
+
 # Zapewnienie uprawnień wykonywalności dla autostartu
+[ -f "$HOME/.config/okay-de/autostart" ] && chmod +x "$HOME/.config/okay-de/autostart" 2>/dev/null || true
 [ -f "$HOME/.config/labwc/autostart" ] && chmod +x "$HOME/.config/labwc/autostart" 2>/dev/null || true
 [ -f "/etc/xdg/labwc/autostart" ] && chmod +x "/etc/xdg/labwc/autostart" 2>/dev/null || true
 
-# Uruchomienie kompozytora labwc
-exec labwc
+# Uruchomienie kompozytora Wayfire (z awaryjnym fallbackiem do labwc jeśli wayfire nie jest zainstalowany)
+if command -v wayfire >/dev/null 2>&1; then
+    exec wayfire
+elif command -v labwc >/dev/null 2>&1; then
+    exec labwc
+fi

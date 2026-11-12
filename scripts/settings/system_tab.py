@@ -41,7 +41,7 @@ class SystemTab(Gtk.Box):
         card_sys, box_sys = make_card("Specyfikacja urządzenia")
         rows = [
             ("Dystrybucja", SystemHelper.get_distro_name()),
-            ("Środowisko graficzne", "OKay DE (Wayland / labwc / GTK3)"),
+            ("Środowisko graficzne", "OKay DE (Wayland / Wayfire / GTK3)"),
             ("Jądro Linux", SystemHelper.get_kernel_release()),
             ("Procesor", SystemHelper.get_cpu_info()),
             ("Pamięć operacyjna", SystemHelper.get_memory_info()),

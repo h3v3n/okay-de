@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=OKay DE
-Comment=Ultra-lekkie środowisko Wayland oparte na labwc dla OKsavi Linux
+Comment=Nowoczesne i lekkie środowisko Wayland oparte na Wayfire dla OKsavi Linux
 Exec=okay-session
 Type=Application
-DesktopNames=OKay;labwc;
+DesktopNames=OKay;wayfire;

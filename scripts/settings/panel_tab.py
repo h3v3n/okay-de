@@ -225,8 +225,8 @@ class PanelTab(Gtk.Box):
         box_accent.pack_start(self.preview_frame, False, False, 0)
         self.content.pack_start(card_accent, False, False, 0)
 
-        # Karta stylów ramek i przycisków okien labwc
-        card_window, box_window = make_card("Styl ramek i przyciski okien (labwc)")
+        # Karta stylów ramek i przycisków okien
+        card_window, box_window = make_card("Styl ramek i przyciski okien")
 
         self.combo_buttons_style = Gtk.ComboBoxText()
         self.combo_buttons_style.append("rectangles", "Spłaszczone prostokąty (Domyślny styl OKay)")
@@ -252,7 +252,7 @@ class PanelTab(Gtk.Box):
         box_window.pack_start(
             make_setting_row(
                 "Zaokrąglenie narożników okien",
-                "Promień zaokrąglenia górnych narożników ramek labwc oraz okien GTK (labwc nie zaokrągla dolnych krawędzi SSD)",
+                "Promień zaokrąglenia narożników okien w kompozytorze Wayfire (pixdecor) oraz aplikacjach GTK",
                 self.combo_corner_radius
             ),
             False, False, 0

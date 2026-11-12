@@ -60,11 +60,13 @@ if [ "$MODE" = "--system" ]; then
     fi
 
     # Instalacja domyślnej konfiguracji panelu i szablonów systemowych (read-only fallback)
-    install -d /etc/xdg/okay-de /etc/okay-de /usr/share/okay-de/defaults/okay-de /usr/share/okay-de/defaults/labwc /usr/share/okay-de/defaults/backgrounds
+    install -d /etc/xdg/okay-de /etc/okay-de /usr/share/okay-de/defaults/okay-de /usr/share/okay-de/defaults/labwc /usr/share/okay-de/defaults/wayfire /usr/share/okay-de/defaults/backgrounds
     install -m 644 config/okay-de/panel.json /etc/xdg/okay-de/panel.json
     install -m 644 config/okay-de/panel.json /etc/okay-de/panel.json
     install -m 644 config/okay-de/panel.json /usr/share/okay-de/defaults/okay-de/panel.json
     install -m 644 config/labwc/* /usr/share/okay-de/defaults/labwc/ 2>/dev/null || true
+    install -m 644 config/wayfire/wayfire.ini /usr/share/okay-de/defaults/wayfire/wayfire.ini 2>/dev/null || true
+    install -m 644 config/wayfire/wayfire.ini /etc/xdg/okay-de/wayfire.ini 2>/dev/null || true
     if [ -f backgrounds/default.png ]; then
         install -m 644 backgrounds/default.png /usr/share/okay-de/defaults/backgrounds/default.png
     fi
@@ -187,6 +189,7 @@ elif [ "$MODE" = "--user" ]; then
              "$OKAY_DATA_DIR/panel" \
              "$OKAY_DATA_DIR/defaults/okay-de" \
              "$OKAY_DATA_DIR/defaults/labwc" \
+             "$OKAY_DATA_DIR/defaults/wayfire" \
              "$OKAY_DATA_DIR/defaults/backgrounds" \
              "$XDG_DATA/applications" \
              "$XDG_DATA/themes" \
@@ -206,6 +209,19 @@ elif [ "$MODE" = "--user" ]; then
                 atomic_copy_file "$lf" "$OKAY_DATA_DIR/defaults/labwc/$lbase" 644
             fi
         done
+    fi
+    if [ -f config/wayfire/wayfire.ini ]; then
+        atomic_copy_file config/wayfire/wayfire.ini "$OKAY_DATA_DIR/defaults/wayfire/wayfire.ini" 644
+        copy_if_missing config/wayfire/wayfire.ini "$XDG_CFG/wayfire.ini" 644
+        if [ -f /usr/lib/wayfire/libpixdecor.so ] || [ -f /usr/local/lib/wayfire/libpixdecor.so ]; then
+            if grep -qE '^plugins\s*=.*\bdecoration\b' "$XDG_CFG/wayfire.ini" 2>/dev/null && ! grep -qE '^plugins\s*=.*\bpixdecor\b' "$XDG_CFG/wayfire.ini" 2>/dev/null; then
+                sed -i -E 's/(^plugins\s*=.*)\bdecoration\b/\1pixdecor/' "$XDG_CFG/wayfire.ini" 2>/dev/null || true
+            fi
+        fi
+    fi
+    if [ -f config/labwc/autostart ]; then
+        copy_if_missing config/labwc/autostart "$OKAY_CFG_DIR/autostart" 755
+        chmod +x "$OKAY_CFG_DIR/autostart" 2>/dev/null || true
     fi
     if [ -f backgrounds/default.png ]; then
         atomic_copy_file backgrounds/default.png "$OKAY_DATA_DIR/defaults/backgrounds/default.png" 644
@@ -331,9 +347,11 @@ PYEOF
     rm -f "$XDG_CACHE/fuzzel" 2>/dev/null || true
 
     # Migracja istniejącego autostart/rc.xml użytkownika dla okay-desktop
-    if [ -f "$LABWC_CFG_DIR/autostart" ] && ! grep -q "okay-desktop" "$LABWC_CFG_DIR/autostart" 2>/dev/null; then
-        printf '\n# Natywny pulpit OKay DE\n(\n    sleep 0.3\n    DESKTOP_LOG="${XDG_RUNTIME_DIR:-/tmp}/okay-desktop.log"\n    if [ -x "$HOME/.local/bin/okay-desktop" ]; then\n        "$HOME/.local/bin/okay-desktop" > "$DESKTOP_LOG" 2>&1 &\n    elif command -v okay-desktop >/dev/null 2>&1; then\n        okay-desktop > "$DESKTOP_LOG" 2>&1 &\n    fi\n) &\n' >> "$LABWC_CFG_DIR/autostart"
-    fi
+    for as_file in "$OKAY_CFG_DIR/autostart" "$LABWC_CFG_DIR/autostart"; do
+        if [ -f "$as_file" ] && ! grep -q "okay-desktop" "$as_file" 2>/dev/null; then
+            printf '\n# Natywny pulpit OKay DE\n(\n    sleep 0.3\n    DESKTOP_LOG="${XDG_RUNTIME_DIR:-/tmp}/okay-desktop.log"\n    if [ -x "$HOME/.local/bin/okay-desktop" ]; then\n        "$HOME/.local/bin/okay-desktop" > "$DESKTOP_LOG" 2>&1 &\n    elif command -v okay-desktop >/dev/null 2>&1; then\n        okay-desktop > "$DESKTOP_LOG" 2>&1 &\n    fi\n) &\n' >> "$as_file"
+        fi
+    done
     if [ -f "$LABWC_CFG_DIR/rc.xml" ] && ! grep -q 'identifier="okay-desktop"' "$LABWC_CFG_DIR/rc.xml" 2>/dev/null; then
         sed -i 's|<windowRule identifier="okay-panel" serverDecoration="no" />|<windowRule identifier="okay-panel" serverDecoration="no" />\n    <windowRule identifier="okay-desktop" serverDecoration="no" />|' "$LABWC_CFG_DIR/rc.xml" 2>/dev/null || true
     fi

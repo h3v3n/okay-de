@@ -738,6 +738,114 @@ def labwc_config_dir() -> str:
     return os.path.join(xdg_config_home(), "labwc")
 
 
+def wayfire_config_file() -> str:
+    return os.path.join(xdg_config_home(), "wayfire.ini")
+
+
+def wayfire_template_file() -> str:
+    candidates = [
+        "/etc/okay-de/wayfire.ini",
+        "/etc/xdg/okay-de/wayfire.ini",
+        "/usr/share/okay-de/defaults/wayfire/wayfire.ini",
+        "/usr/local/share/okay-de/defaults/wayfire/wayfire.ini",
+        os.path.join(okay_data_dir(), "defaults", "wayfire", "wayfire.ini"),
+        os.path.join(okay_data_dir(), "repo", "config", "wayfire", "wayfire.ini"),
+    ]
+    repo_root = _repo_root_from_script()
+    if repo_root:
+        candidates.append(os.path.join(repo_root, "config", "wayfire", "wayfire.ini"))
+    return find_existing_file(*candidates)
+
+
+def read_wayfire_value(section: str, key: str, default: str = "") -> str:
+    """Odczytuje wartość klucza z wybranej sekcji ~/.config/wayfire.ini."""
+    wf_ini = wayfire_config_file()
+    if not os.path.isfile(wf_ini):
+        wf_ini = wayfire_template_file()
+    if not wf_ini or not os.path.isfile(wf_ini):
+        return default
+    target_sec = f"[{section}]"
+    in_sec = False
+    try:
+        with open(wf_ini, "r", encoding="utf-8") as f:
+            for raw in f:
+                s = raw.strip()
+                if not s or s.startswith("#") or s.startswith(";"):
+                    continue
+                if s.startswith("[") and s.endswith("]"):
+                    in_sec = (s == target_sec)
+                    continue
+                if in_sec and "=" in s:
+                    k, v = s.split("=", 1)
+                    if k.strip() == key:
+                        return v.strip()
+    except Exception:
+        pass
+    return default
+
+
+def update_wayfire_section(section: str, updates: dict) -> bool:
+    """Atomowo aktualizuje lub dopisuje klucze w sekcji [section] pliku ~/.config/wayfire.ini."""
+    wf_ini = wayfire_config_file()
+    if not os.path.isfile(wf_ini):
+        tmpl = wayfire_template_file()
+        if tmpl and os.path.isfile(tmpl):
+            try:
+                atomic_copy_file(tmpl, wf_ini, mode=0o644)
+            except Exception:
+                pass
+    text = ""
+    if os.path.isfile(wf_ini):
+        try:
+            with open(wf_ini, "r", encoding="utf-8") as f:
+                text = f.read()
+        except Exception:
+            text = ""
+
+    lines = text.splitlines()
+    out_lines = []
+    target_sec = f"[{section}]"
+    in_sec = False
+    sec_found = False
+    pending = {str(k): str(v) for k, v in updates.items()}
+
+    def _flush_pending():
+        for pk, pv in pending.items():
+            out_lines.append(f"{pk} = {pv}")
+        pending.clear()
+
+    for line in lines:
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]"):
+            if in_sec and pending:
+                _flush_pending()
+            in_sec = (s == target_sec)
+            if in_sec:
+                sec_found = True
+            out_lines.append(line)
+            continue
+        if in_sec and "=" in s and not s.startswith("#") and not s.startswith(";"):
+            k = s.split("=", 1)[0].strip()
+            if k in pending:
+                out_lines.append(f"{k} = {pending.pop(k)}")
+                continue
+        out_lines.append(line)
+
+    if in_sec and pending:
+        _flush_pending()
+    elif not sec_found and pending:
+        if out_lines and out_lines[-1].strip():
+            out_lines.append("")
+        out_lines.append(target_sec)
+        _flush_pending()
+
+    try:
+        atomic_write_text(wf_ini, "\n".join(out_lines).rstrip() + "\n", mode=0o644)
+        return True
+    except Exception:
+        return False
+
+
 def okay_data_dir() -> str:
     return os.path.join(xdg_data_home(), "okay-de")
 
@@ -1158,7 +1266,19 @@ def ensure_user_configs() -> None:
             except Exception:
                 pass
 
-    if created_fuzzel or created_mako:
+    # 8b. Konfiguracja Wayfire (~/.config/wayfire.ini)
+    created_wf = False
+    wf_ini = wayfire_config_file()
+    if not os.path.exists(wf_ini):
+        w_tmpl = wayfire_template_file()
+        if w_tmpl and os.path.isfile(w_tmpl):
+            try:
+                atomic_copy_file(w_tmpl, wf_ini, mode=0o644)
+                created_wf = True
+            except Exception:
+                pass
+
+    if created_fuzzel or created_mako or created_wf:
         cur_accent = get_current_accent_color()
         if cur_accent.lower() != DEFAULT_ACCENT_COLOR:
             try:
@@ -1391,27 +1511,31 @@ class UpdateManager:
     def _reload_user_session(cls) -> list:
         notes = []
         if os.environ.get("WAYLAND_DISPLAY"):
-            if shutil.which("labwc"):
+            cur_de = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+            if "wayfire" in cur_de:
+                notes.append("Wayfire automatycznie przeładowuje ~/.config/wayfire.ini.")
+            elif shutil.which("labwc"):
                 rc_l, _o, err_l = run_cmd(["labwc", "--reconfigure"], timeout=5)
                 if rc_l == 0:
                     notes.append("Przeładowano konfigurację kompozytora (labwc --reconfigure).")
                 else:
                     notes.append(f"Ostrzeżenie labwc --reconfigure: {err_l.strip() or rc_l}")
-            panel_bin = os.path.join(xdg_bin_home(), "okay-panel")
-            if not (os.path.isfile(panel_bin) and os.access(panel_bin, os.X_OK)):
-                panel_bin = shutil.which("okay-panel") or ""
-            if panel_bin:
-                try:
-                    subprocess.Popen(
-                        [panel_bin, "--restart"],
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True,
-                    )
-                    notes.append("Zrestartowano pasek zadań (okay-panel).")
-                except Exception as exc:
-                    notes.append(f"Nie udało się uruchomić okay-panel: {exc}")
+            for app_name in ("okay-panel", "okay-desktop"):
+                app_bin = os.path.join(xdg_bin_home(), app_name)
+                if not (os.path.isfile(app_bin) and os.access(app_bin, os.X_OK)):
+                    app_bin = shutil.which(app_name) or ""
+                if app_bin:
+                    try:
+                        subprocess.Popen(
+                            [app_bin, "--restart"],
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            start_new_session=True,
+                        )
+                        notes.append(f"Zrestartowano {app_name}.")
+                    except Exception as exc:
+                        notes.append(f"Nie udało się uruchomić {app_name}: {exc}")
         return notes
 
     @classmethod
@@ -1875,7 +1999,19 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         except Exception:
             pass
 
-    # 7. Przeładowanie labwc oraz mako
+    # 7. Przeładowanie labwc, mako oraz aktualizacja Wayfire (wayfire.ini przeładowuje się automatycznie)
+    wf_btn_order = "close minimize maximize" if buttons_style == "circles_left" else "minimize maximize close"
+    update_wayfire_section("decoration", {
+        "button_order": wf_btn_order,
+        "active_color": f"{accent_hex}ff",
+    })
+    update_wayfire_section("pixdecor", {
+        "button_order": wf_btn_order,
+        "rounded_corner_radius": str(corner_radius),
+        "rounded_corners": "true" if corner_radius > 0 else "false",
+        "active_color": f"{accent_hex}ff",
+    })
+
     if os.environ.get("WAYLAND_DISPLAY") and shutil.which("labwc"):
         run_cmd(["labwc", "--reconfigure"], timeout=4)
     if shutil.which("makoctl"):
@@ -1890,7 +2026,7 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
 
 
 def sync_gtk_animations(enabled: bool) -> None:
-    """Synchronizuje gtk-enable-animations w ~/.config/gtk-3.0/settings.ini oraz gtk-4.0/settings.ini."""
+    """Synchronizuje animacje GTK (settings.ini) oraz kompozytora Wayfire (~/.config/wayfire.ini)."""
     val = "1" if enabled else "0"
     for gtk_ver in ("gtk-3.0", "gtk-4.0"):
         ini_path = os.path.join(xdg_config_home(), gtk_ver, "settings.ini")
@@ -1913,6 +2049,13 @@ def sync_gtk_animations(enabled: bool) -> None:
             atomic_write_text(ini_path, content, mode=0o644)
         except Exception:
             pass
+
+    anim_mode = "fade" if enabled else "none"
+    update_wayfire_section("animate", {
+        "open_animation": anim_mode,
+        "close_animation": anim_mode,
+        "minimize_animation": anim_mode,
+    })
 
 
 def update_system_accent_color(new_accent: str) -> dict:
@@ -2039,6 +2182,9 @@ def update_system_accent_color(new_accent: str) -> dict:
         notes.append("themerc-override")
     except Exception:
         pass
+
+    if update_wayfire_section("decoration", {"active_color": f"{clean_hex}ff"}) and update_wayfire_section("pixdecor", {"active_color": f"{clean_hex}ff", "fg_color": f"{title_bg}ff"}):
+        notes.append("wayfire.ini")
 
     user_themerc = os.path.join(labwc_dir, "themerc")
     if os.path.isfile(user_themerc):

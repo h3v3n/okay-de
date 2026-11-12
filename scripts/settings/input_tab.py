@@ -18,6 +18,8 @@ from .helpers import (
     atomic_write_bytes,
     atomic_copy_file,
     ensure_user_configs,
+    read_wayfire_value,
+    update_wayfire_section,
     run_async,
     run_cmd,
     make_scrolled_page,
@@ -54,7 +56,7 @@ class InputTab(Gtk.Box):
         self.content.pack_start(
             make_page_header(
                 "Mysz i Touchpad",
-                "Konfiguracja parametrów libinput zapisywana w ~/.config/labwc/rc.xml."
+                "Konfiguracja parametrów libinput zapisywana w ~/.config/wayfire.ini (oraz ~/.config/labwc/rc.xml)."
             ),
             False, False, 0
         )
@@ -104,12 +106,12 @@ class InputTab(Gtk.Box):
         self.lbl_status.get_style_context().add_class("row-subtitle")
         footer.pack_start(self.lbl_status, True, True, 0)
 
-        self.btn_reload = Gtk.Button(label="Wczytaj z rc.xml")
+        self.btn_reload = Gtk.Button(label="Wczytaj ponownie")
         self.btn_reload.get_style_context().add_class("secondary-btn")
         self.btn_reload.connect("clicked", lambda _w: self.load_from_rc())
         footer.pack_end(self.btn_reload, False, False, 0)
 
-        self.btn_save = Gtk.Button(label="Zapisz i przeładuj labwc")
+        self.btn_save = Gtk.Button(label="Zapisz ustawienia")
         self.btn_save.get_style_context().add_class("accent-btn")
         self.btn_save.connect("clicked", self._on_save_clicked)
         footer.pack_end(self.btn_save, False, False, 0)
@@ -151,8 +153,25 @@ class InputTab(Gtk.Box):
         speed = 0.0
         tap = True
         natural = False
+        wf_loaded = False
 
-        if src:
+        wf_speed = read_wayfire_value("input", "mouse_cursor_speed", "")
+        wf_tap = read_wayfire_value("input", "tap_to_click", "")
+        wf_nat = read_wayfire_value("input", "natural_scroll", "")
+        if wf_speed != "" or wf_tap != "" or wf_nat != "":
+            try:
+                if wf_speed != "":
+                    speed = max(-1.0, min(1.0, float(wf_speed)))
+                if wf_tap != "":
+                    tap = _parse_xml_bool(wf_tap, default=True)
+                if wf_nat != "":
+                    natural = _parse_xml_bool(wf_nat, default=False)
+                wf_loaded = True
+                self.lbl_status.set_text("Wczytano konfigurację z ~/.config/wayfire.ini.")
+            except Exception:
+                wf_loaded = False
+
+        if not wf_loaded and src:
             try:
                 tree = ET.parse(src)
                 root = tree.getroot()
@@ -176,8 +195,8 @@ class InputTab(Gtk.Box):
                 self.lbl_status.set_text(f"Wczytano konfigurację z: {src}")
             except Exception as exc:
                 self.lbl_status.set_text(f"Błąd odczytu rc.xml ({exc}) — użyto wartości domyślnych.")
-        else:
-            self.lbl_status.set_text(f"Brak rc.xml — przy zapisie zostanie utworzony {_user_rc_xml()}.")
+        elif not wf_loaded:
+            self.lbl_status.set_text("Użyto domyślnych parametrów myszy i touchpada.")
 
         self.speed_scale.set_value(speed)
         self.switch_tap.set_active(tap)
@@ -188,6 +207,13 @@ class InputTab(Gtk.Box):
         tap = self.switch_tap.get_active()
         natural = self.switch_natural.get_active()
         user_rc = _user_rc_xml()
+
+        wf_ok = update_wayfire_section("input", {
+            "mouse_cursor_speed": f"{speed:.2f}",
+            "touchpad_cursor_speed": f"{speed:.2f}",
+            "tap_to_click": "true" if tap else "false",
+            "natural_scroll": "true" if natural else "false",
+        })
 
         try:
             src = self._resolve_source_xml()
@@ -238,8 +264,8 @@ class InputTab(Gtk.Box):
             self.lbl_status.set_text(f"Błąd zapisu {user_rc}: {exc}")
             return
 
-        if not shutil.which("labwc"):
-            self.lbl_status.set_text(f"Zapisano {user_rc} (nie znaleziono polecenia `labwc` do przeładowania).")
+        if not shutil.which("labwc") or "wayfire" in os.environ.get("XDG_CURRENT_DESKTOP", "").lower():
+            self.lbl_status.set_text("Zapisano ustawienia myszy i touchpada w ~/.config/wayfire.ini (przeładowano automatycznie).")
             return
 
         self.btn_save.set_sensitive(False)
