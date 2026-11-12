@@ -16,6 +16,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
+from .animations import apply_animation_class, prepare_fade_in, start_fade_in, stop_fade
+
 
 def _split_terse(line: str) -> list:
     fields, cur, esc = [], [], False
@@ -70,12 +72,13 @@ def _sig_icon(signal: int) -> str:
 class QuickSettingsPopover(Gtk.Window):
     """Lekkie okno szybkich ustawień na warstwie GtkLayerShell.Layer.TOP."""
 
-    def __init__(self, get_panel_pos_cb, on_volume_changed_cb=None):
+    def __init__(self, get_panel_pos_cb, on_volume_changed_cb=None, animations_enabled_cb=None):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
         self.set_name("okay-quick-settings")
         self.set_title("okay-quick-settings")
         self._get_panel_pos = get_panel_pos_cb
         self._on_volume_changed = on_volume_changed_cb
+        self._animations_enabled = animations_enabled_cb or (lambda: True)
 
         self._updating_ui = False
         self._vol_debounce = 0
@@ -219,13 +222,18 @@ class QuickSettingsPopover(Gtk.Window):
         if self.get_visible():
             self.hide_popover()
         else:
+            anim = bool(self._animations_enabled())
+            apply_animation_class(self, anim)
             self._sync_anchor()
             self.pwd_box.hide()
+            prepare_fade_in(self, anim)
             self.show_all()
             self.present()
+            start_fade_in(self, anim)
             self.refresh_all(rescan_wifi=False)
 
     def hide_popover(self):
+        stop_fade(self)
         self.pwd_box.hide()
         self.hide()
 

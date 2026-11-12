@@ -9,6 +9,7 @@ Stos technologiczny: Python 3, GTK3 (PyGObject), Wayland.
 
 import os
 import sys
+import json
 import signal
 import shutil
 import subprocess
@@ -96,7 +97,7 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
 
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-        self.stack.set_transition_duration(80)
+        self.stack.set_transition_duration(150)
         self.stack.set_hexpand(True)
         self.stack.set_vexpand(True)
 
@@ -115,11 +116,13 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
             ("display", "Monitory", DisplayTab(self, defer_load=True)),
             ("input", "Mysz i Touchpad", InputTab(self, defer_load=True)),
             ("sound", "Dźwięk", SoundTab(self, defer_load=True)),
-            ("panel", "Pulpit i Panel", PanelTab(self, defer_load=True)),
+            ("panel", "Pulpit i Panel", PanelTab(self, defer_load=True, on_animations_changed=self.apply_animations_setting)),
             ("system", "System i Aktualizacje", SystemTab(self)),
         ]
         for tab_id, title, widget in tabs:
             self.stack.add_titled(widget, tab_id, title)
+
+        self.apply_animations_setting(self._read_animations_setting())
 
         self.stack.connect("notify::visible-child", self._on_visible_tab_changed)
         self.show_all()
@@ -127,6 +130,40 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
         if initial_tab and self.stack.get_child_by_name(initial_tab):
             self.stack.set_visible_child_name(initial_tab)
         self._activate_current_tab()
+
+    @staticmethod
+    def _read_animations_setting() -> bool:
+        for path in (
+            os.path.expanduser("~/.config/okay-de/panel.json"),
+            "/etc/xdg/okay-de/panel.json",
+        ):
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, dict):
+                        return bool(data.get("animations", True))
+                except Exception:
+                    pass
+                break
+        return True
+
+    def apply_animations_setting(self, enabled: bool):
+        enabled = bool(enabled)
+        if enabled:
+            self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+            self.stack.set_transition_duration(150)
+            self.get_style_context().remove_class("no-animations")
+        else:
+            self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
+            self.stack.set_transition_duration(0)
+            self.get_style_context().add_class("no-animations")
+        try:
+            gtk_settings = Gtk.Settings.get_default()
+            if gtk_settings is not None:
+                gtk_settings.set_property("gtk-enable-animations", enabled)
+        except Exception:
+            pass
 
     def _activate_current_tab(self):
         child = self.stack.get_visible_child()

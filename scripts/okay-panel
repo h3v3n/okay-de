@@ -190,7 +190,7 @@ for _candidate in (
     if os.path.isdir(os.path.join(_candidate, "panel")) and _candidate not in sys.path:
         sys.path.insert(0, _candidate)
 
-from panel import StatusNotifierTray, QuickSettingsPopover
+from panel import StatusNotifierTray, QuickSettingsPopover, apply_animation_class, prepare_fade_in, start_fade_in
 
 
 # ============================================================================
@@ -221,6 +221,7 @@ button {
     min-height: 36px;
     outline: none;
     box-shadow: none;
+    transition: all 140ms ease-out;
 }
 
 button:hover {
@@ -253,6 +254,7 @@ button:hover {
     min-width: 40px;
     min-height: 35px;
     color: #bac2de;
+    transition: all 140ms ease-out;
 }
 
 .task-item:hover {
@@ -296,6 +298,7 @@ button:hover {
     padding: 0 7px;
     margin: 0 1px;
     color: #cdd6f4;
+    transition: all 140ms ease-out;
 }
 
 .status-item:hover, .tray-item:hover {
@@ -307,6 +310,7 @@ button:hover {
     margin: 0 2px;
     color: #cdd6f4;
     font-weight: bold;
+    transition: all 140ms ease-out;
 }
 
 #clock-button:hover {
@@ -318,6 +322,7 @@ button:hover {
     min-width: 14px;
     padding: 0 6px;
     margin-left: 4px;
+    transition: all 140ms ease-out;
 }
 
 #desktop-button:hover {
@@ -334,6 +339,7 @@ menu {
 menuitem {
     padding: 6px 14px;
     color: #cdd6f4;
+    transition: all 140ms ease-out;
 }
 
 menuitem:hover {
@@ -479,6 +485,25 @@ window#okay-quick-settings entry {
     border-radius: 4px;
     padding: 4px 8px;
 }
+
+.qs-list row {
+    transition: all 140ms ease-out;
+}
+
+.no-animations,
+.no-animations *,
+window.no-animations button,
+window.no-animations .task-item,
+window.no-animations .status-item,
+window.no-animations .tray-item,
+window.no-animations #start-button,
+window.no-animations #clock-button,
+window.no-animations #desktop-button,
+window.no-animations .qs-list row,
+window.no-animations menuitem,
+menu.no-animations menuitem {
+    transition: none;
+}
 """
 
 
@@ -496,6 +521,7 @@ class PanelConfigManager:
         "icon_only": True,
         "show_labels": False,
         "position": "bottom",
+        "animations": True,
         "pinned_apps": [
             {
                 "app_id": "foot",
@@ -570,6 +596,7 @@ class PanelConfigManager:
             data["icon_only"] = not show_labels
             pos = str(data.get("position", "bottom")).lower()
             data["position"] = "top" if pos == "top" else "bottom"
+            data["animations"] = bool(data.get("animations", True))
             if "pinned_apps" not in data or not isinstance(data["pinned_apps"], list):
                 data["pinned_apps"] = copy.deepcopy(cls.DEFAULT_CONFIG["pinned_apps"])
             return data
@@ -584,6 +611,7 @@ class PanelConfigManager:
         data["icon_only"] = not show_labels
         pos = str(data.get("position", "bottom")).lower()
         data["position"] = "top" if pos == "top" else "bottom"
+        data["animations"] = bool(data.get("animations", True))
         tmp_path = cls.CONFIG_FILE + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -1330,6 +1358,7 @@ class OkayPanel(Gtk.Window):
 
         self._build_right_section()
         self._apply_position()
+        self._apply_animations()
 
         # Obserwacja ~/.config/okay-de/panel.json przez Gio/inotify
         self._cfg_monitor = None
@@ -1381,11 +1410,27 @@ class OkayPanel(Gtk.Window):
     def _get_panel_pos(self) -> str:
         return str(self.panel_config.get("position", "bottom")).lower()
 
+    def _animations_enabled(self) -> bool:
+        return bool(self.panel_config.get("animations", True))
+
+    def _apply_animations(self):
+        enabled = self._animations_enabled()
+        apply_animation_class(self, enabled)
+        if self._quick_settings is not None:
+            apply_animation_class(self._quick_settings, enabled)
+        try:
+            gtk_settings = Gtk.Settings.get_default()
+            if gtk_settings is not None:
+                gtk_settings.set_property("gtk-enable-animations", enabled)
+        except Exception:
+            pass
+
     def _toggle_quick_settings(self, *_args):
         if self._quick_settings is None:
             self._quick_settings = QuickSettingsPopover(
                 self._get_panel_pos,
-                on_volume_changed_cb=lambda: GLib.timeout_add(120, lambda: (self._vol_wake.set(), False)[1])
+                on_volume_changed_cb=lambda: GLib.timeout_add(120, lambda: (self._vol_wake.set(), False)[1]),
+                animations_enabled_cb=self._animations_enabled
             )
         self._quick_settings.toggle()
 
@@ -1443,7 +1488,7 @@ class OkayPanel(Gtk.Window):
         self.right_box.pack_end(self.box_battery, False, False, 0)
 
         # 6. Tacka systemowa SNI (StatusNotifierWatcher + Host)
-        self.sni_tray = StatusNotifierTray(self._get_panel_pos)
+        self.sni_tray = StatusNotifierTray(self._get_panel_pos, animations_enabled_cb=self._animations_enabled)
         self.right_box.pack_end(self.sni_tray, False, False, 4)
 
     # ------------------------------------------------------------------------
@@ -1583,6 +1628,7 @@ class OkayPanel(Gtk.Window):
                 self._config_mtime = mtime
                 self.panel_config = PanelConfigManager.load()
                 self._apply_position()
+                self._apply_animations()
                 self._last_layout_key = None
         except Exception:
             pass
@@ -1827,11 +1873,15 @@ class OkayPanel(Gtk.Window):
             mi_close.connect("activate", lambda _: WindowManager.close_window(item["handle_id"], item["app_id"], item["title"], item["multiple"]))
             menu.append(mi_close)
 
+        anim = self._animations_enabled()
+        apply_animation_class(menu, anim)
         menu.show_all()
+        prepare_fade_in(menu, anim)
         if str(self.panel_config.get("position", "bottom")).lower() == "top":
             menu.popup_at_widget(widget, Gdk.Gravity.SOUTH, Gdk.Gravity.NORTH, event)
         else:
             menu.popup_at_widget(widget, Gdk.Gravity.NORTH, Gdk.Gravity.SOUTH, event)
+        start_fade_in(menu, anim)
 
     def _pin_app(self, item: dict):
         cfg = PanelConfigManager.load()

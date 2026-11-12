@@ -29,9 +29,10 @@ SYSTEM_WALLPAPER = "/usr/share/backgrounds/okay-de/default.png"
 class PanelTab(Gtk.Box):
     """Widok konfiguracji paska zadań (panel.json) oraz pulpitu OKay DE."""
 
-    def __init__(self, parent_window=None, defer_load: bool = False):
+    def __init__(self, parent_window=None, defer_load: bool = False, on_animations_changed=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.parent_window = parent_window
+        self._on_animations_changed = on_animations_changed
         self._updating_ui = False
         self._loaded = False
 
@@ -74,6 +75,17 @@ class PanelTab(Gtk.Box):
                 "Pozycja panelu",
                 "Krawędź ekranu, do której zakotwiczony jest pasek zadań",
                 self.combo_position
+            ),
+            False, False, 0
+        )
+
+        self.switch_animations = Gtk.Switch()
+        self.switch_animations.connect("notify::active", self._on_setting_changed)
+        box_panel.pack_start(
+            make_setting_row(
+                "Animacje interfejsu",
+                "Płynne przejścia zakładek, przycisków i menu (panel.json)",
+                self.switch_animations
             ),
             False, False, 0
         )
@@ -122,7 +134,13 @@ class PanelTab(Gtk.Box):
             self.load_config()
 
     def _read_panel_json(self) -> dict:
-        data = {"icon_only": True, "show_labels": False, "position": "bottom", "pinned_apps": []}
+        data = {
+            "icon_only": True,
+            "show_labels": False,
+            "position": "bottom",
+            "animations": True,
+            "pinned_apps": []
+        }
         src = PANEL_CONFIG_FILE if os.path.exists(PANEL_CONFIG_FILE) else SYSTEM_PANEL_CONFIG
         if os.path.exists(src):
             try:
@@ -142,6 +160,7 @@ class PanelTab(Gtk.Box):
         data["show_labels"] = not icon_only
         pos = str(data.get("position", "bottom")).lower()
         data["position"] = "top" if pos == "top" else "bottom"
+        data["animations"] = bool(data.get("animations", True))
         return data
 
     def load_config(self):
@@ -149,6 +168,7 @@ class PanelTab(Gtk.Box):
         self._updating_ui = True
         self.switch_icon_only.set_active(bool(cfg["icon_only"]))
         self.combo_position.set_active_id(cfg["position"])
+        self.switch_animations.set_active(bool(cfg["animations"]))
         self._updating_ui = False
 
         pins = cfg.get("pinned_apps", [])
@@ -164,10 +184,18 @@ class PanelTab(Gtk.Box):
         cfg = self._read_panel_json()
         icon_only = bool(self.switch_icon_only.get_active())
         pos = self.combo_position.get_active_id() or "bottom"
+        animations = bool(self.switch_animations.get_active())
 
         cfg["icon_only"] = icon_only
         cfg["show_labels"] = not icon_only
         cfg["position"] = pos
+        cfg["animations"] = animations
+
+        if self._on_animations_changed is not None:
+            try:
+                self._on_animations_changed(animations)
+            except Exception:
+                pass
 
         try:
             os.makedirs(PANEL_CONFIG_DIR, exist_ok=True)
@@ -176,7 +204,7 @@ class PanelTab(Gtk.Box):
                 json.dump(cfg, f, indent=2, ensure_ascii=False)
             os.replace(tmp_file, PANEL_CONFIG_FILE)
             self.lbl_status.set_text(
-                f"Zapisano panel.json (tylko ikony={icon_only}, pozycja={pos}). Pasek odświeży się automatycznie."
+                f"Zapisano panel.json (tylko ikony={icon_only}, pozycja={pos}, animacje={animations}). Pasek odświeży się automatycznie."
             )
         except Exception as exc:
             self.lbl_status.set_text(f"Błąd zapisu {PANEL_CONFIG_FILE}: {exc}")

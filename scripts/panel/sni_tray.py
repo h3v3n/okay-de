@@ -10,6 +10,8 @@ import time
 import shutil
 from gi.repository import Gtk, Gdk, GLib, Gio, GdkPixbuf
 
+from .animations import apply_animation_class, prepare_fade_in, start_fade_in
+
 WATCHER_BUS_NAME = "org.kde.StatusNotifierWatcher"
 WATCHER_OBJ_PATH = "/StatusNotifierWatcher"
 WATCHER_XML = """
@@ -100,9 +102,10 @@ def _resolve_icon_from_theme_path(icon_name: str, theme_path: str, size: int = 1
 class StatusNotifierTray(Gtk.Box):
     """Kontener tacy systemowej SNI umieszczany po prawej stronie okay-panel."""
 
-    def __init__(self, get_panel_pos_cb=None):
+    def __init__(self, get_panel_pos_cb=None, animations_enabled_cb=None):
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self._get_panel_pos = get_panel_pos_cb or (lambda: "bottom")
+        self._animations_enabled = animations_enabled_cb or (lambda: True)
         self._items = {}        # item_id -> {"bus": ..., "path": ..., "btn": ..., "props": ...}
         self._conn = None
         self._reg_id = 0
@@ -459,11 +462,15 @@ class StatusNotifierTray(Gtk.Box):
             (_rev, root_node) = conn.call_finish(res).unpack()
             menu = self._build_gtk_dbusmenu(rec["bus"], menu_path, root_node)
             if menu is not None and len(menu.get_children()) > 0:
+                anim = bool(self._animations_enabled())
+                apply_animation_class(menu, anim)
                 menu.show_all()
+                prepare_fade_in(menu, anim)
                 if self._get_panel_pos() == "top":
                     menu.popup_at_widget(widget, Gdk.Gravity.SOUTH, Gdk.Gravity.NORTH, None)
                 else:
                     menu.popup_at_widget(widget, Gdk.Gravity.NORTH, Gdk.Gravity.SOUTH, None)
+                start_fade_in(menu, anim)
                 return
         except Exception:
             pass

@@ -287,6 +287,25 @@ entry, combobox button {
 entry:focus {
     border-color: #00e676;
 }
+
+.settings-sidebar row,
+list.settings-list row,
+button.accent-btn,
+button.secondary-btn,
+button.danger-btn,
+button.scale-pill {
+    transition: all 140ms ease-out;
+}
+
+window.no-animations .settings-sidebar row,
+window.no-animations list.settings-list row,
+window.no-animations button.accent-btn,
+window.no-animations button.secondary-btn,
+window.no-animations button.danger-btn,
+window.no-animations button.scale-pill,
+window.no-animations * {
+    transition: none;
+}
 """
 
 

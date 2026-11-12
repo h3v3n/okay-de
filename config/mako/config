@@ -10,17 +10,22 @@ border-radius=8
 icons=1
 max-icon-size=48
 
-# Położenie w prawym górnym rogu ekranu
+# Położenie w prawym górnym rogu ekranu (nad oknami pełnoekranowymi)
+layer=overlay
 anchor=top-right
+max-visible=4
 
 # Stylistyka (Catppuccin Mocha)
-background-color=#1e1e2ef0
+# Uwaga: daemon mako nie obsługuje natywnej animacji fade-out przezroczystości okna;
+# delikatna półprzezroczystość (#e6), zaokrąglenia i pasek postępu zapewniają łagodne wygaszanie.
+background-color=#1e1e2ee6
 text-color=#cdd6f4
 border-color=#89b4fa
-progress-color=over #89b4fa
+progress-color=over #313244
 
-# Czas wyświetlania powiadomień (ms)
-default-timeout=5000
+# Automatyczne zamykanie / wygaszanie powiadomień (ms)
+default-timeout=4500
+ignore-timeout=1
 
 [urgency=low]
 border-color=#313244
@@ -28,9 +33,10 @@ default-timeout=3000
 
 [urgency=normal]
 border-color=#89b4fa
-default-timeout=5000
+default-timeout=4500
 
 [urgency=critical]
 border-color=#f38ba8
 text-color=#f38ba8
 default-timeout=0
+ignore-timeout=0
