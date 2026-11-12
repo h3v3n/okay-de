@@ -42,14 +42,20 @@ if [ "$MODE" = "--system" ]; then
     pkill -9 -x waybar 2>/dev/null || true
     pkill -9 -x sfwbar 2>/dev/null || true
 
-    # Nadpisanie okay-settings, okay-panel oraz ich modułów zarówno w /usr/bin, jak i w /usr/local/bin
-    install -d /usr/bin /usr/local/bin /usr/share/okay-de/settings /usr/local/share/okay-de/settings /usr/share/okay-de/panel /usr/local/share/okay-de/panel
-    install -m 755 scripts/okay-settings /usr/bin/okay-settings
-    install -m 755 scripts/okay-settings /usr/local/bin/okay-settings
-    install -m 755 scripts/okay-panel /usr/bin/okay-panel
-    install -m 755 scripts/okay-panel /usr/local/bin/okay-panel
-    install -m 755 scripts/okay-desktop /usr/bin/okay-desktop
-    install -m 755 scripts/okay-desktop /usr/local/bin/okay-desktop
+    # Nadpisanie skryptów wykonawczych oraz modułów zarówno w /usr/bin, jak i w /usr/local/bin
+    install -d /usr/bin /usr/local/bin /usr/share/okay-de/settings /usr/local/share/okay-de/settings /usr/share/okay-de/panel /usr/local/share/okay-de/panel /usr/share/wayland-sessions
+    if [ -d scripts ]; then
+        for s in scripts/*; do
+            if [ -f "$s" ]; then
+                sbase="$(basename "$s")"
+                install -m 755 "$s" "/usr/bin/$sbase"
+                install -m 755 "$s" "/usr/local/bin/$sbase"
+            fi
+        done
+    fi
+    if [ -f sessions/okay-de.desktop ]; then
+        install -m 644 sessions/okay-de.desktop /usr/share/wayland-sessions/okay-de.desktop
+    fi
     if [ -d scripts/settings ]; then
         install -m 644 scripts/settings/*.py /usr/share/okay-de/settings/
         install -m 644 scripts/settings/*.py /usr/local/share/okay-de/settings/
