@@ -48,6 +48,8 @@ if [ "$MODE" = "--system" ]; then
     install -m 755 scripts/okay-settings /usr/local/bin/okay-settings
     install -m 755 scripts/okay-panel /usr/bin/okay-panel
     install -m 755 scripts/okay-panel /usr/local/bin/okay-panel
+    install -m 755 scripts/okay-desktop /usr/bin/okay-desktop
+    install -m 755 scripts/okay-desktop /usr/local/bin/okay-desktop
     if [ -d scripts/settings ]; then
         install -m 644 scripts/settings/*.py /usr/share/okay-de/settings/
         install -m 644 scripts/settings/*.py /usr/local/share/okay-de/settings/
@@ -360,6 +362,11 @@ PYEOF
             nohup "$BIN_DIR/okay-panel" --restart </dev/null >/dev/null 2>&1 &
         elif command -v okay-panel >/dev/null 2>&1; then
             nohup okay-panel --restart </dev/null >/dev/null 2>&1 &
+        fi
+        if [ -x "$BIN_DIR/okay-desktop" ]; then
+            nohup "$BIN_DIR/okay-desktop" --restart </dev/null >/dev/null 2>&1 &
+        elif command -v okay-desktop >/dev/null 2>&1; then
+            nohup okay-desktop --restart </dev/null >/dev/null 2>&1 &
         fi
     fi
 

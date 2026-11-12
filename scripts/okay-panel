@@ -1230,7 +1230,7 @@ class AppHelper:
 
 class WaylandToplevelClient:
     """Natywny klient protokołu Wayland zwlr_foreign_toplevel_manager_v1 (zero zależności zewnętrznych)."""
-    IGNORED_APP_IDS = {"okay-panel", "okay-quick-settings", "okay-dock", "fuzzel", "mako", "waybar", "sfwbar"}
+    IGNORED_APP_IDS = {"okay-panel", "okay-desktop", "okay-quick-settings", "okay-dock", "fuzzel", "mako", "waybar", "sfwbar"}
 
     DISPLAY_ID = 1
     REGISTRY_ID = 2

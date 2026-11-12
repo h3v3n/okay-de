@@ -49,6 +49,21 @@ mako &
     fi
 ) &
 
+# 3b. Natywny pulpit z ikonami aplikacji i plików (~/Desktop)
+(
+    sleep 0.3
+    DESKTOP_LOG="${XDG_RUNTIME_DIR:-/tmp}/okay-desktop.log"
+    if [ -x "$HOME/.local/bin/okay-desktop" ]; then
+        "$HOME/.local/bin/okay-desktop" > "$DESKTOP_LOG" 2>&1 &
+    elif [ -x /usr/local/bin/okay-desktop ]; then
+        /usr/local/bin/okay-desktop > "$DESKTOP_LOG" 2>&1 &
+    elif [ -x /usr/bin/okay-desktop ]; then
+        /usr/bin/okay-desktop > "$DESKTOP_LOG" 2>&1 &
+    elif command -v okay-desktop >/dev/null 2>&1; then
+        okay-desktop > "$DESKTOP_LOG" 2>&1 &
+    fi
+) &
+
 # 4. Tapeta i tło pulpitu (swaybg z kolorem bazowym i tapetą)
 # Sprawdzenie w kolejności: tapeta użytkownika -> tapeta systemowa -> kolor awaryjny
 WALLPAPER_USER="$HOME/.config/okay-de/wallpaper.png"

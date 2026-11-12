@@ -1,0 +1,800 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+OKay Desktop (okay-desktop)
+Natywny pulpit Wayland (GtkLayerShell.Layer.BACKGROUND) dla OKay DE.
+Wyświetla skróty aplikacji (.desktop), foldery oraz pliki z katalogu Pulpit (~/Desktop)
+w układzie kafelkowym (jak w Windows), bez zasłaniania tapety swaybg.
+"""
+
+import os
+import sys
+import gc
+import fcntl
+import glob
+import json
+import shlex
+import signal
+import shutil
+import subprocess
+
+os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+os.environ.setdefault("NO_AT_BRIDGE", "1")
+os.environ["GDK_BACKEND"] = "wayland"
+
+gc.set_threshold(500, 5, 5)
+
+_LIBC = None
+try:
+    import ctypes
+    try:
+        _LIBC = ctypes.CDLL("libc.so.6")
+    except OSError:
+        _LIBC = ctypes.CDLL(None)
+    _LIBC.prctl(15, b"okay-desktop", 0, 0, 0)
+except Exception:
+    _LIBC = None
+
+
+def _trim_heap():
+    try:
+        gc.collect(0)
+        if _LIBC is not None and hasattr(_LIBC, "malloc_trim"):
+            _LIBC.malloc_trim(0)
+    except Exception:
+        pass
+
+
+def _runtime_dir() -> str:
+    d = os.environ.get("XDG_RUNTIME_DIR")
+    if d and os.path.isdir(d):
+        return d
+    d = os.path.join(os.path.expanduser("~"), ".cache", "okay-de")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _acquire_single_instance(restart: bool = False):
+    lock_path = os.path.join(_runtime_dir(), "okay-desktop.lock")
+    pid_path = os.path.join(_runtime_dir(), "okay-desktop.pid")
+
+    if restart and os.path.isfile(pid_path):
+        try:
+            with open(pid_path, "r", encoding="utf-8") as f:
+                old_pid = int(f.read().strip())
+            if old_pid > 0 and old_pid != os.getpid():
+                os.kill(old_pid, signal.SIGTERM)
+                import time
+                for _ in range(20):
+                    try:
+                        os.kill(old_pid, 0)
+                        time.sleep(0.05)
+                    except OSError:
+                        break
+        except Exception:
+            pass
+
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        sys.exit(0)
+
+    try:
+        with open(pid_path, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except Exception:
+        pass
+    return fd
+
+
+_LOCK_FD = _acquire_single_instance("--restart" in sys.argv)
+
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
+from gi.repository import Gtk, Gdk, GLib, Gio, GdkPixbuf, Pango, GtkLayerShell
+
+
+def _spawn_reap(args: list, cwd: str | None = None):
+    if not args:
+        return
+    try:
+        proc = subprocess.Popen(
+            args,
+            cwd=cwd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        GLib.child_watch_add(GLib.PRIORITY_LOW, proc.pid, lambda *_a: None)
+    except Exception as exc:
+        print(f"[okay-desktop] Błąd uruchamiania {args}: {exc}", file=sys.stderr)
+
+
+def _get_desktop_dir() -> str:
+    d = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DESKTOP)
+    if not d:
+        d = os.path.expanduser("~/Desktop")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _read_accent_color() -> str:
+    cfg_path = os.path.join(
+        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+        "okay-de",
+        "panel.json",
+    )
+    try:
+        if os.path.isfile(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            col = str(data.get("accent_color", "#00e676")).strip()
+            if col.startswith("#") and len(col) == 7:
+                return col
+    except Exception:
+        pass
+    return "#00e676"
+
+
+def _parse_desktop_entry(path: str) -> dict:
+    name = ""
+    name_pl = ""
+    icon = ""
+    exec_raw = ""
+    entry_type = "Application"
+    url = ""
+    terminal = False
+    no_display = False
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            in_entry = False
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("["):
+                    if in_entry:
+                        break
+                    in_entry = (line == "[Desktop Entry]")
+                    continue
+                if not in_entry or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip()
+                if k == "Name" and not name:
+                    name = v
+                elif k == "Name[pl]" and not name_pl:
+                    name_pl = v
+                elif k == "Icon" and not icon:
+                    icon = v
+                elif k == "Exec" and not exec_raw:
+                    exec_raw = v
+                elif k == "Type":
+                    entry_type = v
+                elif k == "URL":
+                    url = v
+                elif k == "Terminal":
+                    terminal = v.lower() == "true"
+                elif k == "NoDisplay":
+                    no_display = v.lower() == "true"
+    except Exception:
+        pass
+
+    clean_args = []
+    if exec_raw:
+        try:
+            parts = shlex.split(exec_raw)
+        except ValueError:
+            parts = exec_raw.split()
+        clean_args = [p for p in parts if not p.startswith("%")]
+
+    return {
+        "name": name_pl or name or os.path.splitext(os.path.basename(path))[0],
+        "icon": icon or "application-x-executable",
+        "args": clean_args,
+        "type": entry_type,
+        "url": url,
+        "terminal": terminal,
+        "no_display": no_display,
+        "path": path,
+    }
+
+
+def _hex_to_rgba_css(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return f"rgba(0, 230, 118, {alpha})"
+    try:
+        r = int(h[0:2], 16)
+        g = int(h[2:4], 16)
+        b = int(h[4:6], 16)
+        return f"rgba({r}, {g}, {b}, {alpha})"
+    except ValueError:
+        return f"rgba(0, 230, 118, {alpha})"
+
+
+def _build_desktop_css(accent: str) -> str:
+    sel_bg = _hex_to_rgba_css(accent, 0.24)
+    sel_border = _hex_to_rgba_css(accent, 0.85)
+    return f"""
+window#okay-desktop {{
+    background-color: transparent;
+}}
+flowbox#desktop-grid {{
+    background-color: transparent;
+    padding: 16px;
+}}
+flowboxchild.desktop-tile {{
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 6px 4px;
+    margin: 2px;
+    transition: background-color 140ms ease, border-color 140ms ease;
+}}
+flowboxchild.desktop-tile:hover {{
+    background-color: rgba(205, 214, 244, 0.14);
+    border-color: rgba(205, 214, 244, 0.28);
+}}
+flowboxchild.desktop-tile:selected {{
+    background-color: {sel_bg};
+    border-color: {sel_border};
+}}
+label.desktop-label {{
+    color: #ffffff;
+    font-family: "JetBrains Mono", "Inter", sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.92), 0 0 6px rgba(0, 0, 0, 0.75);
+}}
+menu {{
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+    border-radius: 8px;
+    padding: 4px;
+}}
+menuitem {{
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: #cdd6f4;
+}}
+menuitem:hover {{
+    background-color: {sel_bg};
+    color: #ffffff;
+}}
+dialog#okay-desktop-dialog {{
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+}}
+dialog#okay-desktop-dialog entry {{
+    background-color: #181825;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+    border-radius: 6px;
+    padding: 6px 10px;
+}}
+"""
+
+
+class OkayDesktop(Gtk.Window):
+    def __init__(self):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.set_name("okay-desktop")
+        self.set_title("okay-desktop")
+        self.set_app_paintable(True)
+
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual() if screen else None
+        if visual is not None:
+            self.set_visual(visual)
+
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.BACKGROUND)
+        GtkLayerShell.set_namespace(self, "okay-desktop")
+        GtkLayerShell.set_exclusive_zone(self, 0)
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.ON_DEMAND)
+        for edge in (
+            GtkLayerShell.Edge.TOP,
+            GtkLayerShell.Edge.BOTTOM,
+            GtkLayerShell.Edge.LEFT,
+            GtkLayerShell.Edge.RIGHT,
+        ):
+            GtkLayerShell.set_anchor(self, edge, True)
+
+        self.desktop_dir = _get_desktop_dir()
+        self._icon_theme = Gtk.IconTheme.get_default()
+        self._css_provider = Gtk.CssProvider()
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(),
+            self._css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+        self._apply_css()
+
+        self._refresh_tid = 0
+        self._tiles = {}  # FlowBoxChild -> item dict
+
+        self.flow = Gtk.FlowBox()
+        self.flow.set_name("desktop-grid")
+        self.flow.set_valign(Gtk.Align.START)
+        self.flow.set_halign(Gtk.Align.START)
+        self.flow.set_orientation(Gtk.Orientation.HORIZONTAL)
+        self.flow.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.flow.set_activate_on_single_click(False)
+        self.flow.set_homogeneous(True)
+        self.flow.set_column_spacing(8)
+        self.flow.set_row_spacing(10)
+        self.flow.connect("child-activated", self._on_child_activated)
+
+        self.event_box = Gtk.EventBox()
+        self.event_box.set_visible_window(False)
+        self.event_box.add_events(
+            Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.KEY_PRESS_MASK
+        )
+        self.event_box.add(self.flow)
+        self.event_box.connect("button-press-event", self._on_desktop_button_press)
+        self.connect("key-press-event", self._on_key_press)
+        self.add(self.event_box)
+
+        # Monitorowanie katalogu Pulpit oraz konfiguracji akcentu
+        try:
+            gdir = Gio.File.new_for_path(self.desktop_dir)
+            self._dir_monitor = gdir.monitor_directory(Gio.FileMonitorFlags.NONE, None)
+            self._dir_monitor.connect("changed", self._on_dir_changed)
+        except Exception:
+            self._dir_monitor = None
+
+        cfg_path = os.path.join(
+            os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+            "okay-de",
+            "panel.json",
+        )
+        try:
+            gcfg = Gio.File.new_for_path(cfg_path)
+            self._cfg_monitor = gcfg.monitor_file(Gio.FileMonitorFlags.NONE, None)
+            self._cfg_monitor.connect("changed", lambda *_a: self._apply_css())
+        except Exception:
+            self._cfg_monitor = None
+
+        self._reload_desktop()
+        GLib.timeout_add_seconds(60, lambda: (_trim_heap(), True)[1])
+
+    def _apply_css(self):
+        accent = _read_accent_color()
+        try:
+            self._css_provider.load_from_data(_build_desktop_css(accent).encode("utf-8"))
+        except Exception:
+            pass
+
+    def _on_dir_changed(self, *_args):
+        if self._refresh_tid:
+            return
+        def _fire():
+            self._refresh_tid = 0
+            self._reload_desktop()
+            return False
+        self._refresh_tid = GLib.timeout_add(160, _fire)
+
+    def _make_icon_widget(self, icon_name: str, is_dir: bool, path: str) -> Gtk.Image:
+        size = 44
+        if icon_name and os.path.isabs(icon_name) and os.path.isfile(icon_name):
+            try:
+                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(icon_name, size, size, True)
+                return Gtk.Image.new_from_pixbuf(pb)
+            except Exception:
+                pass
+        if icon_name and self._icon_theme and self._icon_theme.has_icon(icon_name):
+            img = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.DIALOG)
+            img.set_pixel_size(size)
+            return img
+        if is_dir:
+            img = Gtk.Image.new_from_icon_name("folder", Gtk.IconSize.DIALOG)
+            img.set_pixel_size(size)
+            return img
+        try:
+            gfile = Gio.File.new_for_path(path)
+            info = gfile.query_info("standard::icon", Gio.FileQueryInfoFlags.NONE, None)
+            gicon = info.get_icon()
+            if gicon is not None:
+                img = Gtk.Image.new_from_gicon(gicon, Gtk.IconSize.DIALOG)
+                img.set_pixel_size(size)
+                return img
+        except Exception:
+            pass
+        img = Gtk.Image.new_from_icon_name("text-x-generic", Gtk.IconSize.DIALOG)
+        img.set_pixel_size(size)
+        return img
+
+    def _reload_desktop(self):
+        self._tiles.clear()
+        for child in self.flow.get_children():
+            self.flow.remove(child)
+            child.destroy()
+
+        try:
+            entries = sorted(
+                os.listdir(self.desktop_dir),
+                key=lambda n: (
+                    0 if os.path.isdir(os.path.join(self.desktop_dir, n)) else (1 if n.endswith(".desktop") else 2),
+                    n.lower(),
+                ),
+            )
+        except Exception:
+            entries = []
+
+        for fname in entries:
+            if fname.startswith("."):
+                continue
+            fpath = os.path.join(self.desktop_dir, fname)
+            is_dir = os.path.isdir(fpath)
+            is_desktop = (not is_dir) and fname.endswith(".desktop")
+
+            if is_desktop:
+                meta = _parse_desktop_entry(fpath)
+                label_text = meta["name"]
+                icon_name = meta["icon"]
+                item = {
+                    "kind": "desktop",
+                    "path": fpath,
+                    "filename": fname,
+                    "label": label_text,
+                    "meta": meta,
+                }
+            elif is_dir:
+                label_text = fname
+                icon_name = "folder"
+                item = {
+                    "kind": "dir",
+                    "path": fpath,
+                    "filename": fname,
+                    "label": label_text,
+                }
+            else:
+                label_text = fname
+                icon_name = ""
+                item = {
+                    "kind": "file",
+                    "path": fpath,
+                    "filename": fname,
+                    "label": label_text,
+                }
+
+            tile = Gtk.FlowBoxChild()
+            tile.get_style_context().add_class("desktop-tile")
+            tile.set_size_request(88, 92)
+
+            vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            vbox.set_halign(Gtk.Align.CENTER)
+            vbox.set_valign(Gtk.Align.START)
+
+            img = self._make_icon_widget(icon_name, is_dir, fpath)
+            img.set_halign(Gtk.Align.CENTER)
+
+            lbl = Gtk.Label(label=label_text)
+            lbl.get_style_context().add_class("desktop-label")
+            lbl.set_justify(Gtk.Justification.CENTER)
+            lbl.set_line_wrap(True)
+            lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            lbl.set_lines(2)
+            lbl.set_max_width_chars(12)
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+
+            vbox.pack_start(img, False, False, 2)
+            vbox.pack_start(lbl, False, False, 0)
+            tile.add(vbox)
+            tile.set_tooltip_text(label_text)
+
+            self._tiles[tile] = item
+            self.flow.add(tile)
+
+        self.flow.show_all()
+        _trim_heap()
+
+    def _launch_item(self, item: dict):
+        kind = item["kind"]
+        path = item["path"]
+        if kind == "desktop":
+            meta = item["meta"]
+            if meta["type"] == "Link" and meta["url"]:
+                _spawn_reap(["xdg-open", meta["url"]])
+                return
+            args = list(meta["args"])
+            if not args:
+                return
+            if os.sep not in args[0]:
+                local_exe = os.path.expanduser(f"~/.local/bin/{args[0]}")
+                if os.path.isfile(local_exe) and os.access(local_exe, os.X_OK):
+                    args[0] = local_exe
+            if meta["terminal"]:
+                term = shutil.which("foot") or shutil.which("xterm") or "foot"
+                _spawn_reap([term, "-e"] + args, cwd=self.desktop_dir)
+            else:
+                _spawn_reap(args, cwd=self.desktop_dir)
+        elif kind == "dir":
+            fm = shutil.which("pcmanfm") or shutil.which("xdg-open") or "xdg-open"
+            _spawn_reap([fm, path])
+        else:
+            opener = shutil.which("xdg-open") or shutil.which("gio")
+            if opener and os.path.basename(opener) == "gio":
+                _spawn_reap([opener, "open", path])
+            elif opener:
+                _spawn_reap([opener, path])
+
+    def _on_child_activated(self, _flow, child):
+        item = self._tiles.get(child)
+        if item:
+            self._launch_item(item)
+
+    def _on_key_press(self, _w, event):
+        selected = self.flow.get_selected_children()
+        if not selected:
+            return False
+        item = self._tiles.get(selected[0])
+        if not item:
+            return False
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            self._launch_item(item)
+            return True
+        if event.keyval == Gdk.KEY_Delete:
+            self._trash_item(item)
+            return True
+        if event.keyval == Gdk.KEY_F2:
+            self._rename_item_dialog(item)
+            return True
+        return False
+
+    def _on_desktop_button_press(self, _widget, event):
+        if event.button == 1:
+            child = self.flow.get_child_at_pos(int(event.x), int(event.y))
+            if child is None:
+                self.flow.unselect_all()
+            return False
+
+        if event.button == 3:
+            child = self.flow.get_child_at_pos(int(event.x), int(event.y))
+            if child is not None:
+                self.flow.select_child(child)
+                item = self._tiles.get(child)
+                if item:
+                    self._show_item_menu(item, event)
+                    return True
+            self.flow.unselect_all()
+            self._show_empty_menu(event)
+            return True
+        return False
+
+    def _popup_menu(self, menu: Gtk.Menu, event):
+        menu.connect("selection-done", lambda m: GLib.idle_add(lambda: (m.destroy(), False)[1]))
+        menu.show_all()
+        menu.popup_at_pointer(event)
+
+    def _show_item_menu(self, item: dict, event):
+        menu = Gtk.Menu()
+
+        mi_open = Gtk.MenuItem(label="Uruchom" if item["kind"] == "desktop" else "Otwórz")
+        mi_open.connect("activate", lambda _m: self._launch_item(item))
+        menu.append(mi_open)
+
+        if item["kind"] != "desktop":
+            mi_ren = Gtk.MenuItem(label="Zmień nazwę...")
+            mi_ren.connect("activate", lambda _m: self._rename_item_dialog(item))
+            menu.append(mi_ren)
+
+        menu.append(Gtk.SeparatorMenuItem())
+        mi_del = Gtk.MenuItem(label="Przenieś do kosza")
+        mi_del.connect("activate", lambda _m: self._trash_item(item))
+        menu.append(mi_del)
+
+        self._popup_menu(menu, event)
+
+    def _show_empty_menu(self, event):
+        menu = Gtk.Menu()
+
+        mi_add_app = Gtk.MenuItem(label="Dodaj skrót aplikacji...")
+        mi_add_app.connect("activate", lambda _m: self._add_app_shortcut_dialog())
+        menu.append(mi_add_app)
+
+        mi_mkdir = Gtk.MenuItem(label="Nowy folder...")
+        mi_mkdir.connect("activate", lambda _m: self._new_folder_dialog())
+        menu.append(mi_mkdir)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        mi_term = Gtk.MenuItem(label="Otwórz terminal tutaj")
+        mi_term.connect("activate", lambda _m: _spawn_reap([shutil.which("foot") or "foot"], cwd=self.desktop_dir))
+        menu.append(mi_term)
+
+        mi_fm = Gtk.MenuItem(label="Otwórz menedżer plików")
+        mi_fm.connect("activate", lambda _m: _spawn_reap([shutil.which("pcmanfm") or "pcmanfm", self.desktop_dir]))
+        menu.append(mi_fm)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        mi_ref = Gtk.MenuItem(label="Odśwież pulpit")
+        mi_ref.connect("activate", lambda _m: self._reload_desktop())
+        menu.append(mi_ref)
+
+        mi_set = Gtk.MenuItem(label="Ustawienia OKay DE")
+        mi_set.connect("activate", lambda _m: self._open_settings())
+        menu.append(mi_set)
+
+        self._popup_menu(menu, event)
+
+    def _open_settings(self):
+        local_bin = os.path.expanduser("~/.local/bin/okay-settings")
+        exe = local_bin if os.path.isfile(local_bin) and os.access(local_bin, os.X_OK) else "okay-settings"
+        _spawn_reap([exe])
+
+    def _trash_item(self, item: dict):
+        path = item["path"]
+        if shutil.which("gio"):
+            rc = subprocess.run(["gio", "trash", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode
+            if rc == 0:
+                self._reload_desktop()
+                return
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.unlink(path)
+        except Exception as exc:
+            print(f"[okay-desktop] Nie można usunąć {path}: {exc}", file=sys.stderr)
+        self._reload_desktop()
+
+    def _prompt_text(self, title: str, label: str, initial: str = "") -> str | None:
+        dlg = Gtk.Dialog(title=title, transient_for=None, flags=Gtk.DialogFlags.MODAL)
+        dlg.set_name("okay-desktop-dialog")
+        dlg.add_buttons("Anuluj", Gtk.ResponseType.CANCEL, "OK", Gtk.ResponseType.OK)
+        dlg.set_default_response(Gtk.ResponseType.OK)
+        box = dlg.get_content_area()
+        box.set_spacing(8)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_start(14)
+        box.set_margin_end(14)
+
+        lbl = Gtk.Label(label=label)
+        lbl.set_halign(Gtk.Align.START)
+        entry = Gtk.Entry()
+        entry.set_text(initial)
+        entry.set_activates_default(True)
+        box.pack_start(lbl, False, False, 0)
+        box.pack_start(entry, False, False, 0)
+        dlg.show_all()
+
+        res = None
+        if dlg.run() == Gtk.ResponseType.OK:
+            txt = entry.get_text().strip()
+            if txt:
+                res = txt
+        dlg.destroy()
+        return res
+
+    def _new_folder_dialog(self):
+        name = self._prompt_text("Nowy folder", "Nazwa nowego folderu:", "Nowy folder")
+        if not name or "/" in name:
+            return
+        try:
+            os.makedirs(os.path.join(self.desktop_dir, name), exist_ok=True)
+            self._reload_desktop()
+        except Exception as exc:
+            print(f"[okay-desktop] Błąd tworzenia folderu: {exc}", file=sys.stderr)
+
+    def _rename_item_dialog(self, item: dict):
+        old_name = item["filename"]
+        new_name = self._prompt_text("Zmień nazwę", "Nowa nazwa:", old_name)
+        if not new_name or new_name == old_name or "/" in new_name:
+            return
+        try:
+            os.rename(item["path"], os.path.join(self.desktop_dir, new_name))
+            self._reload_desktop()
+        except Exception as exc:
+            print(f"[okay-desktop] Błąd zmiany nazwy: {exc}", file=sys.stderr)
+
+    def _add_app_shortcut_dialog(self):
+        apps = {}
+        app_dirs = (
+            os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "applications"),
+            "/usr/local/share/applications",
+            "/usr/share/applications",
+        )
+        for d in app_dirs:
+            if not os.path.isdir(d):
+                continue
+            for p in glob.iglob(os.path.join(d, "*.desktop")):
+                bn = os.path.basename(p)
+                if bn in apps:
+                    continue
+                meta = _parse_desktop_entry(p)
+                if meta["no_display"] or not meta["args"]:
+                    continue
+                apps[bn] = meta
+
+        sorted_apps = sorted(apps.values(), key=lambda m: m["name"].lower())
+        if not sorted_apps:
+            return
+
+        dlg = Gtk.Dialog(title="Dodaj skrót na pulpit", transient_for=None, flags=Gtk.DialogFlags.MODAL)
+        dlg.set_name("okay-desktop-dialog")
+        dlg.set_default_size(360, 420)
+        dlg.add_buttons("Zamknij", Gtk.ResponseType.CANCEL, "Dodaj", Gtk.ResponseType.OK)
+        box = dlg.get_content_area()
+        box.set_spacing(8)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+
+        search = Gtk.Entry()
+        search.set_placeholder_text("Szukaj aplikacji...")
+        box.pack_start(search, False, False, 0)
+
+        sc = Gtk.ScrolledWindow()
+        sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        lb = Gtk.ListBox()
+        lb.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        sc.add(lb)
+        box.pack_start(sc, True, True, 0)
+
+        rows = []
+        for meta in sorted_apps:
+            row = Gtk.ListBoxRow()
+            row._meta = meta
+            hb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            hb.set_margin_top(4)
+            hb.set_margin_bottom(4)
+            hb.set_margin_start(6)
+            hb.set_margin_end(6)
+            img = self._make_icon_widget(meta["icon"], False, meta["path"])
+            img.set_pixel_size(22)
+            lbl = Gtk.Label(label=meta["name"])
+            lbl.set_halign(Gtk.Align.START)
+            hb.pack_start(img, False, False, 0)
+            hb.pack_start(lbl, True, True, 0)
+            row.add(hb)
+            lb.add(row)
+            rows.append(row)
+
+        def _filter(*_a):
+            q = search.get_text().strip().lower()
+            for r in rows:
+                r.set_visible(not q or q in r._meta["name"].lower())
+
+        search.connect("changed", _filter)
+        lb.connect("row-activated", lambda *_a: dlg.response(Gtk.ResponseType.OK))
+        dlg.show_all()
+
+        if dlg.run() == Gtk.ResponseType.OK:
+            sel = lb.get_selected_row()
+            if sel is not None:
+                src = sel._meta["path"]
+                dst = os.path.join(self.desktop_dir, os.path.basename(src))
+                try:
+                    shutil.copy2(src, dst)
+                    os.chmod(dst, 0o755)
+                    self._reload_desktop()
+                except Exception as exc:
+                    print(f"[okay-desktop] Błąd kopiowania skrótu: {exc}", file=sys.stderr)
+
+        dlg.destroy()
+
+
+def main():
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    win = OkayDesktop()
+    win.connect("destroy", Gtk.main_quit)
+    win.show_all()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()
