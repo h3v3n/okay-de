@@ -221,15 +221,42 @@ QuickSettingsPopover = None
 WindowPreviewPopup = None
 
 try:
-    from panel.animations import apply_animation_class, prepare_fade_in, start_fade_in, stop_fade
+    from panel.animations import (
+        apply_animation_class,
+        prepare_fade_in,
+        start_fade_in,
+        start_fade_out,
+        fade_out_and_hide,
+        fade_widget,
+        stop_fade,
+    )
 except Exception:
     try:
-        from panel import apply_animation_class, prepare_fade_in, start_fade_in, stop_fade
+        from panel import (
+            apply_animation_class,
+            prepare_fade_in,
+            start_fade_in,
+            start_fade_out,
+            fade_out_and_hide,
+            fade_widget,
+            stop_fade,
+        )
     except Exception:
         def apply_animation_class(widget, enabled=True): pass
-        def prepare_fade_in(window): pass
-        def start_fade_in(window, on_finish=None): pass
-        def stop_fade(window): pass
+        def prepare_fade_in(window, enabled=True): pass
+        def start_fade_in(window, enabled=True, duration_ms=144, interval_ms=16): pass
+        def start_fade_out(window, enabled=True, duration_ms=112, interval_ms=16, on_finish=None):
+            if on_finish:
+                on_finish()
+        def fade_out_and_hide(window, enabled=True, duration_ms=112, after_hide_cb=None):
+            if window is not None:
+                window.hide()
+            if after_hide_cb:
+                after_hide_cb()
+        def fade_widget(widget, enabled=True, start_alpha=0.0, end_alpha=1.0, duration_ms=160, interval_ms=16, on_finish=None):
+            if on_finish:
+                on_finish()
+        def stop_fade(window, reset_opacity=True): pass
 
 try:
     from panel.sni_tray import StatusNotifierTray
@@ -418,7 +445,7 @@ window#okay-panel.dock-mode #start-button {
     min-width: 30px;
     min-height: 28px;
     color: #bac2de;
-    transition: all 140ms ease-out;
+    transition: all 180ms ease-out;
 }
 
 window#okay-panel.dock-mode .task-item {
@@ -2390,6 +2417,8 @@ class OkayPanel(Gtk.Window):
             return True
 
         # Pełna przebudowa paska tylko przy dodaniu/usunięciu aplikacji lub zmianie trybu/układu
+        had_prev = (self._last_struct_key is not None)
+        prev_keys = {g["group_key"] for (_b, g) in self._task_buttons}
         self._last_struct_key = struct_key
         self._last_state_key = state_key
         self._hide_preview()
@@ -2399,12 +2428,18 @@ class OkayPanel(Gtk.Window):
             self.tasks_box.remove(child)
             child.destroy()
 
+        new_btns = []
         for grp in groups:
             btn = self._make_task_button(grp, show_labels, is_dock)
             self._task_buttons.append((btn, grp))
             self.tasks_box.pack_start(btn, False, False, 0)
+            if had_prev and grp["group_key"] not in prev_keys:
+                new_btns.append(btn)
 
         self.tasks_box.show_all()
+        if new_btns and self._animations_enabled():
+            for nb in new_btns:
+                fade_widget(nb, True, start_alpha=0.0, end_alpha=1.0, duration_ms=160)
         if is_dock:
             self.resize(1, 1)
         _trim_heap()
@@ -2478,6 +2513,7 @@ class OkayPanel(Gtk.Window):
         if event.button == 1:
             self._hide_preview()
             if not item["is_running"]:
+                fade_widget(widget, self._animations_enabled(), start_alpha=0.45, end_alpha=1.0, duration_ms=180)
                 self._launch_cmd(item.get("cmd", ""))
             elif item["win_count"] == 1:
                 w = item["windows"][0]
@@ -2703,7 +2739,10 @@ def main():
 
     app = OkayPanel()
     app.connect("destroy", Gtk.main_quit)
+    anim = app._animations_enabled()
+    prepare_fade_in(app, anim)
     app.show_all()
+    start_fade_in(app, anim, duration_ms=180)
     Gtk.main()
 
 

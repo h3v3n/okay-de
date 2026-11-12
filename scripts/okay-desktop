@@ -124,22 +124,71 @@ def _get_desktop_dir() -> str:
     return d
 
 
-def _read_accent_color() -> str:
+def _read_ui_config() -> tuple:
     cfg_path = os.path.join(
         os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
         "okay-de",
         "panel.json",
     )
+    accent = "#00e676"
+    animations = True
     try:
         if os.path.isfile(cfg_path):
             with open(cfg_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             col = str(data.get("accent_color", "#00e676")).strip()
             if col.startswith("#") and len(col) == 7:
-                return col
+                accent = col
+            animations = bool(data.get("animations", True))
     except Exception:
         pass
-    return "#00e676"
+    return accent, animations
+
+
+def _fade_widget(widget, enabled: bool, start_alpha: float = 0.0, end_alpha: float = 1.0, duration_ms: int = 150) -> None:
+    if widget is None:
+        return
+    if isinstance(widget, Gtk.Menu) and hasattr(widget, "get_toplevel"):
+        top = widget.get_toplevel()
+        if isinstance(top, Gtk.Window):
+            widget = top
+    tid = getattr(widget, "_okay_fade_tid", 0)
+    if tid:
+        try:
+            GLib.source_remove(tid)
+        except Exception:
+            pass
+        widget._okay_fade_tid = 0
+    if not enabled:
+        try:
+            widget.set_opacity(end_alpha)
+        except Exception:
+            pass
+        return
+    steps = max(1, round(duration_ms / 16))
+    state = {"step": 0}
+    try:
+        widget.set_opacity(start_alpha)
+    except Exception:
+        return
+
+    def _tick() -> bool:
+        if getattr(widget, "_okay_fade_tid", 0) == 0:
+            return False
+        state["step"] += 1
+        p = min(1.0, state["step"] / float(steps))
+        eased = 1.0 - (1.0 - p) * (1.0 - p)
+        try:
+            widget.set_opacity(start_alpha + (end_alpha - start_alpha) * eased)
+        except Exception:
+            widget._okay_fade_tid = 0
+            return False
+        if state["step"] >= steps:
+            widget._okay_fade_tid = 0
+            return False
+        return True
+
+    widget._okay_fade_tid = GLib.timeout_add(16, _tick)
 
 
 def _parse_desktop_entry(path: str) -> dict:
@@ -318,10 +367,11 @@ class OkayDesktop(Gtk.Window):
             self._css_provider,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
-        self._apply_css()
-
         self._refresh_tid = 0
         self._tiles = {}  # FlowBoxChild -> item dict
+        self._known_files = None
+        self._animations_enabled = True
+        self._apply_css()
 
         self.flow = Gtk.FlowBox()
         self.flow.set_name("desktop-grid")
@@ -377,9 +427,13 @@ class OkayDesktop(Gtk.Window):
         GLib.timeout_add_seconds(60, lambda: (_trim_heap(), True)[1])
 
     def _apply_css(self):
-        accent = _read_accent_color()
+        accent, animations = _read_ui_config()
+        self._animations_enabled = animations
         try:
             self._css_provider.load_from_data(_build_desktop_css(accent).encode("utf-8"))
+            gtk_settings = Gtk.Settings.get_default()
+            if gtk_settings is not None:
+                gtk_settings.set_property("gtk-enable-animations", animations)
         except Exception:
             pass
 
@@ -439,6 +493,10 @@ class OkayDesktop(Gtk.Window):
         except Exception:
             entries = []
 
+        new_tiles = []
+        had_known = self._known_files is not None
+        prev_known = self._known_files or set()
+        cur_known = set()
         for fname in entries:
             if fname.startswith("."):
                 continue
@@ -503,8 +561,15 @@ class OkayDesktop(Gtk.Window):
 
             self._tiles[tile] = item
             self.flow.add(tile)
+            cur_known.add(fname)
+            if had_known and fname not in prev_known:
+                new_tiles.append(tile)
 
+        self._known_files = cur_known
         self.flow.show_all()
+        if new_tiles and self._animations_enabled:
+            for nt in new_tiles:
+                _fade_widget(nt, True, start_alpha=0.0, end_alpha=1.0, duration_ms=160)
         _trim_heap()
 
     def _launch_item(self, item: dict):
@@ -616,6 +681,7 @@ class OkayDesktop(Gtk.Window):
     def _on_child_activated(self, _flow, child):
         item = self._tiles.get(child)
         if item:
+            _fade_widget(child, self._animations_enabled, start_alpha=0.40, end_alpha=1.0, duration_ms=180)
             self._launch_item(item)
 
     def _on_key_press(self, _w, event):
@@ -660,6 +726,7 @@ class OkayDesktop(Gtk.Window):
         menu.connect("selection-done", lambda m: GLib.idle_add(lambda: (m.destroy(), False)[1]))
         menu.show_all()
         menu.popup_at_pointer(event)
+        _fade_widget(menu, self._animations_enabled, start_alpha=0.0, end_alpha=1.0, duration_ms=128)
 
     def _show_item_menu(self, item: dict, event):
         menu = Gtk.Menu()
@@ -753,6 +820,9 @@ class OkayDesktop(Gtk.Window):
         entry.set_activates_default(True)
         box.pack_start(lbl, False, False, 0)
         box.pack_start(entry, False, False, 0)
+        if self._animations_enabled:
+            dlg.set_opacity(0.0)
+            GLib.idle_add(lambda: (_fade_widget(dlg, True, 0.0, 1.0, 144), False)[1])
         dlg.show_all()
 
         res = None
@@ -855,6 +925,9 @@ class OkayDesktop(Gtk.Window):
 
         search.connect("changed", _filter)
         lb.connect("row-activated", lambda *_a: dlg.response(Gtk.ResponseType.OK))
+        if self._animations_enabled:
+            dlg.set_opacity(0.0)
+            GLib.idle_add(lambda: (_fade_widget(dlg, True, 0.0, 1.0, 144), False)[1])
         dlg.show_all()
 
         if dlg.run() == Gtk.ResponseType.OK:
@@ -877,7 +950,10 @@ def main():
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     win = OkayDesktop()
     win.connect("destroy", Gtk.main_quit)
+    if win._animations_enabled:
+        win.set_opacity(0.0)
     win.show_all()
+    _fade_widget(win, win._animations_enabled, start_alpha=0.0, end_alpha=1.0, duration_ms=200)
     Gtk.main()
 
 

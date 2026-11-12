@@ -28,6 +28,7 @@ from .helpers import (
     apply_settings_css,
     apply_window_decorations,
     update_system_accent_color,
+    sync_gtk_animations,
     run_async,
     make_scrolled_page,
     make_page_header,
@@ -451,6 +452,7 @@ class PanelTab(Gtk.Box):
                 self._on_animations_changed(animations)
             except Exception:
                 pass
+        sync_gtk_animations(animations)
 
         panel_file = _panel_json_path()
         try:

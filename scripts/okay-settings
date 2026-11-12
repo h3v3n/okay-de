@@ -147,10 +147,15 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
         for tab_id, title, widget in tabs:
             self.stack.add_titled(widget, tab_id, title)
 
-        self.apply_animations_setting(self._read_animations_setting())
+        anim_on = self._read_animations_setting()
+        self.apply_animations_setting(anim_on)
 
         self.stack.connect("notify::visible-child", self._on_visible_tab_changed)
+        if anim_on:
+            self.set_opacity(0.0)
         self.show_all()
+        if anim_on:
+            self._fade_in_window()
 
         if initial_tab and self.stack.get_child_by_name(initial_tab):
             self.stack.set_visible_child_name(initial_tab)
@@ -199,6 +204,22 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
                 gtk_settings.set_property("gtk-enable-animations", enabled)
         except Exception:
             pass
+
+    def _fade_in_window(self, duration_ms: int = 160):
+        steps = max(1, round(duration_ms / 16))
+        state = {"step": 0}
+
+        def _tick() -> bool:
+            state["step"] += 1
+            p = min(1.0, state["step"] / float(steps))
+            alpha = 1.0 - (1.0 - p) * (1.0 - p)
+            try:
+                self.set_opacity(alpha)
+            except Exception:
+                return False
+            return state["step"] < steps
+
+        GLib.timeout_add(16, _tick)
 
     def _activate_current_tab(self):
         child = self.stack.get_visible_child()

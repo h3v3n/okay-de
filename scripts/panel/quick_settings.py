@@ -17,7 +17,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
-from .animations import apply_animation_class, prepare_fade_in, start_fade_in, stop_fade
+from .animations import apply_animation_class, prepare_fade_in, start_fade_in, fade_out_and_hide, fade_widget, stop_fade
 
 
 def _split_terse(line: str) -> list:
@@ -240,14 +240,15 @@ class QuickSettingsPopover(Gtk.Window):
             start_fade_in(self, anim)
             self.refresh_all(rescan_wifi=False)
 
-    def hide_popover(self):
-        stop_fade(self)
-        self.wifi_spinner.stop()
-        self.pwd_box.hide()
-        self.hide()
+    def _clear_wifi_rows(self):
         for child in self.wifi_list.get_children():
             self.wifi_list.remove(child)
             child.destroy()
+
+    def hide_popover(self):
+        self.wifi_spinner.stop()
+        self.pwd_box.hide()
+        fade_out_and_hide(self, bool(self._animations_enabled()), duration_ms=112, after_hide_cb=self._clear_wifi_rows)
 
     def _on_key_press(self, _w, event):
         if event.keyval == Gdk.KEY_Escape:
@@ -494,6 +495,7 @@ class QuickSettingsPopover(Gtk.Window):
         self.pwd_entry.set_text("")
         self.pwd_entry.set_placeholder_text(f"Hasło dla {ssid}...")
         self.pwd_box.show()
+        fade_widget(self.pwd_box, bool(self._animations_enabled()), 0.0, 1.0, 140)
         self.pwd_entry.grab_focus()
         self.lbl_qs_status.set_text(f"Podaj hasło dla zabezpieczonej sieci {ssid}.")
 

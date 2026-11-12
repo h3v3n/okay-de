@@ -12,7 +12,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gtk, Gdk, GLib, Pango, GtkLayerShell
 
-from .animations import apply_animation_class, prepare_fade_in, start_fade_in, stop_fade
+from .animations import apply_animation_class, prepare_fade_in, start_fade_in, fade_out_and_hide, stop_fade
 
 
 def _clear_box(box) -> None:
@@ -158,13 +158,12 @@ class WindowPreviewPopup(Gtk.Window):
 
         self._hide_tid = GLib.timeout_add(delay_ms, _fire)
 
-    def hide_now(self) -> None:
+    def hide_now(self, immediate: bool = False) -> None:
         self._cancel_timers()
         self._current_group_key = ""
         self._last_anchor = None
-        stop_fade(self)
-        self.hide()
-        _clear_box(self.cards_flow)
+        anim = False if immediate else bool(self._animations_enabled())
+        fade_out_and_hide(self, anim, duration_ms=112, after_hide_cb=lambda: _clear_box(self.cards_flow))
 
     def _set_app_image(self, img_widget: Gtk.Image, icon_name: str, size_px: int = 16) -> None:
         if icon_name and os.path.isabs(icon_name) and os.path.exists(icon_name) and self._get_icon_pixbuf:

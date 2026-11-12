@@ -1889,6 +1889,32 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
     }
 
 
+def sync_gtk_animations(enabled: bool) -> None:
+    """Synchronizuje gtk-enable-animations w ~/.config/gtk-3.0/settings.ini oraz gtk-4.0/settings.ini."""
+    val = "1" if enabled else "0"
+    for gtk_ver in ("gtk-3.0", "gtk-4.0"):
+        ini_path = os.path.join(xdg_config_home(), gtk_ver, "settings.ini")
+        try:
+            content = "[Settings]\n"
+            if os.path.isfile(ini_path):
+                with open(ini_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            if re.search(r"^gtk-enable-animations\s*=.*$", content, flags=re.MULTILINE):
+                content = re.sub(
+                    r"^(gtk-enable-animations\s*=\s*).*$",
+                    rf"\g<1>{val}",
+                    content,
+                    flags=re.MULTILINE,
+                )
+            else:
+                if "[Settings]" not in content:
+                    content = "[Settings]\n" + content
+                content = content.rstrip() + f"\ngtk-enable-animations = {val}\n"
+            atomic_write_text(ini_path, content, mode=0o644)
+        except Exception:
+            pass
+
+
 def update_system_accent_color(new_accent: str) -> dict:
     """Aktualizuje kolor akcentu w całej przestrzeni użytkownika OKay DE:
     - ~/.config/okay-de/panel.json (klucz accent_color)
