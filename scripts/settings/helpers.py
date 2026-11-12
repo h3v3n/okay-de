@@ -96,13 +96,14 @@ def blend_hex_color(base_hex: str, accent_hex: str, ratio: float = 0.08) -> str:
 SETTINGS_CSS_TEMPLATE = """
 window#okay-settings {
     background-color: __BG_WIN__;
-    color: #f0f0f0;
-    font-family: "Inter", "JetBrains Mono", sans-serif;
+    color: #f5f5f5;
+    font-family: "Inter", "JetBrains Mono", system-ui, sans-serif;
+    font-size: 13px;
 }
 
 .settings-sidebar {
     background-color: __BG_SIDEBAR__;
-    border-right: 1px solid #262626;
+    border-right: 1px solid #282828;
     padding: 8px 6px;
 }
 
@@ -111,21 +112,21 @@ window#okay-settings {
 }
 
 .settings-sidebar row {
-    color: #b8c2cc;
-    border-radius: 4px;
+    color: #cdd6f4;
+    border-radius: 6px;
     margin: 2px 4px;
     padding: 10px 14px;
-    font-size: 13px;
+    font-size: 13.5px;
     font-weight: 500;
 }
 
 .settings-sidebar row:hover {
-    background-color: #1f1f1f;
+    background-color: #222222;
     color: #ffffff;
 }
 
 .settings-sidebar row:selected {
-    background-color: rgba(__ACCENT_RGB__, 0.14);
+    background-color: rgba(__ACCENT_RGB__, 0.16);
     color: __ACCENT__;
     font-weight: 700;
     border-left: 3px solid __ACCENT__;
@@ -133,21 +134,21 @@ window#okay-settings {
 
 .settings-brand {
     background-color: __BG_SIDEBAR__;
-    border-right: 1px solid #262626;
-    border-bottom: 1px solid #262626;
+    border-right: 1px solid #282828;
+    border-bottom: 1px solid #282828;
     padding: 14px 16px;
 }
 
 .brand-title {
     color: __ACCENT__;
-    font-size: 15px;
+    font-size: 15.5px;
     font-weight: 800;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.5px;
 }
 
 .brand-subtitle {
-    color: #8b949e;
-    font-size: 11px;
+    color: #bac2de;
+    font-size: 12px;
 }
 
 .page-title {
@@ -157,74 +158,77 @@ window#okay-settings {
 }
 
 .page-subtitle {
-    color: #8b949e;
-    font-size: 12px;
+    color: #bac2de;
+    font-size: 13px;
+    line-height: 1.4;
 }
 
 .card-frame {
     background-color: __BG_CARD__;
     border: 1px solid rgba(__ACCENT_RGB__, 0.18);
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 14px 16px;
 }
 
 .card-title {
     color: __ACCENT__;
-    font-size: 12px;
+    font-size: 12.5px;
     font-weight: 700;
-    letter-spacing: 0.5px;
-    margin-bottom: 6px;
+    letter-spacing: 0.6px;
+    margin-bottom: 8px;
 }
 
 .row-title {
-    color: #f0f0f0;
-    font-size: 13px;
+    color: #ffffff;
+    font-size: 13.5px;
     font-weight: 600;
 }
 
 .row-subtitle {
-    color: #8b949e;
-    font-size: 11px;
+    color: #bac2de;
+    font-size: 12px;
+    line-height: 1.45;
 }
 
 .status-ok {
     color: __ACCENT__;
     font-weight: 600;
-    font-size: 12px;
+    font-size: 12.5px;
 }
 
 .status-warn {
     color: #f9e2af;
     font-weight: 600;
-    font-size: 12px;
+    font-size: 12.5px;
 }
 
 .status-err {
     color: #f38ba8;
     font-weight: 600;
-    font-size: 12px;
+    font-size: 12.5px;
 }
 
 .badge-connected {
     background-color: rgba(__ACCENT_RGB__, 0.16);
     color: __ACCENT__;
-    border: 1px solid rgba(__ACCENT_RGB__, 0.4);
+    border: 1px solid rgba(__ACCENT_RGB__, 0.45);
     border-radius: 4px;
-    padding: 2px 8px;
-    font-size: 11px;
+    padding: 3px 8px;
+    font-size: 12px;
     font-weight: 700;
 }
 
 list.settings-list {
     background-color: #161616;
-    border: 1px solid #262626;
-    border-radius: 5px;
+    border: 1px solid #282828;
+    border-radius: 6px;
 }
 
 list.settings-list row {
-    padding: 8px 12px;
-    border-bottom: 1px solid #202020;
-    color: #eaeaea;
+    padding: 9px 12px;
+    border-bottom: 1px solid #222222;
+    color: #f0f0f0;
+    font-size: 13px;
 }
 
 list.settings-list row:last-child {
@@ -232,11 +236,11 @@ list.settings-list row:last-child {
 }
 
 list.settings-list row:hover {
-    background-color: #202020;
+    background-color: #222222;
 }
 
 list.settings-list row:selected {
-    background-color: rgba(__ACCENT_RGB__, 0.12);
+    background-color: rgba(__ACCENT_RGB__, 0.14);
     color: #ffffff;
 }
 
@@ -245,10 +249,10 @@ button.accent-btn {
     background-image: none;
     color: __ACCENT_CONTRAST__;
     border: none;
-    border-radius: 4px;
-    padding: 6px 14px;
+    border-radius: 5px;
+    padding: 7px 15px;
     font-weight: 700;
-    font-size: 12px;
+    font-size: 12.5px;
 }
 
 button.accent-btn:hover {
@@ -263,12 +267,12 @@ button.accent-btn:disabled {
 button.secondary-btn {
     background-color: #242424;
     background-image: none;
-    color: #e6e6e6;
-    border: 1px solid #353535;
-    border-radius: 4px;
-    padding: 6px 12px;
+    color: #f0f0f0;
+    border: 1px solid #383838;
+    border-radius: 5px;
+    padding: 7px 13px;
     font-weight: 600;
-    font-size: 12px;
+    font-size: 12.5px;
 }
 
 button.secondary-btn:hover {
@@ -281,10 +285,10 @@ button.danger-btn {
     background-image: none;
     color: #f38ba8;
     border: 1px solid #592632;
-    border-radius: 4px;
-    padding: 6px 12px;
+    border-radius: 5px;
+    padding: 7px 13px;
     font-weight: 600;
-    font-size: 12px;
+    font-size: 12.5px;
 }
 
 button.danger-btn:hover {
@@ -294,12 +298,12 @@ button.danger-btn:hover {
 button.scale-pill {
     background-color: #222222;
     background-image: none;
-    color: #cccccc;
-    border: 1px solid #333333;
-    border-radius: 4px;
-    padding: 5px 12px;
+    color: #dddddd;
+    border: 1px solid #383838;
+    border-radius: 5px;
+    padding: 6px 13px;
     font-weight: 600;
-    font-size: 12px;
+    font-size: 12.5px;
 }
 
 button.scale-pill:checked {
@@ -311,12 +315,12 @@ button.scale-pill:checked {
 button.color-preset-btn {
     background-color: #202020;
     background-image: none;
-    color: #e6e6e6;
-    border: 1px solid #333333;
+    color: #f0f0f0;
+    border: 1px solid #353535;
     border-radius: 6px;
     padding: 6px 10px;
     font-weight: 600;
-    font-size: 12px;
+    font-size: 12.5px;
 }
 
 button.color-preset-btn:hover {
@@ -368,14 +372,20 @@ scale slider {
 entry, combobox button {
     background-color: #121212;
     background-image: none;
-    color: #f0f0f0;
-    border: 1px solid #333333;
-    border-radius: 4px;
-    padding: 5px 8px;
+    color: #ffffff;
+    border: 1px solid #383838;
+    border-radius: 5px;
+    padding: 6px 10px;
+    font-size: 12.5px;
 }
 
 entry:focus {
     border-color: __ACCENT__;
+}
+
+combobox menuitem {
+    font-size: 12.5px;
+    color: #cdd6f4;
 }
 
 .settings-sidebar row,
@@ -637,6 +647,8 @@ DEFAULT_PANEL_CONFIG = {
     "mode": "panel",
     "animations": True,
     "accent_color": DEFAULT_ACCENT_COLOR,
+    "window_buttons_style": "rectangles",
+    "window_corner_radius": 0,
     "pinned_apps": [
         {
             "app_id": "foot",
@@ -770,6 +782,94 @@ def wallpaper_template_file() -> str:
     return find_existing_file(*candidates)
 
 
+def fuzzel_template_file() -> str:
+    candidates = [
+        "/etc/xdg/fuzzel/fuzzel.ini",
+        os.path.join(okay_data_dir(), "defaults", "fuzzel", "fuzzel.ini"),
+        os.path.join(okay_data_dir(), "repo", "config", "fuzzel", "fuzzel.ini"),
+    ]
+    repo_root = _repo_root_from_script()
+    if repo_root:
+        candidates.append(os.path.join(repo_root, "config", "fuzzel", "fuzzel.ini"))
+    return find_existing_file(*candidates)
+
+
+def mako_template_file() -> str:
+    candidates = [
+        "/etc/xdg/mako/config",
+        os.path.join(okay_data_dir(), "defaults", "mako", "config"),
+        os.path.join(okay_data_dir(), "repo", "config", "mako", "config"),
+    ]
+    repo_root = _repo_root_from_script()
+    if repo_root:
+        candidates.append(os.path.join(repo_root, "config", "mako", "config"))
+    return find_existing_file(*candidates)
+
+
+_DEFAULT_FUZZEL_INI = """[main]
+font=JetBrains Mono:size=11
+prompt="❯ "
+icon-theme=Papirus-Dark
+icons-enabled=yes
+terminal=foot -e
+layer=overlay
+width=32
+lines=10
+horizontal-pad=18
+vertical-pad=12
+inner-pad=8
+
+[colors]
+background=1b2b30ff
+text=cdd6f4ff
+prompt=00e676ff
+match=00e676ff
+selection=313244ff
+selection-text=cdd6f4ff
+selection-match=00e676ff
+border=00e676ff
+
+[border]
+width=2
+radius=8
+"""
+
+_DEFAULT_MAKO_CONFIG = """# OKay DE - Konfiguracja demona powiadomień mako
+font=JetBrains Mono 10
+width=360
+height=120
+margin=14,14,0,0
+padding=12
+border-size=2
+border-radius=8
+icons=1
+max-icon-size=48
+layer=overlay
+anchor=top-right
+max-visible=4
+background-color=#1b2b30e6
+text-color=#cdd6f4
+border-color=#00e676
+progress-color=over #313244
+default-timeout=4500
+ignore-timeout=1
+
+[urgency=low]
+border-color=#313244
+default-timeout=3000
+
+[urgency=normal]
+border-color=#00e676
+default-timeout=4500
+
+[urgency=critical]
+border-color=#f38ba8
+text-color=#f38ba8
+default-timeout=0
+ignore-timeout=0
+"""
+
+
 def atomic_write_bytes(dest_path: str, content: bytes, mode: int = None) -> None:
     """Zapisuje bajty atomowo przez plik tymczasowy w tym samym katalogu i os.replace()."""
     abs_dest = os.path.abspath(dest_path)
@@ -834,6 +934,13 @@ def normalize_panel_config(cfg: dict) -> dict:
     data["animations"] = bool(data.get("animations", True))
     raw_accent = str(data.get("accent_color", DEFAULT_ACCENT_COLOR)).strip()
     data["accent_color"] = sanitize_hex_color(raw_accent, DEFAULT_ACCENT_COLOR)
+    btn_style = str(data.get("window_buttons_style", "rectangles")).lower()
+    data["window_buttons_style"] = btn_style if btn_style in ("rectangles", "circles_left", "circles_right", "windows") else "rectangles"
+    try:
+        radius = int(data.get("window_corner_radius", 0))
+        data["window_corner_radius"] = radius if 0 <= radius <= 32 else 0
+    except Exception:
+        data["window_corner_radius"] = 0
     if not isinstance(data.get("pinned_apps"), list):
         data["pinned_apps"] = copy.deepcopy(DEFAULT_PANEL_CONFIG["pinned_apps"])
     return data
@@ -977,6 +1084,40 @@ def ensure_user_configs() -> None:
                 except Exception:
                     pass
                 break
+
+    # 7. Konfiguracja fuzzel (~/.config/fuzzel/fuzzel.ini)
+    fuzzel_dir = os.path.join(xdg_config_home(), "fuzzel")
+    fuzzel_ini = os.path.join(fuzzel_dir, "fuzzel.ini")
+    if not os.path.exists(fuzzel_ini):
+        os.makedirs(fuzzel_dir, exist_ok=True)
+        f_tmpl = fuzzel_template_file()
+        if f_tmpl and os.path.isfile(f_tmpl):
+            try:
+                atomic_copy_file(f_tmpl, fuzzel_ini, mode=0o644)
+            except Exception:
+                pass
+        else:
+            try:
+                atomic_write_text(fuzzel_ini, _DEFAULT_FUZZEL_INI, mode=0o644)
+            except Exception:
+                pass
+
+    # 8. Konfiguracja mako (~/.config/mako/config)
+    mako_dir = os.path.join(xdg_config_home(), "mako")
+    mako_cfg = os.path.join(mako_dir, "config")
+    if not os.path.exists(mako_cfg):
+        os.makedirs(mako_dir, exist_ok=True)
+        m_tmpl = mako_template_file()
+        if m_tmpl and os.path.isfile(m_tmpl):
+            try:
+                atomic_copy_file(m_tmpl, mako_cfg, mode=0o644)
+            except Exception:
+                pass
+        else:
+            try:
+                atomic_write_text(mako_cfg, _DEFAULT_MAKO_CONFIG, mode=0o644)
+            except Exception:
+                pass
 
 
 class UpdateManager:
@@ -1274,16 +1415,199 @@ class UpdateManager:
         return out
 
 
+def generate_window_button_svgs(style: str, accent_hex: str) -> dict:
+    """Generuje kod SVG dla przycisków okna (close, max, max_toggled, iconify) w zadanym stylu."""
+    accent = sanitize_hex_color(accent_hex)
+    hover_accent = compute_hover_hex(accent)
+    style = style.lower() if style in ("rectangles", "circles_left", "circles_right", "windows") else "rectangles"
+
+    if style == "rectangles":
+        return {
+            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#f38ba8" /></svg>\n',
+            "close_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#eba0ac" /></svg>\n',
+            "max.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="{accent}" /></svg>\n',
+            "max_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="{hover_accent}" /></svg>\n',
+            "max_toggled.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="{accent}" /></svg>\n',
+            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#585b70" /></svg>\n',
+            "iconify_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#6c7086" /></svg>\n',
+        }
+    elif style in ("circles_left", "circles_right"):
+        return {
+            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#f38ba8" /></svg>\n',
+            "close_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ed6a5e" /><path d="M4.5 4.5 L9.5 9.5 M9.5 4.5 L4.5 9.5" stroke="#4c0000" stroke-width="1.2" stroke-linecap="round" /></svg>\n',
+            "max.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="{accent}" /></svg>\n',
+            "max_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="{hover_accent}" /><path d="M4.5 4.5 L7.5 4.5 L4.5 7.5 Z M9.5 9.5 L6.5 9.5 L9.5 6.5 Z" fill="#11111b" /></svg>\n',
+            "max_toggled.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="{accent}" /></svg>\n',
+            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#f9e2af" /></svg>\n',
+            "iconify_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#f5c359" /><line x1="4.5" y1="7" x2="9.5" y2="7" stroke="#4a3a00" stroke-width="1.2" stroke-linecap="round" /></svg>\n',
+        }
+    else:  # windows
+        return {
+            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><path d="M8 5 L18 15 M18 5 L8 15" stroke="#cdd6f4" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
+            "close_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><rect width="26" height="20" rx="3" fill="#e81123" /><path d="M8 5 L18 15 M18 5 L8 15" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
+            "max.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><rect x="8" y="5" width="10" height="10" rx="1" fill="none" stroke="#cdd6f4" stroke-width="1.3" /></svg>\n',
+            "max_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><rect width="26" height="20" rx="3" fill="#313244" /><rect x="8" y="5" width="10" height="10" rx="1" fill="none" stroke="{accent}" stroke-width="1.3" /></svg>\n',
+            "max_toggled.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><rect x="9.5" y="4" width="8" height="8" rx="1" fill="none" stroke="#cdd6f4" stroke-width="1.1" /><rect x="7" y="6.5" width="8" height="8" rx="1" fill="#181825" stroke="#cdd6f4" stroke-width="1.1" /></svg>\n',
+            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><line x1="8" y1="14" x2="18" y2="14" stroke="#cdd6f4" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
+            "iconify_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="20" viewBox="0 0 26 20"><rect width="26" height="20" rx="3" fill="#313244" /><line x1="8" y1="14" x2="18" y2="14" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
+        }
+
+
+def apply_window_decorations(buttons_style: str = None, corner_radius: int = None, accent_hex: str = None) -> dict:
+    """Zapisuje styl przycisków, zaokrąglenie ramek okien labwc oraz przeładowuje kompozytor."""
+    ensure_user_configs()
+    panel_file = os.path.join(okay_config_dir(), "panel.json")
+    cfg = {}
+    if os.path.isfile(panel_file):
+        try:
+            with open(panel_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = copy.deepcopy(DEFAULT_PANEL_CONFIG)
+
+    if buttons_style is None:
+        buttons_style = cfg.get("window_buttons_style", "rectangles")
+    buttons_style = str(buttons_style).lower()
+    if buttons_style not in ("rectangles", "circles_left", "circles_right", "windows"):
+        buttons_style = "rectangles"
+
+    if corner_radius is None:
+        corner_radius = cfg.get("window_corner_radius", 0)
+    try:
+        corner_radius = max(0, min(32, int(corner_radius)))
+    except Exception:
+        corner_radius = 0
+
+    if accent_hex is None:
+        accent_hex = cfg.get("accent_color", DEFAULT_ACCENT_COLOR)
+    accent_hex = sanitize_hex_color(accent_hex)
+
+    cfg["window_buttons_style"] = buttons_style
+    cfg["window_corner_radius"] = corner_radius
+    cfg["accent_color"] = accent_hex
+    atomic_write_json(panel_file, normalize_panel_config(cfg))
+
+    labwc_dir = labwc_config_dir()
+    os.makedirs(labwc_dir, exist_ok=True)
+
+    # 1. Zapis wektorowych plików SVG dla przycisków w ~/.config/labwc
+    svg_map = generate_window_button_svgs(buttons_style, accent_hex)
+    for fname, svg_content in svg_map.items():
+        atomic_write_text(os.path.join(labwc_dir, fname), svg_content, mode=0o644)
+
+    # 2. Zarządzanie plikami XBM:
+    # W stylu innym niż "rectangles" usuwamy stare pliki .xbm w ~/.config/labwc,
+    # aby labwc nie używał ich jako maski bitmapowej zamiast nowych SVG.
+    # W stylu "rectangles" przywracamy domyślne XBM jeśli brakuje.
+    xbm_names = (
+        "close.xbm", "close_hover.xbm",
+        "max.xbm", "max_hover.xbm", "max_toggled.xbm",
+        "iconify.xbm", "iconify_hover.xbm"
+    )
+    if buttons_style != "rectangles":
+        for xbm in xbm_names:
+            p = os.path.join(labwc_dir, xbm)
+            if os.path.isfile(p):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+    else:
+        for xbm in xbm_names:
+            dst = os.path.join(labwc_dir, xbm)
+            if not os.path.isfile(dst):
+                src = labwc_template_file(xbm)
+                if src and os.path.isfile(src):
+                    try:
+                        atomic_copy_file(src, dst, mode=0o644)
+                    except Exception:
+                        pass
+
+    # 3. Parametry geometrii i układu
+    if buttons_style == "rectangles":
+        layout = ":iconify,max,close"
+        btn_w, btn_h, btn_sp = 48, 10, 8
+    elif buttons_style == "circles_left":
+        layout = "close,iconify,max:"
+        btn_w, btn_h, btn_sp = 14, 14, 8
+    elif buttons_style == "circles_right":
+        layout = ":iconify,max,close"
+        btn_w, btn_h, btn_sp = 14, 14, 8
+    else:  # windows
+        layout = ":iconify,max,close"
+        btn_w, btn_h, btn_sp = 26, 20, 2
+
+    # 4. Aktualizacja themerc-override i themerc
+    override_path = os.path.join(labwc_dir, "themerc-override")
+    def _patch_decorations(raw_text: str) -> str:
+        text = raw_text
+        reps = [
+            (r"^(window\.cornerRadius:\s*).*$", rf"\g<1>{corner_radius}"),
+            (r"^(window\.titlebar\.layout:\s*).*$", rf"\g<1>{layout}"),
+            (r"^(window\.button\.width:\s*).*$", rf"\g<1>{btn_w}"),
+            (r"^(window\.button\.height:\s*).*$", rf"\g<1>{btn_h}"),
+            (r"^(window\.button\.spacing:\s*).*$", rf"\g<1>{btn_sp}"),
+        ]
+        for pattern, repl in reps:
+            if re.search(pattern, text, flags=re.MULTILINE):
+                text = re.sub(pattern, repl, text, flags=re.MULTILINE)
+            else:
+                key = pattern.split(r"\s*")[0].lstrip("^").rstrip(":")
+                val = repl.rsplit(r">", 1)[-1]
+                text += f"\n{key}: {val}"
+        return text
+
+    if os.path.isfile(override_path):
+        try:
+            with open(override_path, "r", encoding="utf-8") as f:
+                cur = f.read()
+            atomic_write_text(override_path, _patch_decorations(cur), mode=0o644)
+        except Exception:
+            pass
+    user_themerc = os.path.join(labwc_dir, "themerc")
+    if os.path.isfile(user_themerc):
+        try:
+            with open(user_themerc, "r", encoding="utf-8") as f:
+                cur = f.read()
+            atomic_write_text(user_themerc, _patch_decorations(cur), mode=0o644)
+        except Exception:
+            pass
+
+    # 5. Aktualizacja rc.xml
+    rc_file = os.path.join(labwc_dir, "rc.xml")
+    if os.path.isfile(rc_file):
+        try:
+            with open(rc_file, "r", encoding="utf-8") as f:
+                rc_content = f.read()
+            rc_content = re.sub(r"(<cornerRadius>).*?(</cornerRadius>)", rf"\g<1>{corner_radius}\g<2>", rc_content)
+            rc_content = re.sub(r"(<layout>).*?(</layout>)", rf"\g<1>{layout}\g<2>", rc_content)
+            atomic_write_text(rc_file, rc_content, mode=0o644)
+        except Exception:
+            pass
+
+    # 6. Przeładowanie labwc
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("labwc"):
+        run_cmd(["labwc", "--reconfigure"], timeout=4)
+
+    return {
+        "status": "ok",
+        "buttons_style": buttons_style,
+        "corner_radius": corner_radius,
+        "layout": layout,
+    }
+
+
 def update_system_accent_color(new_accent: str) -> dict:
     """Aktualizuje kolor akcentu w całej przestrzeni użytkownika OKay DE:
     - ~/.config/okay-de/panel.json (klucz accent_color)
-    - ~/.config/labwc/themerc-override (oraz ~/.config/labwc/themerc)
+    - ~/.config/labwc/themerc-override (oraz themerc)
     - ~/.config/mako/config (border-color, background-color)
-    - ~/.config/fuzzel/fuzzel.ini (match, border)
+    - ~/.config/fuzzel/fuzzel.ini (prompt, match, selection-match, border, background)
     oraz asynchronicznie przeładowuje kompozytor (labwc --reconfigure) i powiadomienia (makoctl reload).
     """
     clean_hex = sanitize_hex_color(new_accent)
-    r, g, b = parse_hex_rgb(clean_hex)
     hover_hex = compute_hover_hex(clean_hex)
     contrast_text = compute_contrast_text(clean_hex)
     title_bg = blend_hex_color("#181825", clean_hex, 0.12)
@@ -1294,6 +1618,8 @@ def update_system_accent_color(new_accent: str) -> dict:
     # 1. ~/.config/okay-de/panel.json
     ensure_user_configs()
     panel_file = os.path.join(okay_config_dir(), "panel.json")
+    cur_btn_style = "rectangles"
+    cur_radius = 0
     try:
         cfg = {}
         if os.path.isfile(panel_file):
@@ -1302,6 +1628,8 @@ def update_system_accent_color(new_accent: str) -> dict:
         if not isinstance(cfg, dict):
             cfg = copy.deepcopy(DEFAULT_PANEL_CONFIG)
         cfg["accent_color"] = clean_hex
+        cur_btn_style = cfg.get("window_buttons_style", "rectangles")
+        cur_radius = cfg.get("window_corner_radius", 0)
         atomic_write_json(panel_file, normalize_panel_config(cfg))
         notes.append("panel.json")
     except Exception:
@@ -1404,53 +1732,75 @@ def update_system_accent_color(new_accent: str) -> dict:
         except Exception:
             pass
 
-    # Przeładowanie labwc
-    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("labwc"):
-        run_cmd(["labwc", "--reconfigure"], timeout=4)
+    # Synchronizacja wektorowych przycisków okna labwc z nowym kolorem akcentu
+    try:
+        apply_window_decorations(buttons_style=cur_btn_style, corner_radius=cur_radius, accent_hex=clean_hex)
+        notes.append("decorations")
+    except Exception:
+        pass
 
     # 3. ~/.config/mako/config
-    mako_file = os.path.join(xdg_config_home(), "mako", "config")
-    if os.path.isfile(mako_file):
-        try:
+    mako_dir = os.path.join(xdg_config_home(), "mako")
+    mako_file = os.path.join(mako_dir, "config")
+    try:
+        os.makedirs(mako_dir, exist_ok=True)
+        if os.path.isfile(mako_file):
             with open(mako_file, "r", encoding="utf-8") as f:
                 m_raw = f.read()
-            m_updated = re.sub(r"^(background-color=)[0-9a-fA-F#]+([0-9a-fA-F]{2})$", rf"\g<1>{mako_bg}\g<2>", m_raw, flags=re.MULTILINE)
-            lines = []
-            cur_sec = "main"
-            for line in m_updated.splitlines():
-                stripped = line.strip()
-                if stripped.startswith("[") and stripped.endswith("]"):
-                    cur_sec = stripped[1:-1].strip().lower()
-                    lines.append(line)
-                    continue
-                if stripped.startswith("border-color="):
-                    if cur_sec in ("main", "urgency=normal"):
-                        lines.append(f"border-color={clean_hex}")
-                        continue
+        else:
+            m_tmpl = mako_template_file()
+            if m_tmpl and os.path.isfile(m_tmpl):
+                with open(m_tmpl, "r", encoding="utf-8") as f:
+                    m_raw = f.read()
+            else:
+                m_raw = _DEFAULT_MAKO_CONFIG
+        m_updated = re.sub(r"^(background-color=)[0-9a-fA-F#]+([0-9a-fA-F]{2})$", rf"\g<1>{mako_bg}\g<2>", m_raw, flags=re.MULTILINE)
+        lines = []
+        cur_sec = "main"
+        for line in m_updated.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                cur_sec = stripped[1:-1].strip().lower()
                 lines.append(line)
-            atomic_write_text(mako_file, "\n".join(lines) + "\n", mode=0o644)
-            notes.append("mako")
-            if shutil.which("makoctl"):
-                run_cmd(["makoctl", "reload"], timeout=3)
-        except Exception:
-            pass
+                continue
+            if stripped.startswith("border-color="):
+                if cur_sec in ("main", "urgency=normal"):
+                    lines.append(f"border-color={clean_hex}")
+                    continue
+            lines.append(line)
+        atomic_write_text(mako_file, "\n".join(lines) + "\n", mode=0o644)
+        notes.append("mako")
+        if shutil.which("makoctl"):
+            run_cmd(["makoctl", "reload"], timeout=3)
+    except Exception:
+        pass
 
     # 4. ~/.config/fuzzel/fuzzel.ini
-    fuzzel_file = os.path.join(xdg_config_home(), "fuzzel", "fuzzel.ini")
-    if os.path.isfile(fuzzel_file):
-        try:
+    fuzzel_dir = os.path.join(xdg_config_home(), "fuzzel")
+    fuzzel_file = os.path.join(fuzzel_dir, "fuzzel.ini")
+    try:
+        os.makedirs(fuzzel_dir, exist_ok=True)
+        if os.path.isfile(fuzzel_file):
             with open(fuzzel_file, "r", encoding="utf-8") as f:
                 f_raw = f.read()
-            hex_no_hash = clean_hex.lstrip("#").lower()
-            f_updated = re.sub(r"^(match=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_raw, flags=re.MULTILINE)
-            f_updated = re.sub(r"^(selection-match=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_updated, flags=re.MULTILINE)
-            f_updated = re.sub(r"^(border=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_updated, flags=re.MULTILINE)
-            f_bg_hex = blend_hex_color("#1b2b30", clean_hex, 0.08).lstrip("#")
-            f_updated = re.sub(r"^(background=)[0-9a-fA-F]+$", rf"\g<1>{f_bg_hex}ff", f_updated, flags=re.MULTILINE)
-            atomic_write_text(fuzzel_file, f_updated, mode=0o644)
-            notes.append("fuzzel")
-        except Exception:
-            pass
+        else:
+            f_tmpl = fuzzel_template_file()
+            if f_tmpl and os.path.isfile(f_tmpl):
+                with open(f_tmpl, "r", encoding="utf-8") as f:
+                    f_raw = f.read()
+            else:
+                f_raw = _DEFAULT_FUZZEL_INI
+        hex_no_hash = clean_hex.lstrip("#").lower()
+        f_updated = re.sub(r"^(prompt=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_raw, flags=re.MULTILINE)
+        f_updated = re.sub(r"^(match=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_updated, flags=re.MULTILINE)
+        f_updated = re.sub(r"^(selection-match=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_updated, flags=re.MULTILINE)
+        f_updated = re.sub(r"^(border=)[0-9a-fA-F]+$", rf"\g<1>{hex_no_hash}ff", f_updated, flags=re.MULTILINE)
+        f_bg_hex = blend_hex_color("#1b2b30", clean_hex, 0.08).lstrip("#")
+        f_updated = re.sub(r"^(background=)[0-9a-fA-F]+$", rf"\g<1>{f_bg_hex}ff", f_updated, flags=re.MULTILINE)
+        atomic_write_text(fuzzel_file, f_updated, mode=0o644)
+        notes.append("fuzzel")
+    except Exception:
+        pass
 
     return {
         "status": "ok",

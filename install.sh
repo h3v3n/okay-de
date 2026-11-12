@@ -254,7 +254,7 @@ PYEOF
             lbase="$(basename "$lf")"
             case "$lbase" in
                 *.xbm|*.svg)
-                    atomic_copy_file "$lf" "$LABWC_CFG_DIR/$lbase" 644
+                    copy_if_missing "$lf" "$LABWC_CFG_DIR/$lbase" 644
                     ;;
                 autostart)
                     copy_if_missing "$lf" "$LABWC_CFG_DIR/$lbase" 755

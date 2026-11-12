@@ -176,38 +176,87 @@ _USER_SHARE_DIR = os.path.join(
     os.path.expanduser(_XDG_DATA) if _XDG_DATA else os.path.expanduser("~/.local/share"),
     "okay-de",
 )
-for _candidate in reversed((
+_parent_dir = os.path.dirname(_SCRIPT_DIR)
+_candidates_raw = [
     _SCRIPT_DIR,
+    os.path.join(_parent_dir, "scripts"),
     _USER_SHARE_DIR,
+    os.path.join(_USER_SHARE_DIR, "repo", "scripts"),
     "/usr/local/share/okay-de",
     "/usr/share/okay-de",
-)):
-    if os.path.isdir(os.path.join(_candidate, "panel")):
-        if _candidate in sys.path:
-            sys.path.remove(_candidate)
-        sys.path.insert(0, _candidate)
+]
+_candidates = []
+for _c in _candidates_raw:
+    if _c and os.path.isdir(os.path.join(_c, "panel")) and _c not in _candidates:
+        _candidates.append(_c)
+
+# Priorytetyzujemy katalogi zawierające aktualny moduł window_preview.py
+_candidates.sort(
+    key=lambda c: 0 if os.path.isfile(os.path.join(c, "panel", "window_preview.py")) else 1
+)
+
+for _cand in reversed(_candidates):
+    if _cand in sys.path:
+        sys.path.remove(_cand)
+    sys.path.insert(0, _cand)
+
+# Bezpieczny import komponentów panelu z fallbackami
+StatusNotifierTray = None
+QuickSettingsPopover = None
+WindowPreviewPopup = None
 
 try:
-    from panel import (
-        StatusNotifierTray,
-        QuickSettingsPopover,
-        WindowPreviewPopup,
-        apply_animation_class,
-        prepare_fade_in,
-        start_fade_in,
-    )
-except ImportError as _imp_err:
-    print(
-        f"[okay-panel] BŁĄD KRYTYCZNY: Nie można załadować modułów panelu ({_imp_err}).\n"
-        "Uruchom aktualizację instalacji użytkownika: ./install.sh --user",
-        file=sys.stderr,
-    )
-    if shutil.which("notify-send"):
-        subprocess.run(
-            ["notify-send", "-u", "critical", "OKay DE", "Zaktualizuj instalację: ./install.sh --user"],
-            check=False,
-        )
-    sys.exit(1)
+    from panel.animations import apply_animation_class, prepare_fade_in, start_fade_in, stop_fade
+except Exception:
+    try:
+        from panel import apply_animation_class, prepare_fade_in, start_fade_in, stop_fade
+    except Exception:
+        def apply_animation_class(widget, enabled=True): pass
+        def prepare_fade_in(window): pass
+        def start_fade_in(window, on_finish=None): pass
+        def stop_fade(window): pass
+
+try:
+    from panel.sni_tray import StatusNotifierTray
+except Exception:
+    try:
+        from panel import StatusNotifierTray
+    except Exception:
+        StatusNotifierTray = None
+
+try:
+    from panel.quick_settings import QuickSettingsPopover
+except Exception:
+    try:
+        from panel import QuickSettingsPopover
+    except Exception:
+        QuickSettingsPopover = None
+
+try:
+    from panel.window_preview import WindowPreviewPopup
+except Exception:
+    try:
+        from panel import WindowPreviewPopup
+    except Exception:
+        WindowPreviewPopup = None
+
+if WindowPreviewPopup is None:
+    class WindowPreviewPopup:
+        """Bezpieczny fallback (no-op) gdy moduł window_preview nie jest dostępny."""
+        def __init__(self, *args, **kwargs):
+            self._visible = False
+        def current_group_key(self) -> str:
+            return ""
+        def get_visible(self) -> bool:
+            return False
+        def schedule_show(self, *args, **kwargs):
+            pass
+        def schedule_hide(self, *args, **kwargs):
+            pass
+        def hide_now(self):
+            pass
+        def refresh_group(self, *args, **kwargs):
+            pass
 
 
 # ============================================================================
@@ -324,16 +373,16 @@ button:hover {
     color: __ACCENT_CONTRAST__;
     font-weight: bold;
     font-size: 12px;
-    border-radius: 9px;
-    padding: 0 12px;
-    margin: 5px 8px 5px 2px;
-    min-height: 30px;
+    border-radius: 8px;
+    padding: 0 10px;
+    margin: 4px 6px 4px 2px;
+    min-height: 28px;
 }
 
 window#okay-panel.dock-mode #start-button {
-    border-radius: 11px;
-    margin: 4px 6px 4px 2px;
-    min-height: 34px;
+    border-radius: 10px;
+    margin: 3px 5px 3px 2px;
+    min-height: 32px;
 }
 
 #start-button:hover {
@@ -346,26 +395,27 @@ window#okay-panel.dock-mode #start-button {
     background-color: transparent;
     border: 1px solid transparent;
     border-bottom: 2px solid transparent;
-    border-radius: 9px;
-    padding: 0 10px;
+    border-radius: 7px;
+    padding: 0 4px;
     margin: 4px 2px;
-    min-width: 40px;
-    min-height: 32px;
+    min-width: 32px;
+    min-height: 28px;
     color: #bac2de;
     transition: all 140ms ease-out;
 }
 
 window#okay-panel.dock-mode .task-item {
-    border-radius: 12px;
-    padding: 0 9px;
-    margin: 3px 3px;
-    min-width: 42px;
-    min-height: 36px;
+    border-radius: 9px;
+    padding: 0 4px;
+    margin: 3px 2px;
+    min-width: 34px;
+    min-height: 32px;
 }
 
 .task-item:hover {
-    background-color: rgba(49, 50, 68, 0.85);
-    border-color: rgba(__ACCENT_RGB__, 0.35);
+    background-color: rgba(205, 214, 244, 0.09);
+    border-color: transparent;
+    border-bottom-color: transparent;
     color: #ffffff;
 }
 
@@ -375,22 +425,39 @@ window#okay-panel.dock-mode .task-item {
 }
 
 .task-item.app-pinned:hover {
+    background-color: rgba(205, 214, 244, 0.09);
+    border-color: transparent;
     opacity: 1.0;
 }
 
 /* Otwarta nieaktywna aplikacja */
 .task-item.app-open {
-    background-color: rgba(49, 50, 68, 0.42);
+    background-color: rgba(49, 50, 68, 0.38);
+    border-color: transparent;
     border-bottom: 2px solid rgba(__ACCENT_RGB__, 0.72);
+}
+
+.task-item.app-open:hover {
+    background-color: rgba(205, 214, 244, 0.12);
+    border-color: transparent;
+    border-bottom: 2px solid rgba(__ACCENT_RGB__, 0.90);
+    color: #ffffff;
 }
 
 /* Aktywne / sfokusowane okno */
 .task-item.app-focused {
     background-color: rgba(__ACCENT_RGB__, 0.16);
-    border: 1px solid rgba(__ACCENT_RGB__, 0.35);
+    border-color: transparent;
     border-bottom: 2px solid __ACCENT__;
     color: #ffffff;
     font-weight: bold;
+}
+
+.task-item.app-focused:hover {
+    background-color: rgba(__ACCENT_RGB__, 0.22);
+    border-color: transparent;
+    border-bottom: 2px solid __ACCENT__;
+    color: #ffffff;
 }
 
 /* Zminimalizowane okno */
@@ -440,15 +507,16 @@ window#okay-panel.dock-mode .task-item {
 
 /* Prawa strona panelu: Tray (SNI), Sieć, Bateria, Głośność, Zegar */
 .status-item, .tray-item {
-    padding: 0 7px;
+    padding: 0 5px;
     margin: 4px 1px;
-    border-radius: 8px;
+    border-radius: 7px;
+    min-height: 28px;
     color: #cdd6f4;
     transition: all 140ms ease-out;
 }
 
 .status-item:hover, .tray-item:hover {
-    background-color: rgba(49, 50, 68, 0.85);
+    background-color: rgba(205, 214, 244, 0.09);
 }
 
 #clock-button {
@@ -817,6 +885,8 @@ class PanelConfigManager:
         "mode": "panel",
         "animations": True,
         "accent_color": DEFAULT_ACCENT_COLOR,
+        "window_buttons_style": "rectangles",
+        "window_corner_radius": 0,
         "pinned_apps": [
             {
                 "app_id": "foot",
@@ -897,6 +967,13 @@ class PanelConfigManager:
             data["animations"] = bool(data.get("animations", True))
             raw_accent = str(data.get("accent_color", DEFAULT_ACCENT_COLOR)).strip()
             data["accent_color"] = sanitize_hex_color(raw_accent, DEFAULT_ACCENT_COLOR)
+            btn_style = str(data.get("window_buttons_style", "rectangles")).lower()
+            data["window_buttons_style"] = btn_style if btn_style in ("rectangles", "circles_left", "circles_right", "windows") else "rectangles"
+            try:
+                radius = int(data.get("window_corner_radius", 0))
+                data["window_corner_radius"] = radius if 0 <= radius <= 32 else 0
+            except Exception:
+                data["window_corner_radius"] = 0
             if "pinned_apps" not in data or not isinstance(data["pinned_apps"], list):
                 data["pinned_apps"] = copy.deepcopy(cls.DEFAULT_CONFIG["pinned_apps"])
             return data
@@ -916,6 +993,13 @@ class PanelConfigManager:
         data["animations"] = bool(data.get("animations", True))
         raw_accent = str(data.get("accent_color", DEFAULT_ACCENT_COLOR)).strip()
         data["accent_color"] = sanitize_hex_color(raw_accent, DEFAULT_ACCENT_COLOR)
+        btn_style = str(data.get("window_buttons_style", "rectangles")).lower()
+        data["window_buttons_style"] = btn_style if btn_style in ("rectangles", "circles_left", "circles_right", "windows") else "rectangles"
+        try:
+            radius = int(data.get("window_corner_radius", 0))
+            data["window_corner_radius"] = radius if 0 <= radius <= 32 else 0
+        except Exception:
+            data["window_corner_radius"] = 0
         fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", dir=cls.CONFIG_DIR)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -1812,12 +1896,20 @@ class OkayPanel(Gtk.Window):
 
     def _toggle_quick_settings(self, *_args):
         self._hide_preview()
+        if QuickSettingsPopover is None:
+            self._launch_cmd("okay-settings")
+            return
         if self._quick_settings is None:
-            self._quick_settings = QuickSettingsPopover(
-                self._get_panel_pos,
-                on_volume_changed_cb=lambda: GLib.timeout_add(120, lambda: (self._vol_wake.set(), False)[1]),
-                animations_enabled_cb=self._animations_enabled
-            )
+            try:
+                self._quick_settings = QuickSettingsPopover(
+                    self._get_panel_pos,
+                    on_volume_changed_cb=lambda: GLib.timeout_add(120, lambda: (self._vol_wake.set(), False)[1]),
+                    animations_enabled_cb=self._animations_enabled
+                )
+            except Exception as _qs_err:
+                print(f"[okay-panel] Błąd tworzenia QuickSettings: {_qs_err}", file=sys.stderr)
+                self._launch_cmd("okay-settings")
+                return
         self._quick_settings.toggle()
 
     def _build_right_section(self):
@@ -1874,8 +1966,15 @@ class OkayPanel(Gtk.Window):
         self.right_box.pack_end(self.box_battery, False, False, 0)
 
         # 6. Tacka systemowa SNI (StatusNotifierWatcher + Host)
-        self.sni_tray = StatusNotifierTray(self._get_panel_pos, animations_enabled_cb=self._animations_enabled)
-        self.right_box.pack_end(self.sni_tray, False, False, 4)
+        if StatusNotifierTray is not None:
+            try:
+                self.sni_tray = StatusNotifierTray(self._get_panel_pos, animations_enabled_cb=self._animations_enabled)
+                self.right_box.pack_end(self.sni_tray, False, False, 4)
+            except Exception as _tray_err:
+                print(f"[okay-panel] Błąd inicjalizacji SNI Tray: {_tray_err}", file=sys.stderr)
+                self.sni_tray = None
+        else:
+            self.sni_tray = None
 
     # ------------------------------------------------------------------------
     # Zdarzenia paska Start, Głośności, Pulpitu

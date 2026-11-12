@@ -26,6 +26,7 @@ from .helpers import (
     sanitize_hex_color,
     compute_contrast_text,
     apply_settings_css,
+    apply_window_decorations,
     update_system_accent_color,
     run_async,
     make_scrolled_page,
@@ -223,6 +224,41 @@ class PanelTab(Gtk.Box):
         box_accent.pack_start(self.preview_frame, False, False, 0)
         self.content.pack_start(card_accent, False, False, 0)
 
+        # Karta stylów ramek i przycisków okien labwc
+        card_window, box_window = make_card("Styl ramek i przyciski okien (labwc)")
+
+        self.combo_buttons_style = Gtk.ComboBoxText()
+        self.combo_buttons_style.append("rectangles", "Spłaszczone prostokąty (Domyślny styl OKay)")
+        self.combo_buttons_style.append("circles_left", "Kropki macOS (Lewa strona / Traffic Lights)")
+        self.combo_buttons_style.append("circles_right", "Kropki macOS (Prawa strona)")
+        self.combo_buttons_style.append("windows", "Klasyczne przyciski (Styl Windows / X-Kwadrat-Minus)")
+        self.combo_buttons_style.connect("changed", self._on_window_decorations_changed)
+        box_window.pack_start(
+            make_setting_row(
+                "Styl przycisków paska tytułowego",
+                "Wybierz kształt oraz położenie przycisków zamykania, maksymalizacji i minimalizacji",
+                self.combo_buttons_style
+            ),
+            False, False, 0
+        )
+
+        self.combo_corner_radius = Gtk.ComboBoxText()
+        self.combo_corner_radius.append("0", "0 px - Ostre narożniki 90° (Domyślny styl OKay)")
+        self.combo_corner_radius.append("6", "6 px - Dyskretnie zaokrąglone")
+        self.combo_corner_radius.append("10", "10 px - Zaokrąglone (Styl nowoczesny)")
+        self.combo_corner_radius.append("14", "14 px - Mocno zaokrąglone (Styl macOS / GNOME)")
+        self.combo_corner_radius.connect("changed", self._on_window_decorations_changed)
+        box_window.pack_start(
+            make_setting_row(
+                "Zaokrąglenie narożników okien",
+                "Promień zaokrąglenia krawędzi okien labwc (window.cornerRadius w themerc-override i rc.xml)",
+                self.combo_corner_radius
+            ),
+            False, False, 0
+        )
+
+        self.content.pack_start(card_window, False, False, 0)
+
         # Karta pulpitu / tapety
         card_desk, box_desk = make_card("Pulpit i tło")
 
@@ -282,6 +318,10 @@ class PanelTab(Gtk.Box):
         self.combo_mode.set_active_id(cfg["mode"])
         self.combo_position.set_active_id(cfg["position"])
         self.switch_animations.set_active(bool(cfg["animations"]))
+        btn_style = cfg.get("window_buttons_style", "rectangles")
+        self.combo_buttons_style.set_active_id(btn_style)
+        corner_radius = str(cfg.get("window_corner_radius", 0))
+        self.combo_corner_radius.set_active_id(corner_radius)
         accent = sanitize_hex_color(cfg.get("accent_color", DEFAULT_ACCENT_COLOR))
         self._update_accent_ui(accent)
         self._updating_ui = False
@@ -362,6 +402,34 @@ class PanelTab(Gtk.Box):
             self._apply_accent_color(clean)
         else:
             self.lbl_status.set_text(f"Niepoprawny kod koloru: '{raw}'. Podaj kod w formacie np. #00e676")
+
+    def _on_window_decorations_changed(self, *_args):
+        if self._updating_ui:
+            return
+        btn_style = self.combo_buttons_style.get_active_id() or "rectangles"
+        try:
+            corner_radius = int(self.combo_corner_radius.get_active_id() or "0")
+        except Exception:
+            corner_radius = 0
+
+        self.lbl_status.set_text(f"Stosowanie stylu przycisków ({btn_style}) i zaokrąglenia ({corner_radius}px)...")
+
+        def _worker():
+            return apply_window_decorations(
+                buttons_style=btn_style,
+                corner_radius=corner_radius,
+                accent_hex=self._current_accent
+            )
+
+        def _on_done(_res):
+            self.lbl_status.set_text(
+                f"Zastosowano styl okien (przyciski={btn_style}, zaokrąglenie={corner_radius}px). Przeładowano labwc."
+            )
+
+        def _on_err(exc):
+            self.lbl_status.set_text(f"Błąd zmiany dekoracji okien: {exc}")
+
+        run_async(_worker, on_done=_on_done, on_error=_on_err)
 
     def _on_setting_changed(self, *_args):
         if self._updating_ui:

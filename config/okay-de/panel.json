@@ -5,6 +5,8 @@
   "mode": "panel",
   "animations": true,
   "accent_color": "#00e676",
+  "window_buttons_style": "rectangles",
+  "window_corner_radius": 0,
   "pinned_apps": [
     {
       "app_id": "foot",
