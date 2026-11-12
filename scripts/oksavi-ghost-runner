@@ -1,39 +1,57 @@
 #!/usr/bin/env bash
 
-# OKsavi Ghost Runner - Zarządca zasobów (cgroups v2 + zRAM) dla OKsavi Linux
-# Optymalizuje zużycie pamięci, obniża narzut procesów w tle i zarządza pamięcią podręczną.
+# OKsavi Ghost Runner - Zarządca zasobów (zRAM + vm sysctl) dla OKsavi Linux
+# Optymalizuje zużycie pamięci, aktywuje zstd zRAM i nie marnuje RAM-u w tle.
 
 set -euo pipefail
 
 PIDFILE="${XDG_RUNTIME_DIR:-/tmp}/oksavi-ghost-runner.pid"
 
+init_memory_tuning() {
+    # Inicjalizacja skompresowanej pamięci zRAM (wymaga roota lub sudo -n z 99-okay-de)
+    SUDO_PREFIX=""
+    if [ "$(id -u)" -ne 0 ]; then
+        if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            SUDO_PREFIX="sudo -n"
+        fi
+    fi
+
+    if [ -d /sys/block/zram0 ]; then
+        DISKSIZE=$(cat /sys/block/zram0/disksize 2>/dev/null || echo 0)
+        DISKSIZE="${DISKSIZE:-0}"
+        if [ "$DISKSIZE" -eq 0 ] && command -v zramctl >/dev/null 2>&1; then
+            if [ "$(id -u)" -eq 0 ] || [ -n "$SUDO_PREFIX" ]; then
+                $SUDO_PREFIX zramctl /dev/zram0 --algorithm zstd --size 50% 2>/dev/null || true
+                $SUDO_PREFIX mkswap /dev/zram0 2>/dev/null || true
+                $SUDO_PREFIX swapon -p 100 /dev/zram0 2>/dev/null || true
+            fi
+        fi
+    fi
+
+    # Optymalne parametry jądra dla niskiego zużycia RAM i szybkiego swapu zRAM
+    if { [ "$(id -u)" -eq 0 ] || [ -n "$SUDO_PREFIX" ]; } && command -v sysctl >/dev/null 2>&1; then
+        $SUDO_PREFIX sysctl -q -w vm.swappiness=100 vm.page-cluster=0 vm.vfs_cache_pressure=50 2>/dev/null || true
+    fi
+}
+
 start() {
+    init_memory_tuning
+
+    if [ "${1:-}" = "--oneshot" ]; then
+        exit 0
+    fi
+
     if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
         echo "oksavi-ghost-runner jest już uruchomiony."
         exit 0
     fi
 
     echo "$$" > "$PIDFILE"
-
-    # Inicjalizacja zRAM (jeśli dostępny moduł i brak aktywnej przestrzeni wymiany zRAM)
-    if [ -d /sys/block/zram0 ]; then
-        DISKSIZE=$(cat /sys/block/zram0/disksize 2>/dev/null || echo 0)
-        DISKSIZE="${DISKSIZE:-0}"
-        if [ "$DISKSIZE" -eq 0 ]; then
-            if command -v zramctl >/dev/null 2>&1; then
-                zramctl /dev/zram0 --algorithm zstd --size 50% 2>/dev/null || true
-                mkswap /dev/zram0 2>/dev/null || true
-                swapon -p 100 /dev/zram0 2>/dev/null || true
-            fi
-        fi
-    fi
-
-    # Obsługa sygnałów i czyszczenie pidfile wraz z procesem potomnym sleep
     trap 'kill $(jobs -p) 2>/dev/null || true; rm -f "$PIDFILE"; exit 0' SIGTERM SIGINT SIGHUP
 
-    # Lekka pętla optymalizacji zasobów (cgroups v2 background tasks)
+    # Cicha pętla podtrzymująca bez zbędnych forków
     while true; do
-        sleep 60 &
+        sleep 300 &
         wait $!
     done
 }
@@ -57,7 +75,10 @@ status() {
     fi
 }
 
-case "${1:---start}" in
+case "${1:---oneshot}" in
+    --oneshot|oneshot)
+        start --oneshot
+        ;;
     --start|start)
         start
         ;;
@@ -68,7 +89,7 @@ case "${1:---start}" in
         status
         ;;
     *)
-        echo "Użycie: $0 {--start|--stop|--status}"
+        echo "Użycie: $0 {--oneshot|--start|--stop|--status}"
         exit 1
         ;;
 esac

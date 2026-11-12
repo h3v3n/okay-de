@@ -52,7 +52,7 @@ if command -v wl-paste >/dev/null 2>&1 && command -v cliphist >/dev/null 2>&1; t
     wl-paste --type image --watch cliphist store &
 fi
 
-# 6. Zarządca zasobów OKsavi (cgroups v2 + zRAM)
+# 6. Zarządca zasobów OKsavi (zRAM + sysctl w trybie jednorazowym bez marnowania RAM-u w tle)
 if command -v oksavi-ghost-runner >/dev/null 2>&1; then
-    oksavi-ghost-runner --start &
+    oksavi-ghost-runner --oneshot >/dev/null 2>&1 &
 fi

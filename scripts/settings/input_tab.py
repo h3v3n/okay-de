@@ -37,8 +37,9 @@ def _bool_to_labwc(val: bool) -> str:
 class InputTab(Gtk.Box):
     """Widok konfiguracji myszy i touchpada (libinput w labwc rc.xml)."""
 
-    def __init__(self, _parent_window=None):
+    def __init__(self, _parent_window=None, defer_load: bool = False):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self._loaded = False
 
         sw, self.content = make_scrolled_page()
         self.pack_start(sw, True, True, 0)
@@ -109,7 +110,13 @@ class InputTab(Gtk.Box):
         box.pack_start(footer, False, False, 0)
         self.content.pack_start(card, False, False, 0)
 
-        self.load_from_rc()
+        if not defer_load:
+            self.ensure_loaded()
+
+    def ensure_loaded(self):
+        if not self._loaded:
+            self._loaded = True
+            self.load_from_rc()
 
     def _resolve_source_xml(self) -> str:
         if os.path.exists(USER_RC_XML):

@@ -143,13 +143,14 @@ def _parse_wlr_randr_text(raw: str) -> list:
 class DisplayTab(Gtk.Box):
     """Zakładka konfiguracji monitorów i skalowania obrazu przez `wlr-randr`."""
 
-    def __init__(self, _parent_window=None):
+    def __init__(self, _parent_window=None, defer_load: bool = False):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self._outputs = []
         self._selected_output = None
         self._res_map = {}      # res_str -> list of modes
         self._rate_items = []   # [(label, mode_dict)]
         self._updating_ui = False
+        self._loaded = False
 
         sw, self.content = make_scrolled_page()
         self.pack_start(sw, True, True, 0)
@@ -257,7 +258,13 @@ class DisplayTab(Gtk.Box):
         box_cfg.pack_start(footer, False, False, 0)
         self.content.pack_start(card_cfg, False, False, 0)
 
-        self.refresh_displays()
+        if not defer_load:
+            self.ensure_loaded()
+
+    def ensure_loaded(self):
+        if not self._loaded:
+            self._loaded = True
+            self.refresh_displays()
 
     def refresh_displays(self):
         if not shutil.which("wlr-randr"):

@@ -6,6 +6,10 @@ export XDG_CURRENT_DESKTOP=OKay:labwc
 export XDG_SESSION_DESKTOP=OKay
 export XDG_SESSION_TYPE=wayland
 
+# Optymalizacja zużycia pamięci RAM w całej sesji (ograniczenie aren glibc i mostu AT-SPI)
+export MALLOC_ARENA_MAX=2
+export NO_AT_BRIDGE=1
+
 # Spójność kursorów na całym pulpicie Wayland
 # WLR_NO_HARDWARE_CURSORS=1 zapobiega niewidocznemu kursorowi na maszynach wirtualnych i kartach GPU
 export WLR_NO_HARDWARE_CURSORS=1

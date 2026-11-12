@@ -29,10 +29,11 @@ SYSTEM_WALLPAPER = "/usr/share/backgrounds/okay-de/default.png"
 class PanelTab(Gtk.Box):
     """Widok konfiguracji paska zadań (panel.json) oraz pulpitu OKay DE."""
 
-    def __init__(self, parent_window=None):
+    def __init__(self, parent_window=None, defer_load: bool = False):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.parent_window = parent_window
         self._updating_ui = False
+        self._loaded = False
 
         sw, self.content = make_scrolled_page()
         self.pack_start(sw, True, True, 0)
@@ -112,7 +113,13 @@ class PanelTab(Gtk.Box):
         self.lbl_status.get_style_context().add_class("row-subtitle")
         self.content.pack_start(self.lbl_status, False, False, 0)
 
-        self.load_config()
+        if not defer_load:
+            self.ensure_loaded()
+
+    def ensure_loaded(self):
+        if not self._loaded:
+            self._loaded = True
+            self.load_config()
 
     def _read_panel_json(self) -> dict:
         data = {"icon_only": True, "show_labels": False, "position": "bottom", "pinned_apps": []}

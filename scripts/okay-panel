@@ -14,6 +14,7 @@ Funkcje:
 
 import os
 import sys
+import gc
 import copy
 import fcntl
 import glob
@@ -28,16 +29,35 @@ import threading
 import subprocess
 from datetime import datetime
 
-# 1. Wymuszenie natywnego backendu Wayland dla GTK3 (zapobiega Xwayland)
+# 1. Ograniczenie aren alokatora glibc, wyłączenie mostu AT-SPI i wymuszenie Wayland
+os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+os.environ.setdefault("NO_AT_BRIDGE", "1")
 os.environ["GDK_BACKEND"] = "wayland"
 
-# 2. Ustawienie nazwy procesu w jądrze Linux dla pkill/pgrep
+# Agresywniejsze zwalnianie krótkotrwałych obiektów Pythona w procesie działającym w tle
+gc.set_threshold(500, 5, 5)
+
+# 2. Ustawienie nazwy procesu w jądrze Linux oraz dostęp do malloc_trim(0)
+_LIBC = None
 try:
     import ctypes
-    libc = ctypes.CDLL(None)
-    libc.prctl(15, b"okay-panel", 0, 0, 0)
+    try:
+        _LIBC = ctypes.CDLL("libc.so.6")
+    except OSError:
+        _LIBC = ctypes.CDLL(None)
+    _LIBC.prctl(15, b"okay-panel", 0, 0, 0)
 except Exception:
-    pass
+    _LIBC = None
+
+
+def _trim_heap():
+    """Zwraca nieużywane strony sterty C (GTK/GdkPixbuf/Pango) z powrotem do jądra Linux."""
+    try:
+        gc.collect(0)
+        if _LIBC is not None and hasattr(_LIBC, "malloc_trim"):
+            _LIBC.malloc_trim(0)
+    except Exception:
+        pass
 
 
 def _runtime_state_dir() -> str:
@@ -423,7 +443,13 @@ class PanelConfigManager:
 
 class AppHelper:
     ICON_THEME = Gtk.IconTheme.get_default()
-    _desktop_cache = None
+    _meta_cache = {}
+    _pixbuf_cache = {}
+    _DESKTOP_DIRS = (
+        os.path.expanduser("~/.local/share/applications"),
+        "/usr/local/share/applications",
+        "/usr/share/applications",
+    )
 
     @classmethod
     def _has_icon(cls, name: str) -> bool:
@@ -432,6 +458,18 @@ class AppHelper:
         if cls.ICON_THEME is None:
             cls.ICON_THEME = Gtk.IconTheme.get_default()
         return bool(cls.ICON_THEME and cls.ICON_THEME.has_icon(name))
+
+    @classmethod
+    def get_scaled_pixbuf(cls, path: str, size: int = 22):
+        key = (path, size)
+        pb = cls._pixbuf_cache.get(key)
+        if pb is not None:
+            return pb
+        pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, size, size, True)
+        if len(cls._pixbuf_cache) >= 24:
+            cls._pixbuf_cache.clear()
+        cls._pixbuf_cache[key] = pb
+        return pb
 
     STATIC_ICON_MAP = {
         "foot": "utilities-terminal",
@@ -451,77 +489,110 @@ class AppHelper:
         "pavucontrol": "multimedia-volume-control"
     }
 
+    @staticmethod
+    def _parse_desktop_file(path: str) -> dict:
+        name = ""
+        icon = ""
+        exec_cmd = ""
+        wm_class = ""
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            in_entry = False
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("["):
+                    if in_entry:
+                        break
+                    in_entry = (line == "[Desktop Entry]")
+                    continue
+                if not in_entry:
+                    continue
+                if line.startswith("Name=") and not name:
+                    name = line[5:].strip()
+                elif line.startswith("Icon=") and not icon:
+                    icon = line[5:].strip()
+                elif line.startswith("Exec=") and not exec_cmd:
+                    raw_exec = line[5:].strip()
+                    try:
+                        parts = shlex.split(raw_exec)
+                    except ValueError:
+                        parts = raw_exec.split()
+                    clean_parts = [p for p in parts if not p.startswith("%")]
+                    exec_cmd = " ".join(shlex.quote(p) for p in clean_parts)
+                elif line.startswith("StartupWMClass=") and not wm_class:
+                    wm_class = line[15:].strip().lower()
+                if name and icon and exec_cmd and wm_class:
+                    break
+
+        base_id = os.path.splitext(os.path.basename(path))[0].lower()
+        cmd_bin = os.path.basename(exec_cmd.split()[0]).lower() if exec_cmd else ""
+        return {
+            "base_id": base_id,
+            "wm_class": wm_class,
+            "cmd_bin": cmd_bin,
+            "info": {
+                "name": name or base_id,
+                "icon": icon,
+                "cmd": exec_cmd or base_id,
+            },
+        }
+
     @classmethod
-    def _build_desktop_cache(cls):
-        if cls._desktop_cache is not None:
-            return cls._desktop_cache
-        cache = {}
-        dirs = [
-            os.path.expanduser("~/.local/share/applications"),
-            "/usr/local/share/applications",
-            "/usr/share/applications"
-        ]
-        for d in dirs:
+    def _lookup_desktop(cls, clean_id: str):
+        """Wyszukuje plik .desktop leniwie dla pojedynczego app_id bez ładowania całej bazy do RAM."""
+        if clean_id in cls._meta_cache:
+            return cls._meta_cache[clean_id]
+
+        last_part = clean_id.split(".")[-1]
+        if last_part in cls._meta_cache:
+            return cls._meta_cache[last_part]
+
+        found = None
+        # Szybka ścieżka O(1) po nazwie pliku przed skanowaniem katalogów
+        for d in cls._DESKTOP_DIRS:
             if not os.path.isdir(d):
                 continue
-            for path in glob.glob(os.path.join(d, "*.desktop")):
-                try:
-                    name = ""
-                    icon = ""
-                    exec_cmd = ""
-                    wm_class = ""
-                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                        in_entry = False
-                        for line in f:
-                            line = line.strip()
-                            if line.startswith("["):
-                                in_entry = (line == "[Desktop Entry]")
-                                continue
-                            if not in_entry:
-                                continue
-                            if line.startswith("Name=") and not name:
-                                name = line[5:].strip()
-                            elif line.startswith("Icon=") and not icon:
-                                icon = line[5:].strip()
-                            elif line.startswith("Exec=") and not exec_cmd:
-                                raw_exec = line[5:].strip()
-                                try:
-                                    parts = shlex.split(raw_exec)
-                                except ValueError:
-                                    parts = raw_exec.split()
-                                # Usuń placeholdery %u %U %f %F %i %c %k
-                                clean_parts = [p for p in parts if not p.startswith("%")]
-                                exec_cmd = " ".join(shlex.quote(p) for p in clean_parts)
-                            elif line.startswith("StartupWMClass=") and not wm_class:
-                                wm_class = line[15:].strip().lower()
+            for cand_id in dict.fromkeys((clean_id, last_part)):
+                cand_path = os.path.join(d, f"{cand_id}.desktop")
+                if os.path.isfile(cand_path):
+                    try:
+                        found = cls._parse_desktop_file(cand_path)["info"]
+                        break
+                    except Exception:
+                        pass
+            if found is not None:
+                break
 
-                    base_id = os.path.splitext(os.path.basename(path))[0].lower()
-                    info = {
-                        "name": name or base_id,
-                        "icon": icon,
-                        "cmd": exec_cmd or base_id
-                    }
-                    cache[base_id] = info
-                    if wm_class:
-                        cache[wm_class] = info
-                    if exec_cmd:
-                        cmd_bin = os.path.basename(exec_cmd.split()[0]).lower()
-                        if cmd_bin not in cache:
-                            cache[cmd_bin] = info
-                except Exception:
-                    pass
-        cls._desktop_cache = cache
-        return cache
+        # Wolniejsza ścieżka: dopasowanie po StartupWMClass / binarium Exec
+        if found is None:
+            for d in cls._DESKTOP_DIRS:
+                if not os.path.isdir(d):
+                    continue
+                for path in glob.iglob(os.path.join(d, "*.desktop")):
+                    try:
+                        parsed = cls._parse_desktop_file(path)
+                    except Exception:
+                        continue
+                    if clean_id in (parsed["base_id"], parsed["wm_class"], parsed["cmd_bin"]) or (
+                        last_part and last_part in (parsed["base_id"], parsed["wm_class"], parsed["cmd_bin"])
+                    ):
+                        found = parsed["info"]
+                        break
+                if found is not None:
+                    break
+
+        if len(cls._meta_cache) >= 32:
+            cls._meta_cache.clear()
+        cls._meta_cache[clean_id] = found
+        return found
 
     @classmethod
     def get_app_metadata(cls, app_id: str) -> dict:
         clean_id = app_id.lower().strip()
-        cache = cls._build_desktop_cache()
-        if clean_id in cache:
-            return cache[clean_id]
-        last_part = clean_id.split(".")[-1]
-        if last_part in cache:
-            return cache[last_part]
+        entry = cls._lookup_desktop(clean_id)
+        if entry is not None:
+            return entry
         return {
             "name": app_id,
             "icon": cls.get_icon_name(app_id),
@@ -540,18 +611,16 @@ class AppHelper:
         if clean_id in cls.STATIC_ICON_MAP and cls._has_icon(cls.STATIC_ICON_MAP[clean_id]):
             return cls.STATIC_ICON_MAP[clean_id]
 
-        cache = cls._build_desktop_cache()
-        if clean_id in cache and cache[clean_id].get("icon"):
-            ic = cache[clean_id]["icon"]
-            if cls._has_icon(ic):
-                return ic
-
         if cls._has_icon(clean_id):
             return clean_id
 
         parts = clean_id.split(".")
         if parts and cls._has_icon(parts[-1]):
             return parts[-1]
+
+        entry = cls._lookup_desktop(clean_id)
+        if entry and entry.get("icon") and cls._has_icon(entry["icon"]):
+            return entry["icon"]
 
         return cls.STATIC_ICON_MAP.get(clean_id, "application-x-executable")
 
@@ -1098,19 +1167,47 @@ class OkayPanel(Gtk.Window):
 
         self._config_mtime = -1
         self.panel_config = PanelConfigManager.load()
-        self._last_state_key = None
+        self._last_layout_key = None
+        self._last_titles_key = None
+        self._task_buttons = []
+        self._last_clock_str = ""
+        self._last_bat_state = ("init",)
+        self._last_bat_check = 0.0
+        self._last_vol_data = None
+        self._vol_wake = threading.Event()
         self._apply_position()
+
+        # Obserwacja ~/.config/okay-de/panel.json przez Gio/inotify
+        self._cfg_monitor = None
+        try:
+            gfile = Gio.File.new_for_path(PanelConfigManager.CONFIG_FILE)
+            self._cfg_monitor = gfile.monitor_file(Gio.FileMonitorFlags.NONE, None)
+            self._cfg_monitor.connect("changed", self._on_config_file_changed)
+        except Exception:
+            self._cfg_monitor = None
 
         # Połączenie z natywnym protokołem Wayland wlr-foreign-toplevel-management-v1
         WindowManager.init_client(self._on_wayland_change)
 
-        # Odświeżanie konfiguracji / fallback (co 500ms)
-        GLib.timeout_add(500, self._update_tasks)
-        # Odświeżanie statusów systemowych i zegara (co 1000ms)
-        GLib.timeout_add(1000, self._update_status)
+        # Przy natywnym protokole Wayland wystarcza rzadkie odświeżanie (5s); fallback wlrctl co 750ms
+        if WindowManager._wl_client and WindowManager._wl_client.connected:
+            GLib.timeout_add_seconds(5, self._update_tasks)
+        else:
+            GLib.timeout_add(750, self._update_tasks)
+
+        # Jeden trwały wątek do wpctl (zero tworzenia wątków co sekundę) + rzadki timer zegara/baterii
+        if shutil.which("wpctl"):
+            threading.Thread(target=self._volume_worker_loop, daemon=True).start()
+        GLib.timeout_add_seconds(2, self._update_clock_and_battery)
+        GLib.timeout_add_seconds(4, lambda: (_trim_heap(), False)[1])
 
         self._update_tasks()
-        self._update_status()
+        self._update_clock_and_battery()
+
+    def _on_config_file_changed(self, *_args):
+        self._config_mtime = -1
+        self._last_layout_key = None
+        self._update_tasks()
 
     def _on_wayland_change(self) -> bool:
         self._update_tasks()
@@ -1213,16 +1310,16 @@ class OkayPanel(Gtk.Window):
                 self._launch_cmd("okay-settings --tab sound")
         elif event.button == 3:
             self._launch_cmd("okay-volume mute")
-            GLib.timeout_add(150, lambda: (self._update_status(), False)[1])
+            GLib.timeout_add(120, lambda: (self._vol_wake.set(), False)[1])
         return True
 
     def _on_volume_scroll(self, widget, event):
         if event.direction == Gdk.ScrollDirection.UP:
             self._launch_cmd("okay-volume raise")
-            GLib.timeout_add(150, lambda: (self._update_status(), False)[1])
+            GLib.timeout_add(120, lambda: (self._vol_wake.set(), False)[1])
         elif event.direction == Gdk.ScrollDirection.DOWN:
             self._launch_cmd("okay-volume lower")
-            GLib.timeout_add(150, lambda: (self._update_status(), False)[1])
+            GLib.timeout_add(120, lambda: (self._vol_wake.set(), False)[1])
         return True
 
     # ------------------------------------------------------------------------
@@ -1265,7 +1362,7 @@ class OkayPanel(Gtk.Window):
         img = None
         if os.path.isabs(icon_name) and os.path.exists(icon_name):
             try:
-                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(icon_name, 22, 22, True)
+                pb = AppHelper.get_scaled_pixbuf(icon_name, 22)
                 img = Gtk.Image.new_from_pixbuf(pb)
             except Exception:
                 img = None
@@ -1297,7 +1394,7 @@ class OkayPanel(Gtk.Window):
                 self._config_mtime = mtime
                 self.panel_config = PanelConfigManager.load()
                 self._apply_position()
-                self._last_state_key = None
+                self._last_layout_key = None
         except Exception:
             pass
 
@@ -1305,16 +1402,52 @@ class OkayPanel(Gtk.Window):
         show_labels = bool(self.panel_config.get("show_labels", False))
         pinned_apps = self.panel_config.get("pinned_apps", [])
 
-        state_key = (
-            [(w["handle_id"], w["app_id"], w["title"], w["focused"], w["minimized"]) for w in windows],
+        layout_key = (
             show_labels,
+            tuple((w["handle_id"], w["app_id"], w["title"] if show_labels else "", w["focused"], w["minimized"]) for w in windows),
             tuple((p.get("app_id", ""), p.get("cmd", ""), p.get("name", "")) for p in pinned_apps)
         )
-        if self._last_state_key == state_key:
+        titles_key = tuple(w["title"] for w in windows)
+
+        # Szybka ścieżka przy trybie samych ikon: zmiana samego tytułu okna nie przebudowuje widżetów GTK
+        if self._last_layout_key == layout_key:
+            if show_labels or self._last_titles_key == titles_key:
+                return True
+            self._last_titles_key = titles_key
+            used_idx = set()
+            btn_idx = 0
+            for pin in pinned_apps:
+                matched = None
+                for idx, w in enumerate(windows):
+                    if idx not in used_idx and self._matches_pin(w["app_id"], pin):
+                        matched = w
+                        used_idx.add(idx)
+                        break
+                if btn_idx < len(self._task_buttons):
+                    btn, item = self._task_buttons[btn_idx]
+                    if matched is not None:
+                        new_t = matched["title"]
+                        if item.get("title") != new_t:
+                            item["title"] = new_t
+                            btn.set_tooltip_text(new_t or pin.get("name", ""))
+                btn_idx += 1
+            for idx, w in enumerate(windows):
+                if idx in used_idx:
+                    continue
+                if btn_idx < len(self._task_buttons):
+                    btn, item = self._task_buttons[btn_idx]
+                    new_t = w["title"]
+                    if item.get("title") != new_t:
+                        item["title"] = new_t
+                        btn.set_tooltip_text(new_t or w["app_id"])
+                btn_idx += 1
             return True
-        self._last_state_key = state_key
+
+        self._last_layout_key = layout_key
+        self._last_titles_key = titles_key
 
         # Wyczyść obecne przyciski (wraz ze zwolnieniem zasobów GTK3)
+        self._task_buttons = []
         for child in self.tasks_box.get_children():
             self.tasks_box.remove(child)
             child.destroy()
@@ -1361,7 +1494,7 @@ class OkayPanel(Gtk.Window):
                     is_focused=is_focused,
                     is_minimized=is_minimized
                 )
-                btn.connect("button-press-event", self._on_task_press, {
+                item = {
                     "handle_id": h_id,
                     "app_id": w_id,
                     "title": w_title,
@@ -1374,7 +1507,7 @@ class OkayPanel(Gtk.Window):
                     "is_focused": is_focused,
                     "is_minimized": is_minimized,
                     "multiple": multiple
-                })
+                }
             else:
                 icon_name = AppHelper.get_icon_name(pin_app_id, pin_icon)
                 btn = self._make_task_button(
@@ -1387,7 +1520,7 @@ class OkayPanel(Gtk.Window):
                     is_focused=False,
                     is_minimized=False
                 )
-                btn.connect("button-press-event", self._on_task_press, {
+                item = {
                     "handle_id": 0,
                     "app_id": pin_app_id,
                     "title": pin_name,
@@ -1400,8 +1533,10 @@ class OkayPanel(Gtk.Window):
                     "is_focused": False,
                     "is_minimized": False,
                     "multiple": False
-                })
+                }
 
+            btn.connect("button-press-event", self._on_task_press, item)
+            self._task_buttons.append((btn, item))
             self.tasks_box.pack_start(btn, False, False, 0)
 
         # B. Renderowanie pozostałych otwartych okien (nieprzypiętych lub kolejnych okien tej samej aplikacji)
@@ -1428,7 +1563,7 @@ class OkayPanel(Gtk.Window):
                 is_focused=is_focused,
                 is_minimized=is_minimized
             )
-            btn.connect("button-press-event", self._on_task_press, {
+            item = {
                 "handle_id": h_id,
                 "app_id": w_id,
                 "title": w_title,
@@ -1441,10 +1576,13 @@ class OkayPanel(Gtk.Window):
                 "is_focused": is_focused,
                 "is_minimized": is_minimized,
                 "multiple": multiple
-            })
+            }
+            btn.connect("button-press-event", self._on_task_press, item)
+            self._task_buttons.append((btn, item))
             self.tasks_box.pack_start(btn, False, False, 0)
 
         self.tasks_box.show_all()
+        _trim_heap()
         return True
 
     def _on_task_press(self, widget, event, item: dict):
@@ -1520,6 +1658,7 @@ class OkayPanel(Gtk.Window):
             cfg["pinned_apps"] = pins
             PanelConfigManager.save(cfg)
             self._config_mtime = -1
+            self._last_layout_key = None
             self._update_tasks()
 
     def _unpin_app(self, item: dict):
@@ -1533,64 +1672,70 @@ class OkayPanel(Gtk.Window):
         cfg["pinned_apps"] = pins
         PanelConfigManager.save(cfg)
         self._config_mtime = -1
+        self._last_layout_key = None
         self._update_tasks()
 
     # ------------------------------------------------------------------------
     # Statusy: Zegar, Głośność, Bateria
     # ------------------------------------------------------------------------
 
-    def _update_status(self) -> bool:
+    def _apply_volume_ui(self, vol_data: tuple) -> bool:
+        is_muted, vol = vol_data
+        if is_muted:
+            self.img_volume.set_from_icon_name("audio-volume-muted", Gtk.IconSize.MENU)
+            self.lbl_volume.set_text("Mute")
+            self.btn_volume.set_tooltip_text("Dźwięk wyciszony (LPM: Mikser, PPM: Włącz)")
+        else:
+            icon = "audio-volume-high" if vol > 65 else ("audio-volume-medium" if vol > 25 else "audio-volume-low")
+            self.img_volume.set_from_icon_name(icon, Gtk.IconSize.MENU)
+            self.lbl_volume.set_text(f"{vol}%")
+            self.btn_volume.set_tooltip_text(f"Głośność: {vol}%\nLPM: Mikser, Rolka: +/-")
+        return False
+
+    def _volume_worker_loop(self):
+        """Pojedynczy trwały wątek odpytujący wpctl co 5s lub na zdarzenie, bez spamowania wątkami."""
+        while True:
+            self._vol_wake.clear()
+            vol_data = None
+            try:
+                res = subprocess.run(
+                    ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
+                    capture_output=True, text=True, timeout=0.5, check=False
+                )
+                if res.returncode == 0:
+                    out = res.stdout.strip()
+                    is_muted = "[MUTED]" in out
+                    parts = out.split()
+                    vol = 100
+                    if len(parts) >= 2:
+                        try:
+                            vol = max(0, int(round(float(parts[1]) * 100)))
+                        except ValueError:
+                            pass
+                    vol_data = (is_muted, vol)
+            except Exception:
+                pass
+            if vol_data is not None and vol_data != self._last_vol_data:
+                self._last_vol_data = vol_data
+                GLib.idle_add(self._apply_volume_ui, vol_data)
+            self._vol_wake.wait(timeout=5.0)
+
+    def _update_clock_and_battery(self) -> bool:
         now = datetime.now()
-        self.lbl_clock.set_markup(f"<b>{now.strftime('%H:%M')}</b>\n<small>{now.strftime('%d.%m.%Y')}</small>")
-        self.btn_clock.set_tooltip_text(now.strftime("%A, %d %B %Y"))
+        clock_str = now.strftime("%H:%M")
+        if clock_str != self._last_clock_str:
+            self._last_clock_str = clock_str
+            self.lbl_clock.set_markup(f"<b>{clock_str}</b>\n<small>{now.strftime('%d.%m.%Y')}</small>")
+            self.btn_clock.set_tooltip_text(now.strftime("%A, %d %B %Y"))
 
-        # Asynchroniczne odświeżanie głośności bez blokowania pętli GTK
-        if not getattr(self, "_vol_probe_running", False):
-            self._vol_probe_running = True
+        now_mono = time.monotonic()
+        if now_mono - self._last_bat_check < 15.0:
+            return True
+        self._last_bat_check = now_mono
 
-            def _probe_volume():
-                vol_data = None
-                try:
-                    res = subprocess.run(
-                        ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
-                        capture_output=True, text=True, timeout=0.4, check=False
-                    )
-                    if res.returncode == 0:
-                        out = res.stdout.strip()
-                        is_muted = "[MUTED]" in out
-                        parts = out.split()
-                        vol = 100
-                        if len(parts) >= 2:
-                            try:
-                                vol = max(0, int(round(float(parts[1]) * 100)))
-                            except ValueError:
-                                pass
-                        vol_data = (is_muted, vol)
-                except Exception:
-                    pass
-
-                def _apply_vol():
-                    self._vol_probe_running = False
-                    if vol_data is None:
-                        return False
-                    is_muted, vol = vol_data
-                    if is_muted:
-                        self.img_volume.set_from_icon_name("audio-volume-muted", Gtk.IconSize.MENU)
-                        self.lbl_volume.set_text("Mute")
-                        self.btn_volume.set_tooltip_text("Dźwięk wyciszony (LPM: Mikser, PPM: Włącz)")
-                    else:
-                        icon = "audio-volume-high" if vol > 65 else ("audio-volume-medium" if vol > 25 else "audio-volume-low")
-                        self.img_volume.set_from_icon_name(icon, Gtk.IconSize.MENU)
-                        self.lbl_volume.set_text(f"{vol}%")
-                        self.btn_volume.set_tooltip_text(f"Głośność: {vol}%\nLPM: Mikser, Rolka: +/-")
-                    return False
-
-                GLib.idle_add(_apply_vol)
-
-            threading.Thread(target=_probe_volume, daemon=True).start()
-
-        # Bateria
+        # Bateria (odczyt co 15s, bez ponownego renderowania przy braku zmian)
         bat_dirs = sorted(glob.glob("/sys/class/power_supply/BAT*"))
+        bat_state = None
         if bat_dirs:
             try:
                 bat_dir = bat_dirs[0]
@@ -1603,17 +1748,22 @@ class OkayPanel(Gtk.Window):
                     if os.path.exists(stat_file):
                         with open(stat_file, "r", encoding="utf-8") as f:
                             status = f.read().strip()
-
-                    is_charging = (status == "Charging")
-                    icon = "battery-charging" if is_charging else ("battery-full" if cap > 75 else ("battery-good" if cap > 35 else "battery-low"))
-                    self.img_battery.set_from_icon_name(icon, Gtk.IconSize.MENU)
-                    self.lbl_battery.set_text(f"{cap}%")
-                    self.box_battery.set_tooltip_text(f"Bateria: {cap}% ({status})")
-                    self.box_battery.set_visible(True)
+                    bat_state = (cap, status)
             except Exception:
+                bat_state = None
+
+        if bat_state != self._last_bat_state:
+            self._last_bat_state = bat_state
+            if bat_state is None:
                 self.box_battery.set_visible(False)
-        else:
-            self.box_battery.set_visible(False)
+            else:
+                cap, status = bat_state
+                is_charging = (status == "Charging")
+                icon = "battery-charging" if is_charging else ("battery-full" if cap > 75 else ("battery-good" if cap > 35 else "battery-low"))
+                self.img_battery.set_from_icon_name(icon, Gtk.IconSize.MENU)
+                self.lbl_battery.set_text(f"{cap}%")
+                self.box_battery.set_tooltip_text(f"Bateria: {cap}% ({status})")
+                self.box_battery.set_visible(True)
 
         return True
 

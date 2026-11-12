@@ -54,11 +54,12 @@ def _signal_icon_name(signal: int) -> str:
 class WifiTab(Gtk.Box):
     """Widok zarządzania Wi-Fi i połączeniami sieciowymi przez NetworkManager (nmcli)."""
 
-    def __init__(self, parent_window=None):
+    def __init__(self, parent_window=None, defer_load: bool = False):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.parent_window = parent_window
         self._updating_ui = False
         self._busy = False
+        self._loaded = False
         self._networks = []
         self._saved_profiles = {}
 
@@ -129,7 +130,13 @@ class WifiTab(Gtk.Box):
         box_list.pack_start(action_bar, False, False, 0)
         self.content.pack_start(card_list, True, True, 0)
 
-        self.refresh_state(rescan=False)
+        if not defer_load:
+            self.ensure_loaded()
+
+    def ensure_loaded(self):
+        if not self._loaded:
+            self._loaded = True
+            self.refresh_state(rescan=False)
 
     def _set_busy(self, busy: bool, message: str = ""):
         self._busy = busy

@@ -13,7 +13,9 @@ import signal
 import shutil
 import subprocess
 
-# Wymuszenie natywnego backendu Wayland dla GTK3 (spójny app_id z panelem)
+# Ograniczenie aren glibc, wyłączenie mostu AT-SPI oraz wymuszenie Wayland przed startem GTK3
+os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+os.environ.setdefault("NO_AT_BRIDGE", "1")
 os.environ["GDK_BACKEND"] = "wayland"
 
 # Nazwa procesu w jądrze Linux dla pkill / menedżera zadań
@@ -107,22 +109,32 @@ class OkaySettingsWindow(Gtk.ApplicationWindow):
         root.pack_start(left_col, False, False, 0)
         root.pack_start(self.stack, True, True, 0)
 
-        # Rejestracja modularnych zakładek
+        # Rejestracja modularnych zakładek (leniwe ładowanie ciężkich backendów po otwarciu danej karty)
         tabs = [
-            ("wifi", "Wi-Fi i Sieć", WifiTab(self)),
-            ("display", "Monitory", DisplayTab(self)),
-            ("input", "Mysz i Touchpad", InputTab(self)),
-            ("sound", "Dźwięk", SoundTab(self)),
-            ("panel", "Pulpit i Panel", PanelTab(self)),
+            ("wifi", "Wi-Fi i Sieć", WifiTab(self, defer_load=True)),
+            ("display", "Monitory", DisplayTab(self, defer_load=True)),
+            ("input", "Mysz i Touchpad", InputTab(self, defer_load=True)),
+            ("sound", "Dźwięk", SoundTab(self, defer_load=True)),
+            ("panel", "Pulpit i Panel", PanelTab(self, defer_load=True)),
             ("system", "System i Aktualizacje", SystemTab(self)),
         ]
         for tab_id, title, widget in tabs:
             self.stack.add_titled(widget, tab_id, title)
 
+        self.stack.connect("notify::visible-child", self._on_visible_tab_changed)
         self.show_all()
 
         if initial_tab and self.stack.get_child_by_name(initial_tab):
             self.stack.set_visible_child_name(initial_tab)
+        self._activate_current_tab()
+
+    def _activate_current_tab(self):
+        child = self.stack.get_visible_child()
+        if child is not None and hasattr(child, "ensure_loaded"):
+            child.ensure_loaded()
+
+    def _on_visible_tab_changed(self, _stack, _pspec):
+        self._activate_current_tab()
 
 
 class OkaySettingsApp(Gtk.Application):
@@ -155,6 +167,7 @@ class OkaySettingsApp(Gtk.Application):
             self._window = OkaySettingsWindow(self, self.initial_tab)
         elif self.initial_tab and self._window.stack.get_child_by_name(self.initial_tab):
             self._window.stack.set_visible_child_name(self.initial_tab)
+            self._window._activate_current_tab()
         self._window.present()
 
 
