@@ -62,6 +62,21 @@ def _trim_heap():
         pass
 
 
+def _spawn_reap(args: list, silence_output: bool = False):
+    """Uruchamia proces potomny i automatycznie zbiera jego status zakończenia w pętli GLib (zero zombie)."""
+    kwargs = {"start_new_session": True}
+    if silence_output:
+        kwargs["stdout"] = subprocess.DEVNULL
+        kwargs["stderr"] = subprocess.DEVNULL
+    proc = subprocess.Popen(args, **kwargs)
+    try:
+        from gi.repository import GLib
+        GLib.child_watch_add(GLib.PRIORITY_LOW, proc.pid, lambda *_a: None)
+    except Exception:
+        pass
+    return proc
+
+
 def _runtime_state_dir() -> str:
     xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", "")
     if xdg_runtime and os.path.isdir(xdg_runtime) and os.access(xdg_runtime, os.W_OK):
@@ -1110,7 +1125,7 @@ class AppHelper:
                     break
 
         base_id = os.path.splitext(os.path.basename(path))[0].lower()
-        cmd_bin = os.path.basename(exec_cmd.split()[0]).lower() if exec_cmd else ""
+        cmd_bin = os.path.basename(clean_parts[0]).lower() if clean_parts else ""
         return {
             "base_id": base_id,
             "wm_class": wm_class,
@@ -1661,8 +1676,8 @@ class WindowManager:
         sel = [f"app_id:{app_id}", f"title:{title}"] if (multiple and title) else [f"app_id:{app_id}"]
         try:
             if is_minimized:
-                subprocess.Popen(["wlrctl", "toplevel", "minimize", "false"] + sel)
-            subprocess.Popen(["wlrctl", "toplevel", "focus"] + sel)
+                _spawn_reap(["wlrctl", "toplevel", "minimize", "false"] + sel, silence_output=True)
+            _spawn_reap(["wlrctl", "toplevel", "focus"] + sel, silence_output=True)
         except Exception:
             pass
 
@@ -1676,12 +1691,12 @@ class WindowManager:
         sel = [f"app_id:{app_id}", f"title:{title}"] if (multiple and title) else [f"app_id:{app_id}"]
         try:
             if is_focused:
-                subprocess.Popen(["wlrctl", "toplevel", "minimize", "true"] + sel)
+                _spawn_reap(["wlrctl", "toplevel", "minimize", "true"] + sel, silence_output=True)
             elif is_minimized:
-                subprocess.Popen(["wlrctl", "toplevel", "minimize", "false"] + sel)
-                subprocess.Popen(["wlrctl", "toplevel", "focus"] + sel)
+                _spawn_reap(["wlrctl", "toplevel", "minimize", "false"] + sel, silence_output=True)
+                _spawn_reap(["wlrctl", "toplevel", "focus"] + sel, silence_output=True)
             else:
-                subprocess.Popen(["wlrctl", "toplevel", "focus"] + sel)
+                _spawn_reap(["wlrctl", "toplevel", "focus"] + sel, silence_output=True)
         except Exception:
             pass
 
@@ -1694,9 +1709,9 @@ class WindowManager:
             return
         sel = [f"app_id:{app_id}", f"title:{title}"] if (multiple and title) else [f"app_id:{app_id}"]
         try:
-            subprocess.Popen(["wlrctl", "toplevel", "minimize", "true" if minimized else "false"] + sel)
+            _spawn_reap(["wlrctl", "toplevel", "minimize", "true" if minimized else "false"] + sel, silence_output=True)
             if not minimized:
-                subprocess.Popen(["wlrctl", "toplevel", "focus"] + sel)
+                _spawn_reap(["wlrctl", "toplevel", "focus"] + sel, silence_output=True)
         except Exception:
             pass
 
@@ -1708,7 +1723,7 @@ class WindowManager:
         if shutil.which("wlrctl"):
             sel = [f"app_id:{app_id}", f"title:{title}"] if (multiple and title) else [f"app_id:{app_id}"]
             try:
-                subprocess.Popen(["wlrctl", "toplevel", "close"] + sel)
+                _spawn_reap(["wlrctl", "toplevel", "close"] + sel, silence_output=True)
             except Exception:
                 pass
 
@@ -1811,17 +1826,18 @@ class OkayPanel(Gtk.Window):
         # Połączenie z natywnym protokołem Wayland wlr-foreign-toplevel-management-v1
         WindowManager.init_client(self._on_wayland_change)
 
-        # Przy natywnym protokole Wayland wystarcza rzadkie odświeżanie (5s); fallback wlrctl co 750ms
+        # Przy natywnym protokole Wayland wystarcza rzadkie odświeżanie (5s); fallback wlrctl co 1000ms
         if WindowManager._wl_client and WindowManager._wl_client.connected:
             GLib.timeout_add_seconds(5, self._update_tasks)
         else:
-            GLib.timeout_add(750, self._update_tasks)
+            GLib.timeout_add(1000, self._update_tasks)
 
         # Jeden trwały wątek do wpctl (zero tworzenia wątków co sekundę) + rzadki timer zegara/baterii
         if shutil.which("wpctl"):
             threading.Thread(target=self._volume_worker_loop, daemon=True).start()
         GLib.timeout_add_seconds(2, self._update_clock_and_battery)
         GLib.timeout_add_seconds(4, lambda: (_trim_heap(), False)[1])
+        GLib.timeout_add_seconds(60, lambda: (_trim_heap(), True)[1])
 
         self._update_tasks()
         self._update_clock_and_battery()
@@ -1992,7 +2008,7 @@ class OkayPanel(Gtk.Window):
                     local_exe = os.path.expanduser(f"~/.local/bin/{args[0]}")
                     if os.path.isfile(local_exe) and os.access(local_exe, os.X_OK):
                         args[0] = local_exe
-                subprocess.Popen(args, start_new_session=True)
+                _spawn_reap(args)
         except Exception as e:
             print(f"[okay-panel] Błąd uruchamiania '{cmd_str}': {e}", file=sys.stderr)
 
@@ -2548,6 +2564,7 @@ class OkayPanel(Gtk.Window):
 
         anim = self._animations_enabled()
         apply_animation_class(menu, anim)
+        menu.connect("selection-done", lambda m: GLib.idle_add(lambda: (m.destroy(), False)[1]))
         menu.show_all()
         prepare_fade_in(menu, anim)
         if self._get_panel_pos() == "top":

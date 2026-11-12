@@ -164,6 +164,7 @@ class WindowPreviewPopup(Gtk.Window):
         self._last_anchor = None
         stop_fade(self)
         self.hide()
+        _clear_box(self.cards_flow)
 
     def _set_app_image(self, img_widget: Gtk.Image, icon_name: str, size_px: int = 16) -> None:
         if icon_name and os.path.isabs(icon_name) and os.path.exists(icon_name) and self._get_icon_pixbuf:

@@ -242,8 +242,12 @@ class QuickSettingsPopover(Gtk.Window):
 
     def hide_popover(self):
         stop_fade(self)
+        self.wifi_spinner.stop()
         self.pwd_box.hide()
         self.hide()
+        for child in self.wifi_list.get_children():
+            self.wifi_list.remove(child)
+            child.destroy()
 
     def _on_key_press(self, _w, event):
         if event.keyval == Gdk.KEY_Escape:

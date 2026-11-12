@@ -464,6 +464,7 @@ class StatusNotifierTray(Gtk.Box):
             if menu is not None and len(menu.get_children()) > 0:
                 anim = bool(self._animations_enabled())
                 apply_animation_class(menu, anim)
+                menu.connect("selection-done", lambda m: GLib.idle_add(lambda: (m.destroy(), False)[1]))
                 menu.show_all()
                 prepare_fade_in(menu, anim)
                 if self._get_panel_pos() == "top":
