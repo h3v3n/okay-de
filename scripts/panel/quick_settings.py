@@ -100,8 +100,15 @@ class QuickSettingsPopover(Gtk.Window):
         self.set_skip_pager_hint(True)
         self.set_default_size(340, -1)
 
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual() if screen is not None else None
+        if visual is not None:
+            self.set_visual(visual)
+            self.set_app_paintable(True)
+
         self.connect("key-press-event", self._on_key_press)
         self.connect("focus-out-event", self._on_focus_out)
+        self.connect("destroy", self._on_destroy)
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         root.get_style_context().add_class("popover-card")
@@ -247,6 +254,17 @@ class QuickSettingsPopover(Gtk.Window):
     def _on_focus_out(self, _w, _ev):
         GLib.idle_add(lambda: (self.hide_popover() if not self.is_active() else None, False)[1])
         return False
+
+    def _on_destroy(self, _w):
+        stop_fade(self, reset_opacity=False)
+        for attr in ("_vol_debounce", "_bri_debounce"):
+            tid = getattr(self, attr, 0)
+            if tid:
+                try:
+                    GLib.source_remove(tid)
+                except Exception:
+                    pass
+                setattr(self, attr, 0)
 
     def _set_wifi_busy(self, busy: bool):
         if busy:

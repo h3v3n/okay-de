@@ -920,12 +920,41 @@ class UpdateManager:
                 tf.extract(member, dest_dir)
 
     @staticmethod
-    def _atomic_swap_dir(staging_dir: str, target_dir: str) -> None:
+    def _rmtree_force(path: str) -> None:
+        if not os.path.exists(path):
+            return
+        def _onerror(func, p, _exc_info):
+            try:
+                parent = os.path.dirname(p)
+                if os.path.isdir(parent):
+                    os.chmod(parent, os.stat(parent).st_mode | stat.S_IWUSR | stat.S_IXUSR)
+                if os.path.exists(p):
+                    os.chmod(p, os.stat(p).st_mode | stat.S_IWUSR | (stat.S_IXUSR if os.path.isdir(p) else 0))
+                func(p)
+            except OSError:
+                pass
+        shutil.rmtree(path, onerror=_onerror)
+
+    @staticmethod
+    def _make_tree_writable(root_dir: str) -> None:
+        for cur, dirs, files in os.walk(root_dir):
+            try:
+                os.chmod(cur, os.stat(cur).st_mode | stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+            except OSError:
+                pass
+            for fn in files:
+                fp = os.path.join(cur, fn)
+                try:
+                    os.chmod(fp, os.stat(fp).st_mode | stat.S_IRUSR | stat.S_IWUSR)
+                except OSError:
+                    pass
+
+    @classmethod
+    def _atomic_swap_dir(cls, staging_dir: str, target_dir: str) -> None:
         parent = os.path.dirname(os.path.abspath(target_dir))
         os.makedirs(parent, exist_ok=True)
         backup_dir = target_dir + ".bak"
-        if os.path.exists(backup_dir):
-            shutil.rmtree(backup_dir, ignore_errors=True)
+        cls._rmtree_force(backup_dir)
         had_existing = os.path.exists(target_dir)
         if had_existing:
             os.replace(target_dir, backup_dir)
@@ -938,8 +967,7 @@ class UpdateManager:
                 except OSError:
                     pass
             raise
-        if os.path.exists(backup_dir):
-            shutil.rmtree(backup_dir, ignore_errors=True)
+        cls._rmtree_force(backup_dir)
 
     @classmethod
     def _git_head_sha(cls, repo_dir: str, fallback: str = "") -> str:
@@ -963,10 +991,17 @@ class UpdateManager:
                 stage_parent = tempfile.mkdtemp(prefix=".repo-stage-", dir=data_dir)
                 try:
                     staged = os.path.join(stage_parent, "repo")
-                    shutil.copytree(src, staged, symlinks=False, ignore=shutil.ignore_patterns(".tmp-*", "*.tmp"))
+                    shutil.copytree(
+                        src,
+                        staged,
+                        symlinks=False,
+                        ignore_dangling_symlinks=True,
+                        ignore=shutil.ignore_patterns(".tmp-*", "*.tmp"),
+                    )
+                    cls._make_tree_writable(staged)
                     cls._atomic_swap_dir(staged, repo_dir)
                 finally:
-                    shutil.rmtree(stage_parent, ignore_errors=True)
+                    cls._rmtree_force(stage_parent)
             sha = cls._git_head_sha(repo_dir, fallback=expected_sha or "local")
             return repo_dir, sha
 
@@ -990,7 +1025,7 @@ class UpdateManager:
                     cls._atomic_swap_dir(staged_git, repo_dir)
                     return repo_dir, cls._git_head_sha(repo_dir, fallback=expected_sha)
             finally:
-                shutil.rmtree(stage_parent, ignore_errors=True)
+                cls._rmtree_force(stage_parent)
 
         # 2. Fallback: pobranie archiwum tar.gz z GitHub bezpośrednio do przestrzeni użytkownika
         stage_parent = tempfile.mkdtemp(prefix=".repo-tar-", dir=data_dir)
@@ -1013,9 +1048,10 @@ class UpdateManager:
             if not src_dir:
                 raise RuntimeError("Nie znaleziono skryptu install.sh w paczce aktualizacji.")
 
+            cls._make_tree_writable(src_dir)
             cls._atomic_swap_dir(src_dir, repo_dir)
         finally:
-            shutil.rmtree(stage_parent, ignore_errors=True)
+            cls._rmtree_force(stage_parent)
 
         return repo_dir, (expected_sha[:7] if expected_sha else "main")
 

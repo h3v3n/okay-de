@@ -40,8 +40,8 @@ def _resolve_fade_target(widget):
     return widget
 
 
-def stop_fade(widget) -> None:
-    """Zatrzymuje aktywny timer animacji dla danego okna/menu i przywraca opacity=1.0."""
+def stop_fade(widget, reset_opacity: bool = True) -> None:
+    """Zatrzymuje aktywny timer animacji dla danego okna/menu i opcjonalnie przywraca opacity=1.0."""
     target = _resolve_fade_target(widget)
     if target is None:
         return
@@ -52,19 +52,24 @@ def stop_fade(widget) -> None:
         except Exception:
             pass
         target._okay_fade_tid = 0
-    try:
-        target.set_opacity(1.0)
-    except Exception:
-        pass
+    if reset_opacity:
+        try:
+            target.set_opacity(1.0)
+        except Exception:
+            pass
 
 
 def _ensure_cleanup_hooks(target) -> None:
     if getattr(target, "_okay_fade_hooked", False):
         return
     target._okay_fade_hooked = True
-    for sig in ("hide", "destroy"):
+    try:
+        target.connect("hide", lambda _w, tgt=target: stop_fade(tgt, reset_opacity=True))
+    except Exception:
+        pass
+    for sig in ("unrealize", "destroy"):
         try:
-            target.connect(sig, lambda _w, tgt=target: stop_fade(tgt))
+            target.connect(sig, lambda _w, tgt=target: stop_fade(tgt, reset_opacity=False))
         except Exception:
             pass
 

@@ -11,10 +11,10 @@ fi
 
 case "$ACTION" in
     up)
-        brightnessctl set +5% -q
+        brightnessctl set +5% -q 2>/dev/null || exit 0
         ;;
     down)
-        brightnessctl set 5%- -q
+        brightnessctl set 5%- -q 2>/dev/null || exit 0
         ;;
     *)
         echo "Użycie: $0 {up|down}" >&2

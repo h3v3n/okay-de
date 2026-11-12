@@ -134,11 +134,11 @@ elif [ "$MODE" = "--user" ]; then
 
     copy_dir_missing() {
         local src_dir="$1" dst_dir="$2" mode="${3:-644}"
+        local item base
         [ -d "$src_dir" ] || return 0
         mkdir -p "$dst_dir"
         for item in "$src_dir"/*; do
             [ -e "$item" ] || continue
-            local base
             base="$(basename "$item")"
             if [ -d "$item" ]; then
                 copy_dir_missing "$item" "$dst_dir/$base" "$mode"

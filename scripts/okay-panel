@@ -648,7 +648,7 @@ class AppHelper:
     _meta_cache = {}
     _pixbuf_cache = {}
     _DESKTOP_DIRS = (
-        os.path.expanduser("~/.local/share/applications"),
+        os.path.join(_xdg_data_home(), "applications"),
         "/usr/local/share/applications",
         "/usr/share/applications",
     )
@@ -1365,8 +1365,11 @@ class OkayPanel(Gtk.Window):
         self.right_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self.main_box.pack_end(self.right_box, False, False, 0)
 
-        self._config_mtime = -1
         self.panel_config = PanelConfigManager.load()
+        try:
+            self._config_mtime = os.path.getmtime(PanelConfigManager.CONFIG_FILE) if os.path.exists(PanelConfigManager.CONFIG_FILE) else 0
+        except OSError:
+            self._config_mtime = -1
         self._last_layout_key = None
         self._last_titles_key = None
         self._task_buttons = []
@@ -1463,13 +1466,13 @@ class OkayPanel(Gtk.Window):
         btn_desktop.connect("clicked", self._on_desktop_clicked)
         self.right_box.pack_end(btn_desktop, False, False, 0)
 
-        # 2. Zegar dwuwierszowy (LPM otwiera Quick Settings Popover)
+        # 2. Zegar dwuwierszowy (LPM otwiera/zamyka Quick Settings Popover)
         self.btn_clock = Gtk.Button()
         self.btn_clock.set_name("clock-button")
         self.lbl_clock = Gtk.Label()
         self.lbl_clock.set_justify(Gtk.Justification.CENTER)
         self.btn_clock.add(self.lbl_clock)
-        self.btn_clock.connect("clicked", self._toggle_quick_settings)
+        self.btn_clock.connect("button-press-event", self._on_clock_press)
         self.right_box.pack_end(self.btn_clock, False, False, 0)
 
         # 3. Głośność (LPM: Quick Settings Popover, ŚPM: Mikser, PPM: Wycisz, Rolka: +/-)
@@ -1551,6 +1554,11 @@ class OkayPanel(Gtk.Window):
         elif windows:
             for w in windows:
                 WindowManager.set_minimized(w["handle_id"], w["app_id"], w["title"], False, app_counts.get(w["app_id"], 1) > 1)
+
+    def _on_clock_press(self, widget, event):
+        if event.button == 1:
+            self._toggle_quick_settings()
+        return True
 
     def _on_network_press(self, widget, event):
         if event.button == 1:

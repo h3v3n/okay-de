@@ -204,15 +204,14 @@ class OkaySettingsApp(Gtk.Application):
         return ""
 
     def do_command_line(self, command_line):
-        tab = self._parse_tab_arg(command_line.get_arguments())
-        if tab:
-            self.initial_tab = tab
+        self.initial_tab = self._parse_tab_arg(command_line.get_arguments())
         self.activate()
         return 0
 
     def do_activate(self):
         if self._window is None:
             self._window = OkaySettingsWindow(self, self.initial_tab)
+            self._window.connect("destroy", lambda _w: setattr(self, "_window", None))
         elif self.initial_tab and self._window.stack.get_child_by_name(self.initial_tab):
             self._window.stack.set_visible_child_name(self.initial_tab)
             self._window._activate_current_tab()
