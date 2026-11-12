@@ -179,9 +179,22 @@ if not HAS_LAYER_SHELL:
         subprocess.run(["notify-send", "-u", "critical", "OKay DE", "Brak pakietu gtk-layer-shell! Zainstaluj: sudo pacman -S gtk-layer-shell"], check=False)
     sys.exit(1)
 
+# Rozwiązanie ścieżki modularnych widżetów panelu (`panel/`: SNI, Quick Settings, Ghost Runner)
+_SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+for _candidate in (
+    _SCRIPT_DIR,
+    os.path.expanduser("~/.local/share/okay-de"),
+    "/usr/local/share/okay-de",
+    "/usr/share/okay-de",
+):
+    if os.path.isdir(os.path.join(_candidate, "panel")) and _candidate not in sys.path:
+        sys.path.insert(0, _candidate)
+
+from panel import StatusNotifierTray, QuickSettingsPopover, GhostRunnerIndicator
+
 
 # ============================================================================
-# Style CSS (OKsavi Dark Neon + Biała kreska statusu pod oknem)
+# Style CSS (Catppuccin Mocha #1e1e2e + OKsavi Neon Green #00e676)
 # ============================================================================
 
 PANEL_CSS = """
@@ -192,16 +205,17 @@ PANEL_CSS = """
 }
 
 window#okay-panel {
-    background-color: #111111;
-    border-top: 1px solid #222222;
-    color: #e0e0e0;
+    background-color: #1e1e2e;
+    border-top: 1px solid #313244;
+    color: #cdd6f4;
 }
 
 button {
     background-color: transparent;
+    background-image: none;
     border: none;
     border-radius: 0px;
-    color: #e0e0e0;
+    color: #cdd6f4;
     padding: 0 4px;
     margin: 0;
     min-height: 36px;
@@ -210,13 +224,13 @@ button {
 }
 
 button:hover {
-    background-color: #222222;
+    background-color: #313244;
 }
 
 /* Przycisk Start ("OK") w zieleni OKsavi */
 #start-button {
     background-color: #00e676;
-    color: #000000;
+    color: #11111b;
     font-weight: bold;
     font-size: 12px;
     padding: 0 14px;
@@ -226,7 +240,7 @@ button:hover {
 
 #start-button:hover {
     background-color: #2ecc71;
-    color: #000000;
+    color: #11111b;
 }
 
 /* Zunifikowana sekcja zadań */
@@ -238,11 +252,11 @@ button:hover {
     margin: 0 2px;
     min-width: 40px;
     min-height: 35px;
-    color: #cccccc;
+    color: #bac2de;
 }
 
 .task-item:hover {
-    background-color: #222222;
+    background-color: #313244;
     color: #ffffff;
 }
 
@@ -252,15 +266,15 @@ button:hover {
     opacity: 0.90;
 }
 
-/* Otwarta nieaktywna aplikacja - biała subtelna kreska u dołu */
+/* Otwarta nieaktywna aplikacja - subtelna biała kreska u dołu */
 .task-item.app-open {
-    border-bottom: 2px solid rgba(255, 255, 255, 0.55);
+    border-bottom: 2px solid rgba(205, 214, 244, 0.55);
 }
 
-/* Aktywne / sfokusowane okno - wyróżnione tło + pełna jasna biała kreska */
+/* Aktywne / sfokusowane okno - akcent OKsavi + pełna jasna biała kreska */
 .task-item.app-focused {
-    background-color: #172b1e;
-    border-bottom: 3px solid #ffffff;
+    background-color: rgba(0, 230, 118, 0.14);
+    border-bottom: 3px solid #00e676;
     color: #ffffff;
     font-weight: bold;
 }
@@ -269,38 +283,49 @@ button:hover {
 .task-item.app-minimized {
     opacity: 0.55;
     background-color: transparent;
-    border-bottom: 2px solid rgba(255, 255, 255, 0.25);
-    color: #888888;
+    border-bottom: 2px solid rgba(205, 214, 244, 0.25);
+    color: #6c7086;
 }
 
 .task-label {
     margin-left: 6px;
 }
 
-/* Prawa strona panelu */
-.status-item {
-    padding: 0 8px;
+/* Prawa strona panelu: Tray (SNI), Ghost Runner, Sieć, Bateria, Głośność, Zegar */
+.status-item, .tray-item {
+    padding: 0 7px;
     margin: 0 1px;
-    color: #e0e0e0;
+    color: #cdd6f4;
 }
 
-.status-item:hover {
-    background-color: #222222;
+.status-item:hover, .tray-item:hover {
+    background-color: #313244;
+}
+
+.ghost-pill {
+    color: #a6adc8;
+    font-weight: bold;
+}
+
+.ghost-pill.ghost-active {
+    background-color: rgba(0, 230, 118, 0.16);
+    color: #00e676;
+    border-bottom: 2px solid #00e676;
 }
 
 #clock-button {
     padding: 0 10px;
     margin: 0 2px;
-    color: #e0e0e0;
+    color: #cdd6f4;
     font-weight: bold;
 }
 
 #clock-button:hover {
-    background-color: #1c1c1c;
+    background-color: #313244;
 }
 
 #desktop-button {
-    border-left: 1px solid #282828;
+    border-left: 1px solid #313244;
     min-width: 14px;
     padding: 0 6px;
     margin-left: 4px;
@@ -310,21 +335,160 @@ button:hover {
     background-color: #00e676;
 }
 
-/* Menu kontekstowe PPM */
+/* Menu kontekstowe PPM (panel i DBusMenu SNI) */
 menu {
-    background-color: #141414;
-    border: 1px solid #282828;
+    background-color: #1e1e2e;
+    border: 1px solid #313244;
     padding: 4px 0px;
 }
 
 menuitem {
     padding: 6px 14px;
-    color: #e0e0e0;
+    color: #cdd6f4;
 }
 
 menuitem:hover {
     background-color: #00e676;
-    color: #000000;
+    color: #11111b;
+}
+
+/* Quick Settings Popover & Ghost Runner Popover (Catppuccin Mocha #1e1e2e + #00e676) */
+window#okay-quick-settings, window#okay-ghost-popover {
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+}
+
+.popover-card {
+    background-color: #1e1e2e;
+    border: 1px solid #00e676;
+    border-radius: 6px;
+    padding: 14px;
+}
+
+.popover-title {
+    color: #00e676;
+    font-size: 13px;
+    font-weight: bold;
+}
+
+.popover-subtitle {
+    color: #cdd6f4;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.popover-status {
+    color: #a6adc8;
+    font-size: 11px;
+}
+
+.qs-list {
+    background-color: #181825;
+    border: 1px solid #313244;
+    border-radius: 4px;
+}
+
+.qs-list row {
+    padding: 6px 8px;
+    border-bottom: 1px solid #242436;
+}
+
+.qs-list row:last-child {
+    border-bottom: none;
+}
+
+.qs-ssid {
+    color: #cdd6f4;
+    font-size: 11px;
+}
+
+.qs-ssid-active {
+    color: #00e676;
+    font-weight: bold;
+    font-size: 11px;
+}
+
+button.qs-icon-btn {
+    background-color: #313244;
+    border-radius: 4px;
+    min-height: 26px;
+    min-width: 26px;
+    padding: 4px 6px;
+    color: #cdd6f4;
+}
+
+button.qs-icon-btn:hover {
+    background-color: #45475a;
+}
+
+button.qs-accent-btn {
+    background-color: #00e676;
+    color: #11111b;
+    font-weight: bold;
+    border-radius: 4px;
+    min-height: 28px;
+    padding: 5px 12px;
+}
+
+button.qs-accent-btn:hover {
+    background-color: #2ecc71;
+}
+
+button.qs-mini-btn {
+    background-color: #313244;
+    color: #cdd6f4;
+    border-radius: 4px;
+    min-height: 24px;
+    padding: 2px 10px;
+}
+
+button.qs-mini-btn:hover {
+    border: 1px solid #00e676;
+}
+
+button.qs-mini-btn-active {
+    background-color: rgba(243, 139, 168, 0.16);
+    color: #f38ba8;
+    border: 1px solid #f38ba8;
+    border-radius: 4px;
+    min-height: 24px;
+    padding: 2px 10px;
+}
+
+window#okay-quick-settings switch {
+    background-color: #313244;
+    border-radius: 10px;
+    min-height: 20px;
+}
+
+window#okay-quick-settings switch:checked {
+    background-color: #00e676;
+}
+
+window#okay-quick-settings scale highlight {
+    background-color: #00e676;
+    border-radius: 3px;
+}
+
+window#okay-quick-settings scale trough {
+    background-color: #313244;
+    border-radius: 3px;
+    min-height: 5px;
+}
+
+window#okay-quick-settings scale slider {
+    background-color: #00e676;
+    border-radius: 8px;
+    min-width: 14px;
+    min-height: 14px;
+}
+
+window#okay-quick-settings entry {
+    background-color: #181825;
+    color: #cdd6f4;
+    border: 1px solid #313244;
+    border-radius: 4px;
+    padding: 4px 8px;
 }
 """
 
@@ -631,7 +795,7 @@ class AppHelper:
 
 class WaylandToplevelClient:
     """Natywny klient protokołu Wayland zwlr_foreign_toplevel_manager_v1 (zero zależności zewnętrznych)."""
-    IGNORED_APP_IDS = {"okay-panel", "okay-dock", "fuzzel", "mako", "waybar", "sfwbar"}
+    IGNORED_APP_IDS = {"okay-panel", "okay-quick-settings", "okay-ghost-popover", "okay-dock", "fuzzel", "mako", "waybar", "sfwbar"}
 
     DISPLAY_ID = 1
     REGISTRY_ID = 2
@@ -1163,8 +1327,6 @@ class OkayPanel(Gtk.Window):
         self.right_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self.main_box.pack_end(self.right_box, False, False, 0)
 
-        self._build_right_section()
-
         self._config_mtime = -1
         self.panel_config = PanelConfigManager.load()
         self._last_layout_key = None
@@ -1175,6 +1337,9 @@ class OkayPanel(Gtk.Window):
         self._last_bat_check = 0.0
         self._last_vol_data = None
         self._vol_wake = threading.Event()
+        self._quick_settings = None
+
+        self._build_right_section()
         self._apply_position()
 
         # Obserwacja ~/.config/okay-de/panel.json przez Gio/inotify
@@ -1224,23 +1389,41 @@ class OkayPanel(Gtk.Window):
         btn.connect("button-press-event", self._on_start_button_press)
         self.left_box.pack_start(btn, False, False, 0)
 
+    def _get_panel_pos(self) -> str:
+        return str(self.panel_config.get("position", "bottom")).lower()
+
+    def _toggle_quick_settings(self, *_args):
+        if hasattr(self, "ghost_widget") and self.ghost_widget._popover.get_visible():
+            self.ghost_widget._popover.hide()
+        if self._quick_settings is None:
+            self._quick_settings = QuickSettingsPopover(
+                self._get_panel_pos,
+                on_volume_changed_cb=lambda: GLib.timeout_add(120, lambda: (self._vol_wake.set(), False)[1])
+            )
+        self._quick_settings.toggle()
+
+    def _on_ghost_clicked(self, *_args):
+        if self._quick_settings is not None and self._quick_settings.get_visible():
+            self._quick_settings.hide_popover()
+
     def _build_right_section(self):
-        # 1. Pokaż pulpit
+        # 1. Pokaż pulpit (skrajnie po prawej)
         btn_desktop = Gtk.Button()
         btn_desktop.set_name("desktop-button")
         btn_desktop.set_tooltip_text("Pokaż pulpit / Przywróć okna")
         btn_desktop.connect("clicked", self._on_desktop_clicked)
         self.right_box.pack_end(btn_desktop, False, False, 0)
 
-        # 2. Zegar dwuwierszowy (Godzina + Data)
+        # 2. Zegar dwuwierszowy (LPM otwiera Quick Settings Popover)
         self.btn_clock = Gtk.Button()
         self.btn_clock.set_name("clock-button")
         self.lbl_clock = Gtk.Label()
         self.lbl_clock.set_justify(Gtk.Justification.CENTER)
         self.btn_clock.add(self.lbl_clock)
+        self.btn_clock.connect("clicked", self._toggle_quick_settings)
         self.right_box.pack_end(self.btn_clock, False, False, 0)
 
-        # 3. Głośność
+        # 3. Głośność (LPM: Quick Settings Popover, ŚPM: Mikser, PPM: Wycisz, Rolka: +/-)
         self.btn_volume = Gtk.Button()
         self.btn_volume.get_style_context().add_class("status-item")
         self.box_volume = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -1254,7 +1437,17 @@ class OkayPanel(Gtk.Window):
         self.btn_volume.connect("scroll-event", self._on_volume_scroll)
         self.right_box.pack_end(self.btn_volume, False, False, 0)
 
-        # 4. Bateria
+        # 4. Aplet Sieci / Wi-Fi (LPM: Quick Settings Popover, PPM: okay-settings --tab wifi)
+        self.btn_network = Gtk.Button()
+        self.btn_network.set_name("network-button")
+        self.btn_network.get_style_context().add_class("status-item")
+        self.img_network = Gtk.Image.new_from_icon_name("network-wireless-symbolic", Gtk.IconSize.MENU)
+        self.btn_network.add(self.img_network)
+        self.btn_network.set_tooltip_text("Sieć i Wi-Fi (LPM: Szybkie ustawienia, PPM: Ustawienia sieci)")
+        self.btn_network.connect("button-press-event", self._on_network_press)
+        self.right_box.pack_end(self.btn_network, False, False, 0)
+
+        # 5. Bateria
         self.box_battery = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         self.box_battery.set_no_show_all(True)
         self.box_battery.get_style_context().add_class("status-item")
@@ -1265,6 +1458,14 @@ class OkayPanel(Gtk.Window):
         self.box_battery.pack_start(self.img_battery, False, False, 0)
         self.box_battery.pack_start(self.lbl_battery, False, False, 0)
         self.right_box.pack_end(self.box_battery, False, False, 0)
+
+        # 6. Widżet oksavi-ghost-runner (liczba zamrożonych slice'ów cgroups v2 + popover odmrażania)
+        self.ghost_widget = GhostRunnerIndicator(self._get_panel_pos, on_open_cb=self._on_ghost_clicked)
+        self.right_box.pack_end(self.ghost_widget, False, False, 0)
+
+        # 7. Tacka systemowa SNI (StatusNotifierWatcher + Host)
+        self.sni_tray = StatusNotifierTray(self._get_panel_pos)
+        self.right_box.pack_end(self.sni_tray, False, False, 4)
 
     # ------------------------------------------------------------------------
     # Zdarzenia paska Start, Głośności, Pulpitu
@@ -1302,8 +1503,17 @@ class OkayPanel(Gtk.Window):
             for w in windows:
                 WindowManager.set_minimized(w["handle_id"], w["app_id"], w["title"], False, app_counts.get(w["app_id"], 1) > 1)
 
+    def _on_network_press(self, widget, event):
+        if event.button == 1:
+            self._toggle_quick_settings()
+        elif event.button == 3:
+            self._launch_cmd("okay-settings --tab wifi")
+        return True
+
     def _on_volume_press(self, widget, event):
         if event.button == 1:
+            self._toggle_quick_settings()
+        elif event.button == 2:
             if shutil.which("pavucontrol"):
                 self._launch_cmd("pavucontrol")
             else:

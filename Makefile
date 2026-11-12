@@ -18,9 +18,10 @@ install:
 	install -m 755 scripts/okay-panel $(DESTDIR)$(PREFIX)/bin/okay-panel
 	install -m 755 scripts/oksavi-ghost-runner $(DESTDIR)$(PREFIX)/bin/oksavi-ghost-runner
 
-	# Moduły centrum sterowania OKay Settings (GTK3)
-	install -d $(DESTDIR)$(PREFIX)/share/okay-de/settings
+	# Moduły centrum sterowania OKay Settings oraz aplety panelu OKay Panel (GTK3)
+	install -d $(DESTDIR)$(PREFIX)/share/okay-de/settings $(DESTDIR)$(PREFIX)/share/okay-de/panel
 	install -m 644 scripts/settings/*.py $(DESTDIR)$(PREFIX)/share/okay-de/settings/
+	install -m 644 scripts/panel/*.py $(DESTDIR)$(PREFIX)/share/okay-de/panel/
 
 	# Usunięcie pozostałości starego paska docka
 	rm -f $(DESTDIR)$(PREFIX)/bin/okay-dock

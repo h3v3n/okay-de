@@ -32,7 +32,7 @@ if [ "$MODE" = "--system" ]; then
 
     # Usunięcie pozostałości starych/konfliktujących pasków oraz osieroconych plików poprzednich wersji
     rm -rf /etc/okay-dock /etc/xdg/sfwbar /etc/xdg/waybar /etc/xdg/okay-de/panel 2>/dev/null || true
-    rm -rf /usr/share/okay-de/settings /usr/local/share/okay-de/settings 2>/dev/null || true
+    rm -rf /usr/share/okay-de/settings /usr/local/share/okay-de/settings /usr/share/okay-de/panel /usr/local/share/okay-de/panel 2>/dev/null || true
     rm -f /usr/local/bin/okay-dock /usr/bin/okay-dock 2>/dev/null || true
     rm -f /usr/bin/okay-settings /usr/local/bin/okay-settings 2>/dev/null || true
     rm -f /usr/share/applications/okay-dock.desktop /usr/share/applications/okay-de-settings.desktop /usr/share/applications/oksavi-settings.desktop 2>/dev/null || true
@@ -42,8 +42,8 @@ if [ "$MODE" = "--system" ]; then
     pkill -9 -x waybar 2>/dev/null || true
     pkill -9 -x sfwbar 2>/dev/null || true
 
-    # Nadpisanie okay-settings, jego modułów i okay-panel zarówno w /usr/bin, jak i w /usr/local/bin
-    install -d /usr/bin /usr/local/bin /usr/share/okay-de/settings /usr/local/share/okay-de/settings
+    # Nadpisanie okay-settings, okay-panel oraz ich modułów zarówno w /usr/bin, jak i w /usr/local/bin
+    install -d /usr/bin /usr/local/bin /usr/share/okay-de/settings /usr/local/share/okay-de/settings /usr/share/okay-de/panel /usr/local/share/okay-de/panel
     install -m 755 scripts/okay-settings /usr/bin/okay-settings
     install -m 755 scripts/okay-settings /usr/local/bin/okay-settings
     install -m 755 scripts/okay-panel /usr/bin/okay-panel
@@ -51,6 +51,10 @@ if [ "$MODE" = "--system" ]; then
     if [ -d scripts/settings ]; then
         install -m 644 scripts/settings/*.py /usr/share/okay-de/settings/
         install -m 644 scripts/settings/*.py /usr/local/share/okay-de/settings/
+    fi
+    if [ -d scripts/panel ]; then
+        install -m 644 scripts/panel/*.py /usr/share/okay-de/panel/
+        install -m 644 scripts/panel/*.py /usr/local/share/okay-de/panel/
     fi
 
     # Instalacja domyślnej konfiguracji panelu w /etc/xdg/okay-de/panel.json
@@ -160,6 +164,7 @@ elif [ "$MODE" = "--user" ]; then
     cp -r config/mako/* "$HOME/.config/mako/" 2>/dev/null || true
     cp -r config/gtk-3.0/* "$HOME/.config/gtk-3.0/" 2>/dev/null || true
     cp -r config/gtk-4.0/* "$HOME/.config/gtk-4.0/" 2>/dev/null || true
+    cp -r config/pcmanfm/* "$HOME/.config/pcmanfm/" 2>/dev/null || true
     cp -r themes/* "$HOME/.local/share/themes/" 2>/dev/null || true
 
     # Kopiowanie domyślnej tapety użytkownika jeśli jeszcze nie istnieje
@@ -168,8 +173,8 @@ elif [ "$MODE" = "--user" ]; then
         cp backgrounds/default.png "$HOME/.config/okay-de/wallpaper.png"
     fi
 
-    # Bezpieczne kopiowanie skryptów i aplikacji do ~/.local/bin oraz modułów settings
-    rm -rf "$HOME/.local/share/okay-de/settings" 2>/dev/null || true
+    # Bezpieczne kopiowanie skryptów i aplikacji do ~/.local/bin oraz modułów panel/settings
+    rm -rf "$HOME/.local/share/okay-de/settings" "$HOME/.local/share/okay-de/panel" 2>/dev/null || true
     rm -f "$HOME/.local/bin/okay-settings" 2>/dev/null || true
     if [ -d scripts ]; then
         for s in scripts/*; do
@@ -181,6 +186,10 @@ elif [ "$MODE" = "--user" ]; then
         if [ -d scripts/settings ]; then
             mkdir -p "$HOME/.local/share/okay-de/settings"
             cp scripts/settings/*.py "$HOME/.local/share/okay-de/settings/"
+        fi
+        if [ -d scripts/panel ]; then
+            mkdir -p "$HOME/.local/share/okay-de/panel"
+            cp scripts/panel/*.py "$HOME/.local/share/okay-de/panel/"
         fi
     fi
     chmod +x "$HOME/.config/labwc/autostart" 2>/dev/null || true

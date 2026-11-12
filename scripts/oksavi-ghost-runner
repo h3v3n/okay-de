@@ -1,41 +1,178 @@
 #!/usr/bin/env bash
 
-# OKsavi Ghost Runner - Zarządca zasobów (zRAM + vm sysctl) dla OKsavi Linux
-# Optymalizuje zużycie pamięci, aktywuje zstd zRAM i nie marnuje RAM-u w tle.
+# OKsavi Ghost Runner - Zarządca zasobów (zRAM + cgroups v2 freezer + vm sysctl) dla OKsavi Linux
+# Zapewnia niskie zużycie RAM, obsługę cgroup.freeze oraz lekką współpracę z widżetem w okay-panel.
 
 set -euo pipefail
 
-PIDFILE="${XDG_RUNTIME_DIR:-/tmp}/oksavi-ghost-runner.pid"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+PIDFILE="${RUNTIME_DIR}/oksavi-ghost-runner.pid"
+STATEFILE="${RUNTIME_DIR}/oksavi-ghost-runner-state.json"
+
+find_user_app_slice() {
+    local uid
+    uid="$(id -u)"
+    local cg_rel=""
+    if [ -r /proc/self/cgroup ]; then
+        cg_rel="$(awk -F: '$1 == "0" {print $3; exit}' /proc/self/cgroup 2>/dev/null || true)"
+    fi
+    if [ -n "$cg_rel" ] && [[ "$cg_rel" == *"/user@${uid}.service"* ]]; then
+        local base="${cg_rel%%/user@${uid}.service*}/user@${uid}.service/app.slice"
+        if [ -d "/sys/fs/cgroup${base}" ]; then
+            echo "/sys/fs/cgroup${base}"
+            return 0
+        fi
+    fi
+    local fallback="/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/app.slice"
+    if [ -d "$fallback" ]; then
+        echo "$fallback"
+        return 0
+    fi
+    return 1
+}
 
 init_memory_tuning() {
-    # Inicjalizacja skompresowanej pamięci zRAM (wymaga roota lub sudo -n z 99-okay-de)
-    SUDO_PREFIX=""
+    local sudo_prefix=""
     if [ "$(id -u)" -ne 0 ]; then
         if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-            SUDO_PREFIX="sudo -n"
+            sudo_prefix="sudo -n"
         fi
     fi
 
     if [ -d /sys/block/zram0 ]; then
-        DISKSIZE=$(cat /sys/block/zram0/disksize 2>/dev/null || echo 0)
-        DISKSIZE="${DISKSIZE:-0}"
-        if [ "$DISKSIZE" -eq 0 ] && command -v zramctl >/dev/null 2>&1; then
-            if [ "$(id -u)" -eq 0 ] || [ -n "$SUDO_PREFIX" ]; then
-                $SUDO_PREFIX zramctl /dev/zram0 --algorithm zstd --size 50% 2>/dev/null || true
-                $SUDO_PREFIX mkswap /dev/zram0 2>/dev/null || true
-                $SUDO_PREFIX swapon -p 100 /dev/zram0 2>/dev/null || true
+        local disksize
+        disksize=$(cat /sys/block/zram0/disksize 2>/dev/null || echo 0)
+        disksize="${disksize:-0}"
+        if [ "$disksize" -eq 0 ] && command -v zramctl >/dev/null 2>&1; then
+            if [ "$(id -u)" -eq 0 ] || [ -n "$sudo_prefix" ]; then
+                $sudo_prefix zramctl /dev/zram0 --algorithm zstd --size 50% 2>/dev/null || true
+                $sudo_prefix mkswap /dev/zram0 2>/dev/null || true
+                $sudo_prefix swapon -p 100 /dev/zram0 2>/dev/null || true
             fi
         fi
     fi
 
-    # Optymalne parametry jądra dla niskiego zużycia RAM i szybkiego swapu zRAM
-    if { [ "$(id -u)" -eq 0 ] || [ -n "$SUDO_PREFIX" ]; } && command -v sysctl >/dev/null 2>&1; then
-        $SUDO_PREFIX sysctl -q -w vm.swappiness=100 vm.page-cluster=0 vm.vfs_cache_pressure=50 2>/dev/null || true
+    if { [ "$(id -u)" -eq 0 ] || [ -n "$sudo_prefix" ]; } && command -v sysctl >/dev/null 2>&1; then
+        $sudo_prefix sysctl -q -w vm.swappiness=100 vm.page-cluster=0 vm.vfs_cache_pressure=50 2>/dev/null || true
     fi
+}
+
+write_state_json() {
+    local app_slice=""
+    app_slice="$(find_user_app_slice || true)"
+    local entries=""
+    local first=1
+
+    if [ -n "$app_slice" ] && [ -d "$app_slice" ]; then
+        local fpath
+        for fpath in "$app_slice"/*/cgroup.freeze "$app_slice"/*/*/cgroup.freeze; do
+            [ -f "$fpath" ] || continue
+            local val
+            val="$(cat "$fpath" 2>/dev/null || echo 0)"
+            if [ "$val" = "1" ]; then
+                local cdir cname pids_cnt
+                cdir="$(dirname "$fpath")"
+                cname="$(basename "$cdir")"
+                pids_cnt="$(wc -l < "$cdir/cgroup.procs" 2>/dev/null || echo 0)"
+                pids_cnt="${pids_cnt//[[:space:]]/}"
+                local esc_cdir esc_cname
+                esc_cdir="${cdir//\\/\\\\}"
+                esc_cdir="${esc_cdir//\"/\\\"}"
+                esc_cname="${cname//\\/\\\\}"
+                esc_cname="${esc_cname//\"/\\\"}"
+                if [ "$first" -eq 0 ]; then
+                    entries="${entries},"
+                fi
+                entries="${entries}{\"name\":\"${esc_cname}\",\"cgroup\":\"${esc_cdir}\",\"pids\":${pids_cnt:-0}}"
+                first=0
+            fi
+        done
+    fi
+
+    local tmp="${STATEFILE}.tmp"
+    printf '{"frozen":[%s]}\n' "$entries" > "$tmp" 2>/dev/null && mv -f "$tmp" "$STATEFILE" 2>/dev/null || true
+}
+
+thaw_cgroup_dir() {
+    local cdir="$1"
+    [ -n "$cdir" ] || return 1
+    if [ -w "$cdir/cgroup.freeze" ]; then
+        printf "0" > "$cdir/cgroup.freeze" 2>/dev/null || return 1
+    elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+        printf "0" | sudo -n tee "$cdir/cgroup.freeze" >/dev/null 2>&1 || return 1
+    else
+        return 1
+    fi
+    if [ -r "$cdir/cgroup.procs" ]; then
+        local p
+        while IFS= read -r p; do
+            [ -n "$p" ] && kill -CONT "$p" 2>/dev/null || true
+        done < "$cdir/cgroup.procs"
+    fi
+    return 0
+}
+
+freeze_app() {
+    local target="${1:-}"
+    [ -n "$target" ] || { echo "Brak nazwy/ścieżki aplikacji." >&2; exit 1; }
+
+    local app_slice=""
+    app_slice="$(find_user_app_slice || true)"
+
+    if [ -d "$target" ] && [ -f "$target/cgroup.freeze" ] && [[ "$target" == /sys/fs/cgroup/* ]]; then
+        printf "1" > "$target/cgroup.freeze" 2>/dev/null || true
+    elif [ -n "$app_slice" ]; then
+        local cdir
+        for cdir in "$app_slice"/*"${target}"* "$app_slice"/*/*"${target}"*; do
+            if [ -d "$cdir" ] && [ -w "$cdir/cgroup.freeze" ]; then
+                printf "1" > "$cdir/cgroup.freeze" 2>/dev/null || true
+            fi
+        done
+    fi
+    write_state_json
+}
+
+thaw_app() {
+    local target="${1:-}"
+    [ -n "$target" ] || { echo "Brak nazwy/ścieżki aplikacji." >&2; exit 1; }
+
+    if [ -d "$target" ] && [ -f "$target/cgroup.freeze" ] && [[ "$target" == /sys/fs/cgroup/* ]]; then
+        thaw_cgroup_dir "$target" || true
+    else
+        local app_slice=""
+        app_slice="$(find_user_app_slice || true)"
+        if [ -n "$app_slice" ]; then
+            local cdir
+            for cdir in "$app_slice"/*"${target}"* "$app_slice"/*/*"${target}"*; do
+                if [ -d "$cdir" ] && [ -f "$cdir/cgroup.freeze" ]; then
+                    thaw_cgroup_dir "$cdir" || true
+                fi
+            done
+        fi
+    fi
+    write_state_json
+}
+
+thaw_all() {
+    local app_slice=""
+    app_slice="$(find_user_app_slice || true)"
+    if [ -n "$app_slice" ]; then
+        local fpath
+        for fpath in "$app_slice"/*/cgroup.freeze "$app_slice"/*/*/cgroup.freeze; do
+            [ -f "$fpath" ] || continue
+            local val
+            val="$(cat "$fpath" 2>/dev/null || echo 0)"
+            if [ "$val" = "1" ]; then
+                thaw_cgroup_dir "$(dirname "$fpath")" || true
+            fi
+        done
+    fi
+    write_state_json
 }
 
 start() {
     init_memory_tuning
+    write_state_json
 
     if [ "${1:-}" = "--oneshot" ]; then
         exit 0
@@ -49,18 +186,19 @@ start() {
     echo "$$" > "$PIDFILE"
     trap 'kill $(jobs -p) 2>/dev/null || true; rm -f "$PIDFILE"; exit 0' SIGTERM SIGINT SIGHUP
 
-    # Cicha pętla podtrzymująca bez zbędnych forków
     while true; do
-        sleep 300 &
+        write_state_json
+        sleep 60 &
         wait $!
     done
 }
 
 stop() {
     if [ -f "$PIDFILE" ]; then
-        PID=$(cat "$PIDFILE" 2>/dev/null || true)
-        if [ -n "$PID" ]; then
-            kill "$PID" 2>/dev/null || true
+        local pid
+        pid=$(cat "$PIDFILE" 2>/dev/null || true)
+        if [ -n "$pid" ]; then
+            kill "$pid" 2>/dev/null || true
         fi
         rm -f "$PIDFILE"
         echo "oksavi-ghost-runner zatrzymany."
@@ -68,10 +206,15 @@ stop() {
 }
 
 status() {
+    write_state_json
+    if [ "${1:-}" = "--json" ]; then
+        cat "$STATEFILE" 2>/dev/null || echo '{"frozen":[]}'
+        return 0
+    fi
     if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
         echo "Aktywny (PID: $(cat "$PIDFILE"))"
     else
-        echo "Nieaktywny"
+        echo "Tryb jednorazowy / gotowy"
     fi
 }
 
@@ -86,10 +229,22 @@ case "${1:---oneshot}" in
         stop
         ;;
     --status|status)
-        status
+        status "${2:-}"
+        ;;
+    --json)
+        status --json
+        ;;
+    freeze_app|--freeze)
+        freeze_app "${2:-}"
+        ;;
+    thaw_app|--thaw)
+        thaw_app "${2:-}"
+        ;;
+    thaw_all|--thaw-all)
+        thaw_all
         ;;
     *)
-        echo "Użycie: $0 {--oneshot|--start|--stop|--status}"
+        echo "Użycie: $0 {--oneshot|--start|--stop|--status|--json|freeze_app <nazwa>|thaw_app <nazwa>|thaw_all}"
         exit 1
         ;;
 esac

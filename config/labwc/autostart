@@ -2,8 +2,24 @@
 
 # OKay DE - Skrypt autostartu sesji kompozytora labwc
 
-# 0. Zapewnienie pełnej ścieżki PATH dla skryptów środowiska
+# 0. Zapewnienie pełnej ścieżki PATH oraz spójnego ciemnego motywu sesji (GTK / ikony / kursor)
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+if command -v gsettings >/dev/null 2>&1; then
+    (
+        gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' 2>/dev/null || true
+        gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark' 2>/dev/null || true
+        gsettings set org.gnome.desktop.interface icon-theme 'Papirus-Dark' 2>/dev/null || true
+        gsettings set org.gnome.desktop.interface cursor-theme 'Adwaita' 2>/dev/null || true
+        gsettings set org.gnome.desktop.interface cursor-size 24 2>/dev/null || true
+        gsettings set org.gnome.desktop.interface font-name 'JetBrains Mono 10' 2>/dev/null || true
+    ) &
+fi
+
+# Wyłączenie nadpisywania tła swaybg przez pcmanfm --desktop w sesji Wayland
+PCMANFM_CONF="$HOME/.config/pcmanfm/default/desktop-items-0.conf"
+if [ -f "$PCMANFM_CONF" ]; then
+    sed -i -E 's|^wallpaper_mode=.*|wallpaper_mode=color|; s|^wallpaper=.*|wallpaper=|; s|^desktop_bg=.*|desktop_bg=#00000000|' "$PCMANFM_CONF" 2>/dev/null || true
+fi
 
 # 1. Agent uwierzytelniania Polkit (gnome)
 if [ -x /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 ]; then
