@@ -1462,6 +1462,93 @@ class UpdateManager:
         return out
 
 
+def _expand_labwc_svg_states(base_map: dict, inactive_map: dict | None = None) -> dict:
+    """Rozszerza bazowe ikony SVG o sufiksy stanów wymagane przez labwc (-active/-inactive)."""
+    out = {}
+    inactive_map = inactive_map or {}
+    for btn in ("close", "max", "max_toggled", "iconify"):
+        normal_svg = base_map.get(f"{btn}.svg", "")
+        hover_svg = base_map.get(f"{btn}_hover.svg", normal_svg)
+        inact_svg = inactive_map.get(f"{btn}.svg", normal_svg)
+        inact_hover_svg = inactive_map.get(f"{btn}_hover.svg", hover_svg)
+        if normal_svg:
+            out[f"{btn}.svg"] = normal_svg
+            out[f"{btn}-active.svg"] = normal_svg
+            out[f"{btn}-inactive.svg"] = inact_svg
+        if hover_svg:
+            out[f"{btn}_hover.svg"] = hover_svg
+            out[f"{btn}_hover-active.svg"] = hover_svg
+            out[f"{btn}_hover-inactive.svg"] = inact_hover_svg
+    return out
+
+
+def _make_xbm(name: str, width: int, height: int, pixel_fn) -> str:
+    """Tworzy jednobitowy plik XBM (LSB-first w każdym bajcie, wiersz po wierszu)."""
+    row_bytes = (width + 7) // 8
+    values = []
+    for y in range(height):
+        for bx in range(row_bytes):
+            byte_val = 0
+            for bit in range(8):
+                x = bx * 8 + bit
+                if x < width and pixel_fn(x, y):
+                    byte_val |= (1 << bit)
+            values.append(f"0x{byte_val:02x}")
+    lines = [f"#define {name}_width {width}", f"#define {name}_height {height}", f"static unsigned char {name}_bits[] = {{"]
+    for i in range(0, len(values), 12):
+        chunk = ", ".join(values[i:i + 12])
+        suffix = "," if i + 12 < len(values) else ""
+        lines.append(f"   {chunk}{suffix}")
+    lines.append("};")
+    return "\n".join(lines) + "\n"
+
+
+def generate_window_button_xbms(style: str) -> dict:
+    """Generuje fallbackowe maski XBM dopasowane kształtem do wybranego stylu przycisków."""
+    style = style.lower() if style in ("rectangles", "circles_left", "circles_right", "windows") else "rectangles"
+
+    if style in ("circles_left", "circles_right"):
+        circle_fn = lambda x, y: (x - 6.5) ** 2 + (y - 6.5) ** 2 <= 5.8 ** 2
+        close_hover_fn = lambda x, y: circle_fn(x, y) and not (abs(x - y) <= 0.9 or abs((x + y) - 13.0) <= 0.9) if (4 <= x <= 9 and 4 <= y <= 9) else circle_fn(x, y)
+        min_hover_fn = lambda x, y: circle_fn(x, y) and not (y == 6 and 4 <= x <= 9)
+        max_hover_fn = lambda x, y: circle_fn(x, y) and not ((4 <= x <= 7 and 4 <= y <= 7 and (x + y <= 11)) or (6 <= x <= 9 and 6 <= y <= 9 and (x + y >= 15)))
+        return {
+            "close.xbm": _make_xbm("close", 14, 14, circle_fn),
+            "close_hover.xbm": _make_xbm("close_hover", 14, 14, close_hover_fn),
+            "max.xbm": _make_xbm("max", 14, 14, circle_fn),
+            "max_hover.xbm": _make_xbm("max_hover", 14, 14, max_hover_fn),
+            "max_toggled.xbm": _make_xbm("max_toggled", 14, 14, circle_fn),
+            "iconify.xbm": _make_xbm("iconify", 14, 14, circle_fn),
+            "iconify_hover.xbm": _make_xbm("iconify_hover", 14, 14, min_hover_fn),
+        }
+
+    if style == "windows":
+        x_fn = lambda x, y: (5 <= x <= 14 and 5 <= y <= 14) and (abs(x - y) <= 1 or abs((x + y) - 19) <= 1)
+        sq_fn = lambda x, y: (5 <= x <= 14 and 5 <= y <= 14) and (x in (5, 14) or y in (5, 14))
+        restore_fn = lambda x, y: ((7 <= x <= 14 and 4 <= y <= 11) and (x == 14 or y == 4 or (x == 7 and y <= 6) or (y == 11 and x >= 12))) or ((5 <= x <= 12 and 7 <= y <= 14) and (x in (5, 12) or y in (7, 14)))
+        min_fn = lambda x, y: (5 <= x <= 14) and (y in (10, 11))
+        return {
+            "close.xbm": _make_xbm("close", 20, 20, x_fn),
+            "close_hover.xbm": _make_xbm("close_hover", 20, 20, x_fn),
+            "max.xbm": _make_xbm("max", 20, 20, sq_fn),
+            "max_hover.xbm": _make_xbm("max_hover", 20, 20, sq_fn),
+            "max_toggled.xbm": _make_xbm("max_toggled", 20, 20, restore_fn),
+            "iconify.xbm": _make_xbm("iconify", 20, 20, min_fn),
+            "iconify_hover.xbm": _make_xbm("iconify_hover", 20, 20, min_fn),
+        }
+
+    rect_fn = lambda x, y: True
+    return {
+        "close.xbm": _make_xbm("close", 48, 10, rect_fn),
+        "close_hover.xbm": _make_xbm("close_hover", 48, 10, rect_fn),
+        "max.xbm": _make_xbm("max", 48, 10, rect_fn),
+        "max_hover.xbm": _make_xbm("max_hover", 48, 10, rect_fn),
+        "max_toggled.xbm": _make_xbm("max_toggled", 48, 10, rect_fn),
+        "iconify.xbm": _make_xbm("iconify", 48, 10, rect_fn),
+        "iconify_hover.xbm": _make_xbm("iconify_hover", 48, 10, rect_fn),
+    }
+
+
 def generate_window_button_svgs(style: str, accent_hex: str) -> dict:
     """Generuje kod SVG dla przycisków okna (close, max, max_toggled, iconify) w zadanym stylu."""
     accent = sanitize_hex_color(accent_hex)
@@ -1469,35 +1556,60 @@ def generate_window_button_svgs(style: str, accent_hex: str) -> dict:
     style = style.lower() if style in ("rectangles", "circles_left", "circles_right", "windows") else "rectangles"
 
     if style == "rectangles":
-        return {
+        base = {
             "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#f38ba8" /></svg>\n',
             "close_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#eba0ac" /></svg>\n',
             "max.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="{accent}" /></svg>\n',
             "max_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="{hover_accent}" /></svg>\n',
             "max_toggled.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="{accent}" /></svg>\n',
+            "max_toggled_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="{hover_accent}" /></svg>\n',
             "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#585b70" /></svg>\n',
             "iconify_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#6c7086" /></svg>\n',
         }
+        inact = {
+            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#45475a" /></svg>\n',
+            "max.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#45475a" /></svg>\n',
+            "max_toggled.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#45475a" /></svg>\n',
+            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="10" viewBox="0 0 48 10"><rect width="48" height="10" rx="0" fill="#313244" /></svg>\n',
+        }
+        return _expand_labwc_svg_states(base, inact)
     elif style in ("circles_left", "circles_right"):
-        return {
+        base = {
             "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ff5f56" /></svg>\n',
             "close_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ff5f56" /><path d="M4.6 4.6 L9.4 9.4 M9.4 4.6 L4.6 9.4" stroke="#4d0000" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
             "max.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#27c93f" /></svg>\n',
             "max_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#27c93f" /><path d="M4.5 4.5 L7.6 4.5 L4.5 7.6 Z M9.5 9.5 L6.4 9.5 L9.5 6.4 Z" fill="#004d00" /></svg>\n',
             "max_toggled.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#27c93f" /></svg>\n',
+            "max_toggled_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#27c93f" /><path d="M4.5 4.5 L7.6 4.5 L4.5 7.6 Z M9.5 9.5 L6.4 9.5 L9.5 6.4 Z" fill="#004d00" /></svg>\n',
             "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ffbd2e" /></svg>\n',
             "iconify_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#ffbd2e" /><line x1="4.4" y1="7" x2="9.6" y2="7" stroke="#7a4400" stroke-width="1.3" stroke-linecap="round" /></svg>\n',
         }
+        dim_circle = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="#45475a" /></svg>\n'
+        inact = {
+            "close.svg": dim_circle,
+            "max.svg": dim_circle,
+            "max_toggled.svg": dim_circle,
+            "iconify.svg": dim_circle,
+        }
+        return _expand_labwc_svg_states(base, inact)
     else:  # windows
-        return {
+        base = {
             "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><path d="M10.5 6.5 L19.5 15.5 M19.5 6.5 L10.5 15.5" stroke="#cdd6f4" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
             "close_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect width="30" height="22" rx="4" fill="#e81123" /><path d="M10.5 6.5 L19.5 15.5 M19.5 6.5 L10.5 15.5" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
             "max.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect x="10" y="6" width="10" height="10" rx="1.5" fill="none" stroke="#cdd6f4" stroke-width="1.3" /></svg>\n',
             "max_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect width="30" height="22" rx="4" fill="#313244" /><rect x="10" y="6" width="10" height="10" rx="1.5" fill="none" stroke="{accent}" stroke-width="1.3" /></svg>\n',
             "max_toggled.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect x="11.5" y="5" width="8.5" height="8.5" rx="1.2" fill="none" stroke="#cdd6f4" stroke-width="1.2" /><rect x="9" y="7.5" width="8.5" height="8.5" rx="1.2" fill="#181825" stroke="#cdd6f4" stroke-width="1.2" /></svg>\n',
+            "max_toggled_hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect width="30" height="22" rx="4" fill="#313244" /><rect x="11.5" y="5" width="8.5" height="8.5" rx="1.2" fill="none" stroke="{accent}" stroke-width="1.2" /><rect x="9" y="7.5" width="8.5" height="8.5" rx="1.2" fill="#313244" stroke="{accent}" stroke-width="1.2" /></svg>\n',
             "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><line x1="10" y1="12" x2="20" y2="12" stroke="#cdd6f4" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
             "iconify_hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect width="30" height="22" rx="4" fill="#313244" /><line x1="10" y1="12" x2="20" y2="12" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
         }
+        inact = {
+            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><path d="M10.5 6.5 L19.5 15.5 M19.5 6.5 L10.5 15.5" stroke="#6c7086" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
+            "max.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect x="10" y="6" width="10" height="10" rx="1.5" fill="none" stroke="#6c7086" stroke-width="1.3" /></svg>\n',
+            "max_toggled.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><rect x="11.5" y="5" width="8.5" height="8.5" rx="1.2" fill="none" stroke="#6c7086" stroke-width="1.2" /><rect x="9" y="7.5" width="8.5" height="8.5" rx="1.2" fill="#181825" stroke="#6c7086" stroke-width="1.2" /></svg>\n',
+            "iconify.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="22" viewBox="0 0 30 22"><line x1="10" y1="12" x2="20" y2="12" stroke="#6c7086" stroke-width="1.4" stroke-linecap="round" /></svg>\n',
+        }
+        return _expand_labwc_svg_states(base, inact)
 
 
 def apply_window_decorations(buttons_style: str = None, corner_radius: int = None, accent_hex: str = None) -> dict:
@@ -1558,59 +1670,84 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
     theme_labwc_dir = os.path.join(user_theme_root, "labwc")
     theme_ob_dir = os.path.join(user_theme_root, "openbox-3")
     target_asset_dirs = [labwc_dir, theme_labwc_dir, theme_ob_dir]
+    legacy_theme_root = os.path.join(os.path.expanduser("~"), ".themes", "OKay")
+    if os.path.isdir(legacy_theme_root):
+        target_asset_dirs.extend([
+            os.path.join(legacy_theme_root, "labwc"),
+            os.path.join(legacy_theme_root, "openbox-3"),
+        ])
 
-    # 1. Zapis wektorowych plików SVG dla przycisków w ~/.config/labwc oraz ~/.local/share/themes/OKay/{labwc,openbox-3}
+    # 1. Zapis wektorowych plików SVG (ze stanami -active/-inactive wymaganymi przez labwc)
+    # oraz dopasowanych kształtem masek XBM (fallback gdy labwc nie używa librsvg)
     svg_map = generate_window_button_svgs(buttons_style, accent_hex)
+    xbm_map = generate_window_button_xbms(buttons_style)
     for tdir in target_asset_dirs:
         os.makedirs(tdir, exist_ok=True)
         for fname, svg_content in svg_map.items():
             atomic_write_text(os.path.join(tdir, fname), svg_content, mode=0o644)
+        for fname, xbm_content in xbm_map.items():
+            atomic_write_text(os.path.join(tdir, fname), xbm_content, mode=0o644)
 
-    # 2. Zarządzanie plikami XBM:
-    # W stylu innym niż "rectangles" usuwamy stare pliki .xbm ze wszystkich katalogów użytkownika,
-    # aby labwc nie używał ich jako maski bitmapowej zamiast nowych wektorowych SVG.
-    # W stylu "rectangles" przywracamy domyślne XBM jeśli brakuje.
-    xbm_names = (
-        "close.xbm", "close_hover.xbm",
-        "max.xbm", "max_hover.xbm", "max_toggled.xbm",
-        "iconify.xbm", "iconify_hover.xbm"
-    )
-    if buttons_style != "rectangles":
-        for tdir in target_asset_dirs:
-            for xbm in xbm_names:
-                p = os.path.join(tdir, xbm)
-                if os.path.isfile(p):
-                    try:
-                        os.unlink(p)
-                    except Exception:
-                        pass
-    else:
-        for tdir in target_asset_dirs:
-            for xbm in xbm_names:
-                dst = os.path.join(tdir, xbm)
-                if not os.path.isfile(dst):
-                    src = labwc_template_file(xbm)
-                    if src and os.path.isfile(src):
-                        try:
-                            atomic_copy_file(src, dst, mode=0o644)
-                        except Exception:
-                            pass
-
-    # 3. Parametry geometrii i układu
+    # 2. Parametry geometrii, układu oraz kolorów dla fallbacku XBM
+    hover_accent = compute_hover_hex(accent_hex)
     if buttons_style == "rectangles":
         layout = ":iconify,max,close"
-        btn_w, btn_h, btn_sp = 48, 10, 8
+        btn_w, btn_h, btn_sp, hover_radius = 48, 10, 8, 0
+        btn_colors = {
+            "window.active.button.close.unpressed.image.color": "#f38ba8",
+            "window.active.button.close.hover.image.color": "#eba0ac",
+            "window.active.button.max.unpressed.image.color": accent_hex,
+            "window.active.button.max.hover.image.color": hover_accent,
+            "window.active.button.iconify.unpressed.image.color": "#585b70",
+            "window.active.button.iconify.hover.image.color": "#6c7086",
+            "window.inactive.button.close.unpressed.image.color": "#45475a",
+            "window.inactive.button.max.unpressed.image.color": "#45475a",
+            "window.inactive.button.iconify.unpressed.image.color": "#313244",
+        }
     elif buttons_style == "circles_left":
         layout = "close,iconify,max:"
-        btn_w, btn_h, btn_sp = 14, 14, 8
+        btn_w, btn_h, btn_sp, hover_radius = 14, 14, 8, 7
+        btn_colors = {
+            "window.active.button.close.unpressed.image.color": "#ff5f56",
+            "window.active.button.close.hover.image.color": "#ff5f56",
+            "window.active.button.max.unpressed.image.color": "#27c93f",
+            "window.active.button.max.hover.image.color": "#27c93f",
+            "window.active.button.iconify.unpressed.image.color": "#ffbd2e",
+            "window.active.button.iconify.hover.image.color": "#ffbd2e",
+            "window.inactive.button.close.unpressed.image.color": "#45475a",
+            "window.inactive.button.max.unpressed.image.color": "#45475a",
+            "window.inactive.button.iconify.unpressed.image.color": "#45475a",
+        }
     elif buttons_style == "circles_right":
         layout = ":iconify,max,close"
-        btn_w, btn_h, btn_sp = 14, 14, 8
+        btn_w, btn_h, btn_sp, hover_radius = 14, 14, 8, 7
+        btn_colors = {
+            "window.active.button.close.unpressed.image.color": "#ff5f56",
+            "window.active.button.close.hover.image.color": "#ff5f56",
+            "window.active.button.max.unpressed.image.color": "#27c93f",
+            "window.active.button.max.hover.image.color": "#27c93f",
+            "window.active.button.iconify.unpressed.image.color": "#ffbd2e",
+            "window.active.button.iconify.hover.image.color": "#ffbd2e",
+            "window.inactive.button.close.unpressed.image.color": "#45475a",
+            "window.inactive.button.max.unpressed.image.color": "#45475a",
+            "window.inactive.button.iconify.unpressed.image.color": "#45475a",
+        }
     else:  # windows
         layout = ":iconify,max,close"
-        btn_w, btn_h, btn_sp = 30, 22, 2
+        btn_w, btn_h, btn_sp, hover_radius = 30, 22, 2, 4
+        btn_colors = {
+            "window.active.button.close.unpressed.image.color": "#cdd6f4",
+            "window.active.button.close.hover.image.color": "#e81123",
+            "window.active.button.max.unpressed.image.color": "#cdd6f4",
+            "window.active.button.max.hover.image.color": accent_hex,
+            "window.active.button.iconify.unpressed.image.color": "#cdd6f4",
+            "window.active.button.iconify.hover.image.color": "#ffffff",
+            "window.inactive.button.close.unpressed.image.color": "#6c7086",
+            "window.inactive.button.max.unpressed.image.color": "#6c7086",
+            "window.inactive.button.iconify.unpressed.image.color": "#6c7086",
+        }
 
-    # 4. Aktualizacja themerc-override, themerc oraz plików themerc w motywie użytkownika
+    # 3. Aktualizacja themerc-override, themerc oraz plików themerc w motywie użytkownika
     override_path = os.path.join(labwc_dir, "themerc-override")
     def _patch_decorations(raw_text: str) -> str:
         text = raw_text
@@ -1620,22 +1757,32 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
             (r"^(window\.button\.width:\s*).*$", rf"\g<1>{btn_w}"),
             (r"^(window\.button\.height:\s*).*$", rf"\g<1>{btn_h}"),
             (r"^(window\.button\.spacing:\s*).*$", rf"\g<1>{btn_sp}"),
+            (r"^(window\.button\.hover\.bg\.corner-radius:\s*).*$", rf"\g<1>{hover_radius}"),
         ]
+        for k, v in btn_colors.items():
+            escaped_k = re.escape(k)
+            reps.append((rf"^({escaped_k}:\s*).*$", rf"\g<1>{v}"))
         for pattern, repl in reps:
             if re.search(pattern, text, flags=re.MULTILINE):
                 text = re.sub(pattern, repl, text, flags=re.MULTILINE)
             else:
-                key = pattern.split(r"\s*")[0].lstrip("^").rstrip(":")
+                key = pattern.split(r"\s*")[0].lstrip("^").rstrip(":").replace("\\", "")
                 val = repl.rsplit(r">", 1)[-1]
                 text += f"\n{key}: {val}"
         return text
 
-    for merc_path in (
+    merc_paths = [
         override_path,
         os.path.join(labwc_dir, "themerc"),
         os.path.join(theme_labwc_dir, "themerc"),
         os.path.join(theme_ob_dir, "themerc"),
-    ):
+    ]
+    if os.path.isdir(legacy_theme_root):
+        merc_paths.extend([
+            os.path.join(legacy_theme_root, "labwc", "themerc"),
+            os.path.join(legacy_theme_root, "openbox-3", "themerc"),
+        ])
+    for merc_path in merc_paths:
         if os.path.isfile(merc_path):
             try:
                 with open(merc_path, "r", encoding="utf-8") as f:

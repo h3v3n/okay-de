@@ -273,7 +273,9 @@ PYEOF
     copy_dir_missing config/gtk-3.0 "$XDG_CFG/gtk-3.0" 644
     copy_dir_missing config/gtk-4.0 "$XDG_CFG/gtk-4.0" 644
     copy_dir_missing config/pcmanfm "$XDG_CFG/pcmanfm" 644
-    cp -r themes/* "$XDG_DATA/themes/" 2>/dev/null || true
+    if [ ! -d "$XDG_DATA/themes/OKay" ]; then
+        cp -r themes/* "$XDG_DATA/themes/" 2>/dev/null || true
+    fi
 
     # Domyślna tapeta użytkownika (tylko jeśli nie istnieje)
     copy_if_missing backgrounds/default.png "$OKAY_CFG_DIR/wallpaper.png" 644
