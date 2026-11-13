@@ -939,18 +939,6 @@ def wallpaper_template_file() -> str:
     return find_existing_file(*candidates)
 
 
-def fuzzel_template_file() -> str:
-    candidates = [
-        "/etc/xdg/fuzzel/fuzzel.ini",
-        os.path.join(okay_data_dir(), "defaults", "fuzzel", "fuzzel.ini"),
-        os.path.join(okay_data_dir(), "repo", "config", "fuzzel", "fuzzel.ini"),
-    ]
-    repo_root = _repo_root_from_script()
-    if repo_root:
-        candidates.append(os.path.join(repo_root, "config", "fuzzel", "fuzzel.ini"))
-    return find_existing_file(*candidates)
-
-
 def mako_template_file() -> str:
     candidates = [
         "/etc/xdg/mako/config",
@@ -962,34 +950,6 @@ def mako_template_file() -> str:
         candidates.append(os.path.join(repo_root, "config", "mako", "config"))
     return find_existing_file(*candidates)
 
-
-_DEFAULT_FUZZEL_INI = """[main]
-font=JetBrains Mono:size=11
-prompt="❯ "
-icon-theme=Papirus-Dark
-icons-enabled=yes
-terminal=foot -e
-layer=overlay
-width=32
-lines=10
-horizontal-pad=18
-vertical-pad=12
-inner-pad=8
-
-[colors]
-background=1b2b30ff
-text=cdd6f4ff
-prompt=00e676ff
-match=00e676ff
-selection=313244ff
-selection-text=cdd6f4ff
-selection-match=00e676ff
-border=00e676ff
-
-[border]
-width=2
-radius=8
-"""
 
 _DEFAULT_MAKO_CONFIG = """# OKay DE - Konfiguracja demona powiadomień mako
 font=JetBrains Mono 10
@@ -1205,27 +1165,7 @@ def ensure_user_configs() -> None:
             except Exception:
                 pass
 
-    # 7. Konfiguracja fuzzel (~/.config/fuzzel/fuzzel.ini)
-    created_fuzzel = False
-    fuzzel_dir = os.path.join(xdg_config_home(), "fuzzel")
-    fuzzel_ini = os.path.join(fuzzel_dir, "fuzzel.ini")
-    if not os.path.exists(fuzzel_ini):
-        os.makedirs(fuzzel_dir, exist_ok=True)
-        f_tmpl = fuzzel_template_file()
-        if f_tmpl and os.path.isfile(f_tmpl):
-            try:
-                atomic_copy_file(f_tmpl, fuzzel_ini, mode=0o644)
-                created_fuzzel = True
-            except Exception:
-                pass
-        else:
-            try:
-                atomic_write_text(fuzzel_ini, _DEFAULT_FUZZEL_INI, mode=0o644)
-                created_fuzzel = True
-            except Exception:
-                pass
-
-    # 8. Konfiguracja mako (~/.config/mako/config)
+    # 7. Konfiguracja mako (~/.config/mako/config)
     created_mako = False
     mako_dir = os.path.join(xdg_config_home(), "mako")
     mako_cfg = os.path.join(mako_dir, "config")
@@ -1285,7 +1225,7 @@ def ensure_user_configs() -> None:
         except Exception:
             pass
 
-    if created_fuzzel or created_mako or created_wf:
+    if created_mako or created_wf:
         cur_accent = get_current_accent_color()
         if cur_accent.lower() != DEFAULT_ACCENT_COLOR:
             try:
@@ -1781,20 +1721,7 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         except Exception:
             pass
 
-    # Synchronizacja zaokrąglenia w fuzzel (~/.config/fuzzel/fuzzel.ini) oraz mako (~/.config/mako/config)
-    fuzzel_ini = os.path.join(xdg_config_home(), "fuzzel", "fuzzel.ini")
-    if os.path.isfile(fuzzel_ini):
-        try:
-            with open(fuzzel_ini, "r", encoding="utf-8") as f:
-                f_txt = f.read()
-            if re.search(r"^radius\s*=.*$", f_txt, flags=re.MULTILINE):
-                f_txt = re.sub(r"^(radius\s*=\s*).*$", rf"\g<1>{corner_radius}", f_txt, flags=re.MULTILINE)
-            elif re.search(r"^\[border\]", f_txt, flags=re.MULTILINE):
-                f_txt = re.sub(r"^(\[border\]\s*\n)", rf"\g<1>radius={corner_radius}\n", f_txt, count=1, flags=re.MULTILINE)
-            atomic_write_text(fuzzel_ini, f_txt, mode=0o644)
-        except Exception:
-            pass
-
+    # Synchronizacja zaokrąglenia w mako (~/.config/mako/config)
     mako_cfg = os.path.join(xdg_config_home(), "mako", "config")
     if os.path.isfile(mako_cfg):
         try:
@@ -1901,7 +1828,6 @@ def update_system_accent_color(new_accent: str) -> dict:
     - ~/.config/okay-de/panel.json (klucz accent_color)
     - ~/.config/wayfire.ini (sekcje [decoration] i [pixdecor] w formacie float RGBA)
     - ~/.config/mako/config (border-color, background-color)
-    - ~/.config/fuzzel/fuzzel.ini (prompt, match, selection-match, border, background)
     oraz przeładowuje powiadomienia (makoctl reload).
     """
     clean_hex = sanitize_hex_color(new_accent)
@@ -1970,64 +1896,6 @@ def update_system_accent_color(new_accent: str) -> dict:
         notes.append("mako")
         if shutil.which("makoctl"):
             run_cmd(["makoctl", "reload"], timeout=3)
-    except Exception:
-        pass
-
-    # 4. ~/.config/fuzzel/fuzzel.ini
-    fuzzel_dir = os.path.join(xdg_config_home(), "fuzzel")
-    fuzzel_file = os.path.join(fuzzel_dir, "fuzzel.ini")
-    try:
-        os.makedirs(fuzzel_dir, exist_ok=True)
-        if os.path.isfile(fuzzel_file):
-            with open(fuzzel_file, "r", encoding="utf-8") as f:
-                f_raw = f.read()
-        else:
-            f_tmpl = fuzzel_template_file()
-            if f_tmpl and os.path.isfile(f_tmpl):
-                with open(f_tmpl, "r", encoding="utf-8") as f:
-                    f_raw = f.read()
-            else:
-                f_raw = _DEFAULT_FUZZEL_INI
-        hex_no_hash = clean_hex.lstrip("#").lower()
-        f_bg_hex = blend_hex_color("#1b2b30", clean_hex, 0.08).lstrip("#").lower()
-        target_colors = {
-            "prompt": f"{hex_no_hash}ff",
-            "match": f"{hex_no_hash}ff",
-            "selection-match": f"{hex_no_hash}ff",
-            "border": f"{hex_no_hash}ff",
-            "background": f"{f_bg_hex}ff",
-        }
-        f_lines = []
-        cur_sec = ""
-        seen_keys = set()
-        for raw_line in f_raw.splitlines():
-            s = raw_line.strip()
-            if s.startswith("[") and s.endswith("]"):
-                if cur_sec == "colors":
-                    for k, v in target_colors.items():
-                        if k not in seen_keys:
-                            f_lines.append(f"{k}={v}")
-                cur_sec = s[1:-1].strip().lower()
-                f_lines.append(raw_line)
-                continue
-            if cur_sec == "colors" and "=" in s and not s.startswith("#") and not s.startswith(";"):
-                k = s.split("=", 1)[0].strip().lower()
-                if k in target_colors:
-                    f_lines.append(f"{k}={target_colors[k]}")
-                    seen_keys.add(k)
-                    continue
-            f_lines.append(raw_line)
-        if cur_sec == "colors":
-            for k, v in target_colors.items():
-                if k not in seen_keys:
-                    f_lines.append(f"{k}={v}")
-        elif not any(l.strip().lower() == "[colors]" for l in f_lines):
-            f_lines.append("")
-            f_lines.append("[colors]")
-            for k, v in target_colors.items():
-                f_lines.append(f"{k}={v}")
-        atomic_write_text(fuzzel_file, "\n".join(f_lines) + "\n", mode=0o644)
-        notes.append("fuzzel")
     except Exception:
         pass
 

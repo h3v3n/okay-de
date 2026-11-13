@@ -1,45 +1,205 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
+"""
+OKay DE - Natywne menu zasilania (Powermenu) w GTK3 + GtkLayerShell.
+Zastępuje wcześniejsze menu oparte o fuzzel.
+"""
 
-# OKay DE - Skrypt menu zasilania (Powermenu) oparty o fuzzel
-# Wyświetla minimalistyczne menu zarządzania sesją i zasilaniem.
+import json
+import os
+import pwd
+import shutil
+import signal
+import subprocess
+import sys
 
-set -euo pipefail
+import gi
 
-if ! command -v fuzzel >/dev/null 2>&1; then
-    echo "Błąd: wymagany pakiet fuzzel." >&2
-    exit 1
-fi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
 
-LOCK="  Zablokuj"
-LOGOUT="󰗽  Wyloguj"
-REBOOT="󰑓  Uruchom ponownie"
-SHUTDOWN="  Wyłącz"
+from gi.repository import Gdk, GLib, Gtk, GtkLayerShell
 
-# Wywołanie fuzzel dmenu (anulowanie klawiszem ESC nie przerywa skryptu błędem)
-CHOICE=$(printf "%s\n%s\n%s\n%s\n" "$LOCK" "$LOGOUT" "$REBOOT" "$SHUTDOWN" | fuzzel --dmenu -p "Zasilanie: " --lines 4 --width 20 || true)
 
-case "$CHOICE" in
-    *"Zablokuj"*)
-        if command -v okay-lock >/dev/null 2>&1; then
-            okay-lock
-        elif command -v swaylock >/dev/null 2>&1; then
-            swaylock -f -c 11111b
-        else
-            loginctl lock-session
-        fi
-        ;;
-    *"Wyloguj"*)
-        # Bezpieczne zakończenie procesu kompozytora Wayfire (oraz ewentualnej starszej sesji przy przesiadce)
-        CUR_USER="$(id -un)"
-        pkill -TERM -u "$CUR_USER" -x wayfire || pkill -TERM -u "$CUR_USER" -x labwc || killall wayfire 2>/dev/null || true
-        ;;
-    *"Uruchom ponownie"*)
-        systemctl reboot || loginctl reboot
-        ;;
-    *"Wyłącz"*)
-        systemctl poweroff || loginctl poweroff
-        ;;
-    *)
-        exit 0
-        ;;
-esac
+def _load_theme_opts() -> tuple[str, bool]:
+    cfg_path = os.path.join(
+        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+        "okay-de",
+        "panel.json",
+    )
+    accent = "#89b4fa"
+    anim = True
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            raw = str(data.get("accent_color", accent)).strip()
+            if len(raw) == 7 and raw.startswith("#"):
+                accent = raw
+            anim = bool(data.get("animations", True))
+    except Exception:
+        pass
+    return accent, anim
+
+
+def _spawn(cmd: list[str]):
+    try:
+        subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:
+        pass
+
+
+class PowerMenuWindow(Gtk.Window):
+    def __init__(self, accent: str, anim: bool):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self._anim = anim
+
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
+        GtkLayerShell.set_namespace(self, "okay-powermenu")
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.EXCLUSIVE)
+
+        self.set_decorated(False)
+        self.set_resizable(False)
+        self.set_skip_taskbar_hint(True)
+
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual() if screen is not None else None
+        if visual is not None:
+            self.set_visual(visual)
+            self.set_app_paintable(True)
+
+        css = f"""
+        window {{ background-color: transparent; }}
+        .pm-card {{
+            background-color: rgba(30, 30, 46, 0.96);
+            border: 1px solid {accent};
+            border-radius: 10px;
+            padding: 16px;
+        }}
+        .pm-title {{
+            color: {accent};
+            font-size: 14px;
+            font-weight: bold;
+        }}
+        button.pm-btn {{
+            background-color: #313244;
+            color: #cdd6f4;
+            border: 1px solid rgba(205, 214, 244, 0.08);
+            border-radius: 8px;
+            padding: 10px 14px;
+            min-width: 220px;
+            font-size: 12px;
+            font-weight: bold;
+        }}
+        button.pm-btn:hover, button.pm-btn:focus {{
+            background-color: #45475a;
+            border-color: {accent};
+        }}
+        button.pm-danger:hover, button.pm-danger:focus {{
+            background-color: rgba(243, 139, 168, 0.25);
+            border-color: #f38ba8;
+            color: #f38ba8;
+        }}
+        """
+        prov = Gtk.CssProvider()
+        prov.load_from_data(css.encode("utf-8"))
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+        self.connect("key-press-event", self._on_key)
+        self.connect("focus-out-event", lambda _w, _e: (Gtk.main_quit(), False)[1])
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        root.get_style_context().add_class("pm-card")
+        self.add(root)
+
+        lbl = Gtk.Label(label="Zasilanie i sesja", xalign=0.0)
+        lbl.get_style_context().add_class("pm-title")
+        root.pack_start(lbl, False, False, 4)
+
+        items = [
+            ("system-lock-screen-symbolic", "1. Zablokuj ekran", self._act_lock, False),
+            ("system-log-out-symbolic", "2. Wyloguj", self._act_logout, False),
+            ("system-reboot-symbolic", "3. Uruchom ponownie", self._act_reboot, False),
+            ("system-shutdown-symbolic", "4. Wyłącz komputer", self._act_shutdown, True),
+        ]
+        for icon_name, text, cb, danger in items:
+            btn = Gtk.Button()
+            btn.get_style_context().add_class("pm-btn")
+            if danger:
+                btn.get_style_context().add_class("pm-danger")
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            box.pack_start(Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.MENU), False, False, 0)
+            box.pack_start(Gtk.Label(label=text, xalign=0.0), True, True, 0)
+            btn.add(box)
+            btn.connect("clicked", lambda _b, fn=cb: self._run_and_quit(fn))
+            root.pack_start(btn, False, False, 0)
+
+    def _on_key(self, _w, event):
+        kv = event.keyval
+        if kv == Gdk.KEY_Escape:
+            Gtk.main_quit()
+            return True
+        if kv == Gdk.KEY_1:
+            self._run_and_quit(self._act_lock)
+            return True
+        if kv == Gdk.KEY_2:
+            self._run_and_quit(self._act_logout)
+            return True
+        if kv == Gdk.KEY_3:
+            self._run_and_quit(self._act_reboot)
+            return True
+        if kv == Gdk.KEY_4:
+            self._run_and_quit(self._act_shutdown)
+            return True
+        return False
+
+    @staticmethod
+    def _run_and_quit(fn):
+        fn()
+        Gtk.main_quit()
+
+    @staticmethod
+    def _act_lock():
+        if shutil.which("okay-lock"):
+            _spawn(["okay-lock"])
+        elif shutil.which("swaylock"):
+            _spawn(["swaylock", "-f", "-c", "11111b"])
+        else:
+            _spawn(["loginctl", "lock-session"])
+
+    @staticmethod
+    def _act_logout():
+        cur_user = pwd.getpwuid(os.getuid()).pw_name
+        subprocess.run(["pkill", "-TERM", "-u", cur_user, "-x", "wayfire"], check=False)
+
+    @staticmethod
+    def _act_reboot():
+        _spawn(["systemctl", "reboot"])
+
+    @staticmethod
+    def _act_shutdown():
+        _spawn(["systemctl", "poweroff"])
+
+
+def main():
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    accent, anim = _load_theme_opts()
+    win = PowerMenuWindow(accent, anim)
+    win.connect("destroy", Gtk.main_quit)
+    win.show_all()
+    win.present()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

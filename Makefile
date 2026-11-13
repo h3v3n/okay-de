@@ -43,7 +43,6 @@ install:
 	install -d $(DESTDIR)/etc/skel/Desktop \
 		$(DESTDIR)/etc/skel/.config/okay-de \
 		$(DESTDIR)/etc/skel/.config/foot \
-		$(DESTDIR)/etc/skel/.config/fuzzel \
 		$(DESTDIR)/etc/skel/.config/mako \
 		$(DESTDIR)/etc/skel/.config/gtk-3.0 \
 		$(DESTDIR)/etc/skel/.config/gtk-4.0 \
@@ -55,7 +54,6 @@ install:
 	install -m 755 config/okay-de/autostart $(DESTDIR)/etc/skel/.config/okay-de/autostart
 	install -m 644 config/okay-de/panel.json $(DESTDIR)/etc/skel/.config/okay-de/panel.json
 	install -m 644 config/foot/foot.ini $(DESTDIR)/etc/skel/.config/foot/foot.ini
-	install -m 644 config/fuzzel/fuzzel.ini $(DESTDIR)/etc/skel/.config/fuzzel/fuzzel.ini
 	install -m 644 config/mako/config $(DESTDIR)/etc/skel/.config/mako/config
 	install -m 644 config/gtk-3.0/settings.ini $(DESTDIR)/etc/skel/.config/gtk-3.0/settings.ini
 	install -m 644 config/gtk-4.0/settings.ini $(DESTDIR)/etc/skel/.config/gtk-4.0/settings.ini
@@ -78,9 +76,6 @@ install:
 
 	install -d $(DESTDIR)/etc/xdg/foot
 	install -m 644 config/foot/foot.ini $(DESTDIR)/etc/xdg/foot/foot.ini
-
-	install -d $(DESTDIR)/etc/xdg/fuzzel
-	install -m 644 config/fuzzel/fuzzel.ini $(DESTDIR)/etc/xdg/fuzzel/fuzzel.ini
 
 	install -d $(DESTDIR)/etc/xdg/mako
 	install -m 644 config/mako/config $(DESTDIR)/etc/xdg/mako/config
@@ -145,7 +140,6 @@ uninstall:
 	rm -f $(DESTDIR)/etc/xdg/wayfire.ini
 	rm -rf $(DESTDIR)/etc/xdg/labwc
 	rm -rf $(DESTDIR)/etc/xdg/foot
-	rm -rf $(DESTDIR)/etc/xdg/fuzzel
 	rm -rf $(DESTDIR)/etc/xdg/mako
 	rm -f $(DESTDIR)/etc/xdg/gtk-3.0/settings.ini
 	rm -f $(DESTDIR)/etc/xdg/gtk-4.0/settings.ini

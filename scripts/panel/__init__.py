@@ -46,10 +46,16 @@ try:
 except Exception:
     WindowPreviewPopup = None
 
+try:
+    from .start_menu import StartMenuPopover
+except Exception:
+    StartMenuPopover = None
+
 __all__ = [
     "StatusNotifierTray",
     "QuickSettingsPopover",
     "WindowPreviewPopup",
+    "StartMenuPopover",
     "apply_animation_class",
     "prepare_fade_in",
     "start_fade_in",

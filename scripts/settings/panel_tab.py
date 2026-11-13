@@ -378,7 +378,7 @@ class PanelTab(Gtk.Box):
 
         def _on_done(_res):
             self.lbl_status.set_text(
-                f"Zastosowano kolor akcentu: {clean} (zaktualizowano Wayfire, pasek zadań/dock, mako, fuzzel)."
+                f"Zastosowano kolor akcentu: {clean} (zaktualizowano Wayfire, pasek zadań/dock, menu, mako)."
             )
 
         def _on_err(exc):

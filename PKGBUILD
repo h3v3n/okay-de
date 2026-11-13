@@ -10,7 +10,6 @@ depends=(
     'wayfire'
     'swaybg'
     'pcmanfm'
-    'fuzzel'
     'foot'
     'mako'
     'swaylock'

@@ -220,6 +220,7 @@ for _cand in reversed(_candidates):
 StatusNotifierTray = None
 QuickSettingsPopover = None
 WindowPreviewPopup = None
+StartMenuPopover = None
 
 try:
     from panel.animations import (
@@ -282,6 +283,14 @@ except Exception:
         from panel import WindowPreviewPopup
     except Exception:
         WindowPreviewPopup = None
+
+try:
+    from panel.start_menu import StartMenuPopover
+except Exception:
+    try:
+        from panel import StartMenuPopover
+    except Exception:
+        StartMenuPopover = None
 
 if WindowPreviewPopup is None:
     class WindowPreviewPopup:
@@ -858,6 +867,104 @@ button.preview-win-body:hover {
     font-size: 10px;
 }
 
+.start-menu-card {
+    padding: 12px;
+}
+
+entry.start-search-entry {
+    background-color: rgba(__SURFACE_RGB__, 0.96);
+    color: #cdd6f4;
+    border: 1px solid rgba(__ACCENT_RGB__, 0.35);
+    border-radius: 6px;
+    padding: 6px 10px;
+    min-height: 32px;
+    font-size: 12px;
+}
+
+entry.start-search-entry:focus {
+    border-color: __ACCENT__;
+}
+
+button.start-pinned-btn {
+    background-color: rgba(49, 50, 68, 0.72);
+    color: #cdd6f4;
+    border: 1px solid rgba(__ACCENT_RGB__, 0.16);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 11px;
+    transition: all 140ms ease-out;
+}
+
+button.start-pinned-btn:hover {
+    background-color: #3b3d52;
+    border-color: rgba(__ACCENT_RGB__, 0.55);
+}
+
+button.start-cat-btn {
+    background-color: transparent;
+    color: #a6adc8;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    padding: 3px 9px;
+    font-size: 11px;
+    min-height: 22px;
+}
+
+button.start-cat-btn:hover {
+    background-color: rgba(49, 50, 68, 0.75);
+    color: #cdd6f4;
+}
+
+button.start-cat-btn.start-cat-active {
+    background-color: rgba(__ACCENT_RGB__, 0.22);
+    color: __ACCENT__;
+    border: 1px solid rgba(__ACCENT_RGB__, 0.45);
+    font-weight: bold;
+}
+
+.start-app-list {
+    background-color: rgba(__SURFACE_RGB__, 0.92);
+    border: 1px solid rgba(__ACCENT_RGB__, 0.18);
+    border-radius: 6px;
+}
+
+.start-app-list row {
+    border-radius: 5px;
+    margin: 2px 4px;
+    transition: background-color 120ms ease-out;
+}
+
+.start-app-list row:hover {
+    background-color: rgba(49, 50, 68, 0.78);
+}
+
+.start-app-list row:selected {
+    background-color: rgba(__ACCENT_RGB__, 0.24);
+    border: 1px solid rgba(__ACCENT_RGB__, 0.45);
+}
+
+.start-app-name {
+    color: #cdd6f4;
+    font-weight: bold;
+    font-size: 12px;
+}
+
+.start-app-desc {
+    color: #9399b2;
+    font-size: 10px;
+}
+
+.start-user-label {
+    color: #bac2de;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+button.start-power-btn:hover {
+    background-color: rgba(243, 139, 168, 0.24);
+    color: #f38ba8;
+}
+
 .no-animations,
 .no-animations *,
 window.no-animations button,
@@ -868,6 +975,8 @@ window.no-animations #start-button,
 window.no-animations #clock-button,
 window.no-animations #desktop-button,
 window.no-animations .qs-list row,
+window.no-animations .start-app-list row,
+window.no-animations button.start-pinned-btn,
 window.no-animations .preview-win-tile,
 window.no-animations menuitem,
 menu.no-animations menuitem {
@@ -1322,7 +1431,7 @@ def _gobject_c_ptr(gobj) -> int:
 
 class WaylandToplevelClient:
     """Klient protokołu Wayland zwlr_foreign_toplevel_manager_v1 (GDK bridge + fallback gniazda)."""
-    IGNORED_APP_IDS = {"okay-panel", "okay-desktop", "okay-quick-settings", "okay-dock", "fuzzel", "mako", "waybar", "sfwbar"}
+    IGNORED_APP_IDS = {"okay-panel", "okay-desktop", "okay-quick-settings", "okay-menu", "okay-dock", "mako", "waybar", "sfwbar"}
 
     DISPLAY_ID = 1
     REGISTRY_ID = 2
@@ -2303,6 +2412,7 @@ class OkayPanel(Gtk.Window):
         self._last_vol_data = None
         self._vol_wake = threading.Event()
         self._quick_settings = None
+        self._start_menu = None
         self._preview_popup = None
         self._last_applied_accent = None
         self._wl_surface_ptr = 0
@@ -2413,7 +2523,7 @@ class OkayPanel(Gtk.Window):
     def _build_start_button(self):
         btn = Gtk.Button(label=" OK ")
         btn.set_name("start-button")
-        btn.set_tooltip_text("Menu programów (Super / Fuzzel)\nPPM: Menu zasilania")
+        btn.set_tooltip_text("Menu programów (Super + Spacja)\nPPM: Menu zasilania")
         btn.connect("button-press-event", self._on_start_button_press)
         self.left_box.pack_start(btn, False, False, 0)
 
@@ -2456,6 +2566,8 @@ class OkayPanel(Gtk.Window):
         apply_animation_class(self, enabled)
         if self._quick_settings is not None:
             apply_animation_class(self._quick_settings, enabled)
+        if self._start_menu is not None:
+            apply_animation_class(self._start_menu, enabled)
         if self._preview_popup is not None:
             apply_animation_class(self._preview_popup, enabled)
         try:
@@ -2465,8 +2577,45 @@ class OkayPanel(Gtk.Window):
         except Exception:
             pass
 
+    def _toggle_pin_from_menu(self, app: dict):
+        item = {
+            "app_id": app.get("app_id", ""),
+            "name": app.get("name", app.get("app_id", "")),
+            "cmd": app.get("cmd", ""),
+            "icon": app.get("icon", "application-x-executable"),
+        }
+        pins = self.panel_config.get("pinned_apps", [])
+        if any(self._matches_pin(item["app_id"], p) for p in pins):
+            self._unpin_app(item)
+        else:
+            self._pin_app(item)
+
+    def _toggle_start_menu(self, *_args):
+        self._hide_preview()
+        if self._quick_settings is not None and self._quick_settings.get_visible():
+            self._quick_settings.hide_popover()
+        if StartMenuPopover is None:
+            self._launch_cmd("okay-settings")
+            return
+        if self._start_menu is None:
+            try:
+                self._start_menu = StartMenuPopover(
+                    self._get_panel_pos,
+                    get_panel_mode_cb=self._get_panel_mode,
+                    get_pinned_apps_cb=lambda: self.panel_config.get("pinned_apps", []),
+                    on_toggle_pin_cb=self._toggle_pin_from_menu,
+                    animations_enabled_cb=self._animations_enabled,
+                )
+            except Exception as _sm_err:
+                print(f"[okay-panel] Błąd tworzenia StartMenu: {_sm_err}", file=sys.stderr)
+                self._launch_cmd("okay-settings")
+                return
+        self._start_menu.toggle()
+
     def _toggle_quick_settings(self, *_args):
         self._hide_preview()
+        if self._start_menu is not None and self._start_menu.get_visible():
+            self._start_menu.hide_menu()
         if QuickSettingsPopover is None:
             self._launch_cmd("okay-settings")
             return
@@ -2568,7 +2717,7 @@ class OkayPanel(Gtk.Window):
 
     def _on_start_button_press(self, widget, event):
         if event.button == 1:
-            self._launch_cmd("fuzzel")
+            self._toggle_start_menu()
         elif event.button == 3:
             self._launch_cmd("okay-powermenu")
         return True
@@ -3262,17 +3411,78 @@ class OkayPanel(Gtk.Window):
         return True
 
 
+def _panel_pid_path() -> str:
+    rt = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/okay-de-{os.getuid()}"
+    return os.path.join(rt, "okay-panel.pid")
+
+
+def _signal_running_panel(sig_num: int) -> bool:
+    pid_path = _panel_pid_path()
+    try:
+        with open(pid_path, "r", encoding="utf-8") as f:
+            pid = int(f.read().strip())
+        if pid > 0:
+            os.kill(pid, sig_num)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def main():
+    if "--toggle-menu" in sys.argv:
+        if _signal_running_panel(signal.SIGUSR1):
+            return
+        # Fallback: uruchom okay-panel i od razu otwórz menu
+        argv0 = os.path.abspath(sys.argv[0])
+        subprocess.Popen(
+            [sys.executable, argv0, "--open-menu"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return
+
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
+    pid_path = _panel_pid_path()
+    try:
+        os.makedirs(os.path.dirname(pid_path), exist_ok=True)
+        with open(pid_path, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except Exception:
+        pid_path = ""
+
     app = OkayPanel()
     app.connect("destroy", Gtk.main_quit)
+
+    if hasattr(GLib, "unix_signal_add"):
+        GLib.unix_signal_add(
+            GLib.PRIORITY_DEFAULT,
+            signal.SIGUSR1,
+            lambda: (app._toggle_start_menu(), True)[1],
+        )
+
     anim = app._animations_enabled()
     prepare_fade_in(app, anim)
     app.show_all()
     start_fade_in(app, anim, duration_ms=180)
-    Gtk.main()
+    if "--open-menu" in sys.argv:
+        GLib.idle_add(lambda: (app._toggle_start_menu(), False)[1])
+
+    try:
+        Gtk.main()
+    finally:
+        if pid_path:
+            try:
+                if os.path.isfile(pid_path):
+                    with open(pid_path, "r", encoding="utf-8") as f:
+                        if f.read().strip() == str(os.getpid()):
+                            os.remove(pid_path)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

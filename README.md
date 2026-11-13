@@ -34,14 +34,14 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 | **Pulpit z ikonami** | `okay-desktop` | Natywny pulpit Wayland (GTK3 + GtkLayerShell) z Drag & Drop dla `~/Desktop` |
 | **Centrum Sterowania** | `okay-settings` | Modularna aplikacja Python 3 (GTK3 + PyGObject) |
 | **Pasek zadań (Taskbar)** | `okay-panel` | Zunifikowany panel/dock GTK 3 + GtkLayerShell z przypinaniem aplikacji i kontrolą okien (`panel.json`) |
-| **Launcher aplikacji** | `fuzzel` | Błyskawiczny launcher aplikacji z akceleracją Wayland |
+| **Launcher aplikacji** | `okay-panel --toggle-menu` | Natywne menu startowe OKay DE (kategorie, wyszukiwarka, przypięte, zasilanie) |
 | **Emulator terminala** | `foot` | Ultra-lekki terminal Wayland z przezroczystością tła `0.95` |
 | **Menedżer plików** | `pcmanfm` | Szybki menedżer plików z ciemnym motywem GTK |
 | **Demon powiadomień** | `mako` | Lekki demon powiadomień OSD w prawym górnym rogu ekranu |
 | **Dźwięk / OSD** | `wpctl` + `okay-volume` | Regulacja głośności z graficznym paskiem postępu |
 | **Jasność matrycy** | `brightnessctl` + `okay-brightness` | Regulacja podświetlenia z paskiem OSD |
 | **Zrzuty ekranu** | `okay-screenshot` | `grim` + `slurp` do schowka, pliku i z powiadomieniem |
-| **Menedżer schowka** | `okay-clipboard` | `cliphist` + `fuzzel` + `wl-clipboard` (tekst i obrazy) |
+| **Menedżer schowka** | `okay-clipboard` | Natywny picker historii schowka (`cliphist` + `wl-clipboard`, GTK3 + GtkLayerShell) |
 | **Blokada ekranu** | `okay-lock` | Estetyczny `swaylock` w motywie Catppuccin Mocha |
 
 ---
@@ -51,7 +51,7 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 | Skrót | Akcja | Polecenie / Wtyczka Wayfire |
 | :--- | :--- | :--- |
 | `Super + Return` | Uruchom terminal | `foot` |
-| `Super + Spacja` | Wyszukiwarka aplikacji | `fuzzel` |
+| `Super + Spacja` | Menu startowe / wyszukiwarka aplikacji | `okay-panel --toggle-menu` |
 | `Super + I` | Centrum sterowania | `okay-settings` |
 | `Super + E` | Menedżer plików | `pcmanfm` |
 | `Super + V` | Historia schowka | `okay-clipboard` |
@@ -76,7 +76,7 @@ Ultra-lekkie, nowoczesne środowisko graficzne Wayland dla dystrybucji **OKsavi 
 
 ### Pakiety bazowe (OKsavi / Arch Linux):
 ```bash
-sudo pacman -S wayfire swaybg pcmanfm fuzzel foot mako swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber papirus-icon-theme adwaita-icon-theme xdg-user-dirs gtk3 gtk-layer-shell python python-gobject wlr-randr
+sudo pacman -S wayfire swaybg pcmanfm foot mako swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber papirus-icon-theme adwaita-icon-theme xdg-user-dirs gtk3 gtk-layer-shell python python-gobject wlr-randr
 ```
 
 ### Sugerowane pakiety opcjonalne:

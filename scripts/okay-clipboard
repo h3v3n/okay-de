@@ -1,14 +1,197 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
+"""
+OKay DE - Natywny menedżer historii schowka (cliphist + wl-copy) w GTK3 + GtkLayerShell.
+Zastępuje wcześniejszy picker oparty o fuzzel.
+"""
 
-# OKay DE - Menedżer historii schowka oparty o cliphist i fuzzel
-set -euo pipefail
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
 
-if ! command -v cliphist >/dev/null 2>&1 || ! command -v fuzzel >/dev/null 2>&1 || ! command -v wl-copy >/dev/null 2>&1; then
-    exit 1
-fi
+import gi
 
-chosen=$(cliphist list | fuzzel --dmenu -p "Schowek: " --lines 10 --width 45 || true)
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
 
-if [ -n "$chosen" ]; then
-    printf "%s" "$chosen" | cliphist decode | wl-copy
-fi
+from gi.repository import Gdk, Gtk, GtkLayerShell, Pango
+
+
+def _load_accent() -> str:
+    cfg_path = os.path.join(
+        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+        "okay-de",
+        "panel.json",
+    )
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        raw = str(data.get("accent_color", "#89b4fa")).strip()
+        if len(raw) == 7 and raw.startswith("#"):
+            return raw
+    except Exception:
+        pass
+    return "#89b4fa"
+
+
+def _load_entries() -> list[str]:
+    try:
+        res = subprocess.run(["cliphist", "list"], capture_output=True, text=True, check=False, timeout=2.0)
+        return [ln for ln in res.stdout.splitlines() if ln.strip()]
+    except Exception:
+        return []
+
+
+def _copy_entry(line: str):
+    try:
+        dec = subprocess.run(
+            ["cliphist", "decode"],
+            input=line.encode("utf-8"),
+            capture_output=True,
+            check=False,
+            timeout=2.0,
+        )
+        if dec.returncode == 0:
+            subprocess.run(["wl-copy"], input=dec.stdout, check=False, timeout=2.0)
+    except Exception:
+        pass
+
+
+class ClipboardWindow(Gtk.Window):
+    def __init__(self, entries: list[str], accent: str):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self._entries = entries
+        self._row_lines = {}
+
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.TOP)
+        GtkLayerShell.set_namespace(self, "okay-clipboard")
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.ON_DEMAND)
+
+        self.set_decorated(False)
+        self.set_resizable(False)
+        self.set_skip_taskbar_hint(True)
+        self.set_size_request(500, 380)
+
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual() if screen is not None else None
+        if visual is not None:
+            self.set_visual(visual)
+            self.set_app_paintable(True)
+
+        css = f"""
+        window {{ background-color: transparent; }}
+        .cb-card {{
+            background-color: rgba(30, 30, 46, 0.96);
+            border: 1px solid {accent};
+            border-radius: 10px;
+            padding: 12px;
+        }}
+        entry.cb-search {{
+            background-color: #181825;
+            color: #cdd6f4;
+            border: 1px solid rgba(205, 214, 244, 0.2);
+            border-radius: 6px;
+            padding: 6px 10px;
+        }}
+        entry.cb-search:focus {{ border-color: {accent}; }}
+        .cb-list {{
+            background-color: #181825;
+            border-radius: 6px;
+        }}
+        .cb-list row {{ padding: 6px 10px; border-radius: 4px; color: #cdd6f4; }}
+        .cb-list row:hover {{ background-color: #313244; }}
+        .cb-list row:selected {{ background-color: rgba(137, 180, 250, 0.24); }}
+        """
+        prov = Gtk.CssProvider()
+        prov.load_from_data(css.encode("utf-8"))
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+        self.connect("key-press-event", self._on_key)
+        self.connect("focus-out-event", lambda _w, _e: (Gtk.main_quit(), False)[1])
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        root.get_style_context().add_class("cb-card")
+        self.add(root)
+
+        self.search = Gtk.SearchEntry()
+        self.search.set_placeholder_text("Szukaj w schowku...")
+        self.search.get_style_context().add_class("cb-search")
+        self.search.connect("search-changed", lambda _e: self._populate())
+        self.search.connect("activate", self._activate_selected)
+        root.pack_start(self.search, False, False, 0)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+
+        self.lb = Gtk.ListBox()
+        self.lb.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.lb.set_activate_on_single_click(True)
+        self.lb.get_style_context().add_class("cb-list")
+        self.lb.connect("row-activated", self._on_row_activated)
+        scroll.add(self.lb)
+        root.pack_start(scroll, True, True, 0)
+
+        self._populate()
+
+    def _populate(self):
+        self._row_lines.clear()
+        for ch in self.lb.get_children():
+            self.lb.remove(ch)
+            ch.destroy()
+
+        q = self.search.get_text().strip().lower()
+        items = [ln for ln in self._entries if not q or q in ln.lower()]
+        for ln in items[:80]:
+            row = Gtk.ListBoxRow()
+            display = ln.split("\t", 1)[1] if "\t" in ln else ln
+            lbl = Gtk.Label(label=display.strip(), xalign=0.0)
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            row.add(lbl)
+            self._row_lines[row] = ln
+            self.lb.add(row)
+        self.lb.show_all()
+        first = self.lb.get_row_at_index(0)
+        if first is not None:
+            self.lb.select_row(first)
+
+    def _activate_selected(self, *_args):
+        sel = self.lb.get_selected_row()
+        if sel is not None and sel in self._row_lines:
+            _copy_entry(self._row_lines[sel])
+            Gtk.main_quit()
+
+    def _on_row_activated(self, _lb, row):
+        ln = self._row_lines.get(row)
+        if ln:
+            _copy_entry(ln)
+            Gtk.main_quit()
+
+    def _on_key(self, _w, event):
+        if event.keyval == Gdk.KEY_Escape:
+            Gtk.main_quit()
+            return True
+        return False
+
+
+def main():
+    if not shutil.which("cliphist") or not shutil.which("wl-copy"):
+        sys.exit(1)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    win = ClipboardWindow(_load_entries(), _load_accent())
+    win.connect("destroy", Gtk.main_quit)
+    win.show_all()
+    win.present()
+    win.search.grab_focus()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

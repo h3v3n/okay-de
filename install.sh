@@ -16,8 +16,8 @@ if [ "$MODE" = "--system" ]; then
     # Instalacja pakietów systemowych (Wayfire jako kompozytor bazowy oraz zależności GTK3/Wayland)
     if command -v pacman >/dev/null 2>&1; then
         echo "Weryfikacja i instalacja pakietów systemowych (wayfire, gtk3, gtk-layer-shell, python-gobject, wlr-randr)..."
-        pacman -S --needed --noconfirm wayfire swaybg foot fuzzel mako pcmanfm swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber gtk3 gtk-layer-shell python python-gobject wlr-randr xdg-user-dirs papirus-icon-theme adwaita-icon-theme librsvg meson ninja git pkgconf cairo pango || \
-            pacman -S --needed --noconfirm wayfire swaybg foot fuzzel mako pcmanfm swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber gtk3 gtk-layer-shell python python-gobject wlr-randr xdg-user-dirs papirus-icon-theme adwaita-icon-theme || \
+        pacman -S --needed --noconfirm wayfire swaybg foot mako pcmanfm swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber gtk3 gtk-layer-shell python python-gobject wlr-randr xdg-user-dirs papirus-icon-theme adwaita-icon-theme librsvg meson ninja git pkgconf cairo pango || \
+            pacman -S --needed --noconfirm wayfire swaybg foot mako pcmanfm swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber gtk3 gtk-layer-shell python python-gobject wlr-randr xdg-user-dirs papirus-icon-theme adwaita-icon-theme || \
             pacman -S --needed --noconfirm wayfire gtk3 gtk-layer-shell python-gobject wlr-randr
     fi
 
@@ -223,7 +223,6 @@ elif [ "$MODE" = "--user" ]; then
 
     # Tworzenie katalogów docelowych XDG użytkownika
     mkdir -p "$XDG_CFG/foot" \
-             "$XDG_CFG/fuzzel" \
              "$XDG_CFG/mako" \
              "$XDG_CFG/gtk-3.0" \
              "$XDG_CFG/gtk-4.0" \
@@ -447,7 +446,6 @@ PYEOF
     fi
 
     copy_dir_missing config/foot "$XDG_CFG/foot" 644
-    copy_dir_missing config/fuzzel "$XDG_CFG/fuzzel" 644
     copy_dir_missing config/mako "$XDG_CFG/mako" 644
     copy_dir_missing config/gtk-3.0 "$XDG_CFG/gtk-3.0" 644
     copy_dir_missing config/gtk-4.0 "$XDG_CFG/gtk-4.0" 644
@@ -502,7 +500,12 @@ PYEOF
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "$XDG_DATA/applications/" 2>/dev/null || true
     fi
-    rm -f "$XDG_CACHE/fuzzel" 2>/dev/null || true
+    # Usunięcie przestarzałego fuzzel (zastąpionego natywnym menu w okay-panel) + migracja wayfire.ini
+    rm -rf "$XDG_CFG/fuzzel" "$XDG_CACHE/fuzzel" 2>/dev/null || true
+    if [ -f "$XDG_CFG/wayfire.ini" ]; then
+        sed -i -E 's|^command_launcher[[:space:]]*=[[:space:]]*fuzzel$|command_launcher = okay-panel --toggle-menu|' "$XDG_CFG/wayfire.ini" 2>/dev/null || true
+        sed -i -E 's/\|[[:space:]]*app_id is "fuzzel"/| app_id is "okay-menu" | app_id is "okay-powermenu" | app_id is "okay-clipboard"/g' "$XDG_CFG/wayfire.ini" 2>/dev/null || true
+    fi
 
     # Migracja istniejącego autostartu użytkownika dla okay-desktop
     if [ -f "$OKAY_CFG_DIR/autostart" ] && ! grep -q "okay-desktop" "$OKAY_CFG_DIR/autostart" 2>/dev/null; then
