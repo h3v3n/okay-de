@@ -247,6 +247,7 @@ class PanelTab(Gtk.Box):
         self.combo_corner_radius = Gtk.ComboBoxText()
         self.combo_corner_radius.append("0", "0 px - Ostre narożniki 90° (Domyślny styl OKay)")
         self.combo_corner_radius.append("6", "6 px - Dyskretnie zaokrąglone")
+        self.combo_corner_radius.append("8", "8 px - Średnio zaokrąglone")
         self.combo_corner_radius.append("10", "10 px - Zaokrąglone (Styl nowoczesny)")
         self.combo_corner_radius.append("14", "14 px - Mocno zaokrąglone (Styl macOS / GNOME)")
         self.combo_corner_radius.connect("changed", self._on_window_decorations_changed)

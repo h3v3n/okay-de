@@ -1547,14 +1547,14 @@ def _ensure_window_button_svgs(buttons_style: str, accent_hex: str) -> dict:
         }
     elif buttons_style == "windows":
         specs = {
-            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path d="M5.5 5.5 L12.5 12.5 M12.5 5.5 L5.5 12.5" stroke="#e6eaf5" stroke-width="1.35" stroke-linecap="round"/></svg>',
+            "close.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path d="M5.5 5.5 L12.5 12.5 M12.5 5.5 L5.5 12.5" stroke="{contrast}" stroke-width="1.4" stroke-linecap="round"/></svg>',
             "close-hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="3" fill="#e81123"/><path d="M5.5 5.5 L12.5 12.5 M12.5 5.5 L5.5 12.5" stroke="#ffffff" stroke-width="1.45" stroke-linecap="round"/></svg>',
-            "minimize.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path d="M5 10.5 H13" stroke="#e6eaf5" stroke-width="1.35" stroke-linecap="round"/></svg>',
-            "minimize-hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="3" fill="{accent_hex}"/><path d="M5 10.5 H13" stroke="{contrast}" stroke-width="1.45" stroke-linecap="round"/></svg>',
-            "maximize.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="5" y="5" width="8" height="8" rx="0.8" fill="none" stroke="#e6eaf5" stroke-width="1.3"/></svg>',
-            "maximize-hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="3" fill="{accent_hex}"/><rect x="5" y="5" width="8" height="8" rx="0.8" fill="none" stroke="{contrast}" stroke-width="1.4"/></svg>',
-            "restore.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path d="M7 5 H13 V11 M5 7 H11 V13 H5 Z" fill="none" stroke="#e6eaf5" stroke-width="1.2"/></svg>',
-            "restore-hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="3" fill="{accent_hex}"/><path d="M7 5 H13 V11 M5 7 H11 V13 H5 Z" fill="none" stroke="{contrast}" stroke-width="1.3"/></svg>',
+            "minimize.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path d="M5 10.5 H13" stroke="{contrast}" stroke-width="1.4" stroke-linecap="round"/></svg>',
+            "minimize-hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="3" fill="#313244"/><path d="M5 10.5 H13" stroke="#cdd6f4" stroke-width="1.45" stroke-linecap="round"/></svg>',
+            "maximize.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="5" y="5" width="8" height="8" rx="0.8" fill="none" stroke="{contrast}" stroke-width="1.35"/></svg>',
+            "maximize-hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="3" fill="#313244"/><rect x="5" y="5" width="8" height="8" rx="0.8" fill="none" stroke="#cdd6f4" stroke-width="1.4"/></svg>',
+            "restore.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path d="M7 5 H13 V11 M5 7 H11 V13 H5 Z" fill="none" stroke="{contrast}" stroke-width="1.25"/></svg>',
+            "restore-hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="3" fill="#313244"/><path d="M7 5 H13 V11 M5 7 H11 V13 H5 Z" fill="none" stroke="#cdd6f4" stroke-width="1.3"/></svg>',
         }
     else:
         # Styl "rectangles" (domyślne zaokrąglone prostokąty z akcentem)
@@ -1634,7 +1634,7 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
 
     wf_layout = "close minimize maximize" if buttons_style == "circles_left" else "minimize maximize close"
     pix_layout = "close,maximize,minimize:" if buttons_style == "circles_left" else ":minimize,maximize,close"
-    title_bg = blend_hex_color("#181825", accent_hex, 0.12)
+    contrast_text = compute_contrast_text(accent_hex)
     svg_opts = _ensure_window_button_svgs(buttons_style, accent_hex)
 
     # Stylizacja przycisków okna GTK3/GTK4 CSD (kompatybilna z rectangles / circles_* / windows)
@@ -1645,6 +1645,8 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
             f"    min-width: 14px; min-height: 14px;\n"
             f"    padding: 2px; margin: 0 3px;\n"
             f"}}\n"
+            f"headerbar button.titlebutton image, .titlebar button.titlebutton image {{ opacity: 0; }}\n"
+            f"headerbar button.titlebutton:hover image, .titlebar button.titlebutton:hover image {{ opacity: 1; }}\n"
             f"headerbar button.titlebutton.close, .titlebar button.titlebutton.close {{ background: #ff5f57; color: #1e1e2e; }}\n"
             f"headerbar button.titlebutton.minimize, .titlebar button.titlebutton.minimize {{ background: #febc2e; color: #1e1e2e; }}\n"
             f"headerbar button.titlebutton.maximize, .titlebar button.titlebutton.maximize {{ background: #28c840; color: #1e1e2e; }}\n"
@@ -1666,7 +1668,7 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
             f"    min-width: 22px; min-height: 20px;\n"
             f"}}\n"
             f"headerbar button.titlebutton.close:hover, .titlebar button.titlebutton.close:hover {{ background: #f38ba8; color: #11111b; }}\n"
-            f"headerbar button.titlebutton:not(.close):hover, .titlebar button.titlebutton:not(.close):hover {{ background: {accent_hex}; color: {compute_contrast_text(accent_hex)}; }}\n"
+            f"headerbar button.titlebutton:not(.close):hover, .titlebar button.titlebutton:not(.close):hover {{ background: {accent_hex}; color: {contrast_text}; }}\n"
         )
 
     # Wymuszenie zaokrąglenia narożników i koloru ramki w aplikacjach GTK3 / GTK4
@@ -1679,7 +1681,13 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         f"    border-radius: {corner_radius}px;\n"
         f"}}\n"
         f"window.csd decoration {{\n"
-        f"    border: 1px solid {accent_hex};\n"
+        f"    border: 2px solid {accent_hex};\n"
+        f"}}\n"
+        f"window.csd decoration:backdrop {{\n"
+        f"    border-color: #313244;\n"
+        f"}}\n"
+        f"headerbar:not(.backdrop), .titlebar:not(.backdrop) {{\n"
+        f"    border-bottom: 2px solid {accent_hex};\n"
         f"}}\n"
         f"window.background > box, window.background > stack, window.background > paned {{\n"
         f"    border-bottom-left-radius: {corner_radius}px;\n"
@@ -1696,7 +1704,13 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         f"    overflow: hidden;\n"
         f"}}\n"
         f"window.csd decoration {{\n"
-        f"    border: 1px solid {accent_hex};\n"
+        f"    border: 2px solid {accent_hex};\n"
+        f"}}\n"
+        f"window.csd decoration:backdrop {{\n"
+        f"    border-color: #313244;\n"
+        f"}}\n"
+        f"headerbar:not(.backdrop), .titlebar:not(.backdrop) {{\n"
+        f"    border-bottom: 2px solid {accent_hex};\n"
         f"}}\n"
         f"{gtk_btn_css}"
         f"{marker_end}\n"
@@ -1751,9 +1765,9 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         "overlay_engine": "rounded_corners" if corner_radius > 0 else "none",
         "always_decorate": "all",
         "button_layout": pix_layout,
-        "fg_color": hex_to_wf_rgba(title_bg, 1.0),
+        "fg_color": hex_to_wf_rgba(accent_hex, 1.0),
         "bg_color": hex_to_wf_rgba("#1e1e2e", 1.0),
-        "fg_text_color": "0.9412 0.9490 0.9765 1.0000",
+        "fg_text_color": hex_to_wf_rgba(contrast_text, 1.0),
         "bg_text_color": "0.6510 0.6784 0.7843 1.0000",
         "effect_color": hex_to_wf_rgba(accent_hex, 1.0),
         "maximized_borders": "true",

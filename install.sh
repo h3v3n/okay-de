@@ -16,25 +16,28 @@ if [ "$MODE" = "--system" ]; then
     # Instalacja pakietów systemowych (Wayfire jako kompozytor bazowy oraz zależności GTK3/Wayland)
     if command -v pacman >/dev/null 2>&1; then
         echo "Weryfikacja i instalacja pakietów systemowych (wayfire, gtk3, gtk-layer-shell, python-gobject, wlr-randr)..."
-        pacman -S --needed --noconfirm wayfire swaybg foot mako pcmanfm swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber gtk3 gtk-layer-shell python python-gobject wlr-randr xdg-user-dirs papirus-icon-theme adwaita-icon-theme librsvg meson ninja git pkgconf cairo pango || \
+        pacman -S --needed --noconfirm wayfire swaybg foot mako pcmanfm swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber gtk3 gtk-layer-shell python python-gobject wlr-randr xdg-user-dirs papirus-icon-theme adwaita-icon-theme librsvg meson ninja git pkgconf cairo pango glm gcc || \
             pacman -S --needed --noconfirm wayfire swaybg foot mako pcmanfm swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber gtk3 gtk-layer-shell python python-gobject wlr-randr xdg-user-dirs papirus-icon-theme adwaita-icon-theme || \
             pacman -S --needed --noconfirm wayfire gtk3 gtk-layer-shell python-gobject wlr-randr
     fi
 
     # Opcjonalna kompilacja i instalacja wtyczki pixdecor (zaokrąglone narożniki okien i własne przyciski dla Wayfire)
     if [ ! -f /usr/lib/wayfire/libpixdecor.so ] && [ ! -f /usr/local/lib/wayfire/libpixdecor.so ]; then
-        if command -v git >/dev/null 2>&1 && command -v meson >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && pkg-config --exists wayfire cairo pango librsvg-2.0 2>/dev/null; then
+        if command -v git >/dev/null 2>&1 && command -v meson >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && { command -v g++ >/dev/null 2>&1 || command -v c++ >/dev/null 2>&1; } && { [ -f /usr/include/glm/glm.hpp ] || pkg-config --exists glm 2>/dev/null; } && pkg-config --exists wayfire cairo pango librsvg-2.0 2>/dev/null; then
             echo "Kompilowanie wtyczki Wayfire pixdecor (zaokrąglone narożniki i styl przycisków)..."
             PIX_TMP="$(mktemp -d /tmp/okay-pixdecor-XXXXXX)"
-            if git clone --depth 1 https://github.com/soreau/pixdecor.git "$PIX_TMP/src" >/dev/null 2>&1; then
-                if meson setup "$PIX_TMP/build" "$PIX_TMP/src" --prefix=/usr >/dev/null 2>&1 && ninja -C "$PIX_TMP/build" >/dev/null 2>&1; then
-                    ninja -C "$PIX_TMP/build" install >/dev/null 2>&1 || true
+            PIX_LOG="/tmp/okay-pixdecor-build.log"
+            if git clone --depth 1 https://github.com/soreau/pixdecor.git "$PIX_TMP/src" >"$PIX_LOG" 2>&1; then
+                if meson setup "$PIX_TMP/build" "$PIX_TMP/src" --prefix=/usr --buildtype=release >>"$PIX_LOG" 2>&1 && ninja -C "$PIX_TMP/build" >>"$PIX_LOG" 2>&1; then
+                    ninja -C "$PIX_TMP/build" install >>"$PIX_LOG" 2>&1 || true
                     echo "Zainstalowano wtyczkę pixdecor w /usr/lib/wayfire."
                 else
-                    echo "Uwaga: Kompilacja pixdecor nie powiodła się — używam wbudowanej wtyczki decoration." >&2
+                    echo "Uwaga: Kompilacja pixdecor nie powiodła się (log: $PIX_LOG) — używam wbudowanej wtyczki decoration." >&2
                 fi
             fi
             rm -rf "$PIX_TMP" 2>/dev/null || true
+        else
+            echo "Uwaga: Pominięto kompilację pixdecor (brak pakietów: glm, gcc, meson, ninja, wayfire, cairo, pango, librsvg)." >&2
         fi
     fi
 
@@ -252,12 +255,18 @@ elif [ "$MODE" = "--user" ]; then
 
         # Opcjonalna kompilacja pixdecor do przestrzeni użytkownika (~/.local/share/wayfire), jeśli systemowo brak wtyczki
         if [ ! -f /usr/lib/wayfire/libpixdecor.so ] && [ ! -f /usr/local/lib/wayfire/libpixdecor.so ] && [ ! -f "$XDG_DATA/wayfire/plugins/libpixdecor.so" ]; then
-            if command -v git >/dev/null 2>&1 && command -v meson >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && pkg-config --exists wayfire cairo pango librsvg-2.0 2>/dev/null; then
+            if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+                if [ ! -f /usr/include/glm/glm.hpp ] || ! command -v g++ >/dev/null 2>&1 || ! command -v meson >/dev/null 2>&1; then
+                    sudo pacman -S --needed --noconfirm glm gcc meson ninja pkgconf cairo pango librsvg >/dev/null 2>&1 || true
+                fi
+            fi
+            if command -v git >/dev/null 2>&1 && command -v meson >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && { command -v g++ >/dev/null 2>&1 || command -v c++ >/dev/null 2>&1; } && { [ -f /usr/include/glm/glm.hpp ] || pkg-config --exists glm 2>/dev/null; } && pkg-config --exists wayfire cairo pango librsvg-2.0 2>/dev/null; then
                 echo "Budowanie wtyczki pixdecor w przestrzeni użytkownika ($XDG_DATA/wayfire)..."
                 PIX_TMP="$(mktemp -d "${TMPDIR:-/tmp}/okay-pixdecor-XXXXXX")"
-                if git clone --depth 1 https://github.com/soreau/pixdecor.git "$PIX_TMP/src" >/dev/null 2>&1 && \
-                   meson setup "$PIX_TMP/build" "$PIX_TMP/src" --prefix=/usr >/dev/null 2>&1 && \
-                   ninja -C "$PIX_TMP/build" >/dev/null 2>&1; then
+                PIX_LOG="/tmp/okay-pixdecor-build.log"
+                if git clone --depth 1 https://github.com/soreau/pixdecor.git "$PIX_TMP/src" >"$PIX_LOG" 2>&1 && \
+                   meson setup "$PIX_TMP/build" "$PIX_TMP/src" --prefix=/usr --buildtype=release >>"$PIX_LOG" 2>&1 && \
+                   ninja -C "$PIX_TMP/build" >>"$PIX_LOG" 2>&1; then
                     mkdir -p "$XDG_DATA/wayfire/plugins" "$XDG_DATA/wayfire/metadata"
                     SO_BUILT="$(find "$PIX_TMP/build" -maxdepth 4 -name 'libpixdecor.so' | head -n 1)"
                     XML_BUILT="$(find "$PIX_TMP/src" "$PIX_TMP/build" -maxdepth 4 -name 'pixdecor.xml' | head -n 1)"
@@ -267,8 +276,12 @@ elif [ "$MODE" = "--user" ]; then
                     if [ -n "$XML_BUILT" ]; then
                         install -m 644 "$XML_BUILT" "$XDG_DATA/wayfire/metadata/pixdecor.xml" 2>/dev/null || true
                     fi
+                else
+                    echo "Uwaga: Kompilacja pixdecor nie powiodła się (log: $PIX_LOG)." >&2
                 fi
                 rm -rf "$PIX_TMP" 2>/dev/null || true
+            else
+                echo "Uwaga: Brak narzędzi do kompilacji pixdecor (zainstaluj: sudo pacman -S --needed glm gcc meson ninja librsvg)." >&2
             fi
         fi
 
