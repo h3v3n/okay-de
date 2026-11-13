@@ -819,7 +819,7 @@ def read_wayfire_value(section: str, key: str, default: str = "") -> str:
 
 
 def update_wayfire_section(section: str, updates: dict, remove_keys: set = None) -> bool:
-    """Atomowo aktualizuje, dopisuje lub usuwa klucze w sekcji [section] pliku ~/.config/wayfire.ini."""
+    """Atomowo aktualizuje, dopisuje lub usuwa klucze w sekcji [section] pliku ~/.config/wayfire.ini (usuwając duplikaty sekcji)."""
     wf_ini = wayfire_config_file()
     if not os.path.isfile(wf_ini):
         tmpl = wayfire_template_file()
@@ -841,6 +841,7 @@ def update_wayfire_section(section: str, updates: dict, remove_keys: set = None)
     target_sec = f"[{section}]"
     in_sec = False
     sec_found = False
+    skip_dup_sec = False
     pending = {str(k): str(v) for k, v in updates.items()}
     drop_set = {str(k) for k in remove_keys} if remove_keys else set()
 
@@ -854,10 +855,21 @@ def update_wayfire_section(section: str, updates: dict, remove_keys: set = None)
         if s.startswith("[") and s.endswith("]"):
             if in_sec and pending:
                 _flush_pending()
-            in_sec = (s == target_sec)
-            if in_sec:
-                sec_found = True
-            out_lines.append(line)
+            if s == target_sec:
+                if not sec_found:
+                    sec_found = True
+                    in_sec = True
+                    skip_dup_sec = False
+                    out_lines.append(line)
+                else:
+                    in_sec = False
+                    skip_dup_sec = True
+            else:
+                in_sec = False
+                skip_dup_sec = False
+                out_lines.append(line)
+            continue
+        if skip_dup_sec:
             continue
         if in_sec and "=" in s and not s.startswith("#") and not s.startswith(";"):
             k = s.split("=", 1)[0].strip()
@@ -1206,13 +1218,40 @@ def ensure_user_configs() -> None:
             anim_min = read_wayfire_value("animate", "minimize_animation", "")
             anim_open = read_wayfire_value("animate", "open_animation", "")
 
-            if (
+            need_decor_sync = (
                 dec_active.startswith("#")
                 or pix_fg.startswith("#")
                 or bool(pix_active)
                 or not pix_layout
-            ):
-                apply_window_decorations()
+            )
+            if not need_decor_sync:
+                for gtk_ver in ("gtk-3.0", "gtk-4.0"):
+                    ini_p = os.path.join(xdg_config_home(), gtk_ver, "settings.ini")
+                    css_p = os.path.join(xdg_config_home(), gtk_ver, "gtk.css")
+                    if not os.path.isfile(ini_p) or not os.path.isfile(css_p):
+                        need_decor_sync = True
+                        break
+                    try:
+                        with open(ini_p, "r", encoding="utf-8") as f:
+                            ini_txt = f.read()
+                        with open(css_p, "r", encoding="utf-8") as f:
+                            css_txt = f.read()
+                        if "gtk-decoration-layout" not in ini_txt or "gtk-theme-name" not in ini_txt or "windowcontrols" not in css_txt:
+                            need_decor_sync = True
+                            break
+                    except Exception:
+                        need_decor_sync = True
+                        break
+            if not need_decor_sync:
+                try:
+                    with open(wf_ini, "r", encoding="utf-8") as f:
+                        wf_txt = f.read()
+                    if wf_txt.count("[decoration]") > 1 or wf_txt.count("[pixdecor]") > 1:
+                        need_decor_sync = True
+                except Exception:
+                    pass
+            if need_decor_sync:
+                apply_window_decorations(_from_ensure=True)
             if anim_min == "fade" or (anim_open == "fade" and anim_min != "none"):
                 panel_anim = True
                 if os.path.isfile(panel_json):
@@ -1596,9 +1635,104 @@ def _ensure_window_button_svgs(buttons_style: str, accent_hex: str) -> dict:
     return out
 
 
-def apply_window_decorations(buttons_style: str = None, corner_radius: int = None, accent_hex: str = None) -> dict:
-    """Zapisuje styl przycisków, zaokrąglenie ramek okien i kolory akcentu w Wayfire, pixdecor oraz GTK."""
-    ensure_user_configs()
+_GTK_COMMON_DEFAULTS = {
+    "gtk-theme-name": "Adwaita-dark",
+    "gtk-icon-theme-name": "Papirus-Dark",
+    "gtk-font-name": "JetBrains Mono 10",
+    "gtk-cursor-theme-name": "Adwaita",
+    "gtk-cursor-theme-size": "24",
+    "gtk-application-prefer-dark-theme": "1",
+    "gtk-enable-animations": "1",
+    "gtk-decoration-layout": ":minimize,maximize,close",
+}
+
+_GTK3_EXTRA_DEFAULTS = {
+    "gtk-toolbar-style": "GTK_TOOLBAR_BOTH_HORIZ",
+    "gtk-toolbar-icon-size": "GTK_ICON_SIZE_LARGE_TOOLBAR",
+    "gtk-button-images": "1",
+    "gtk-menu-images": "1",
+    "gtk-enable-event-sounds": "1",
+    "gtk-enable-input-feedback-sounds": "0",
+    "gtk-xft-antialias": "1",
+    "gtk-xft-hinting": "1",
+    "gtk-xft-hintstyle": "hintslight",
+    "gtk-xft-rgba": "rgb",
+}
+
+
+def _get_button_layouts(buttons_style: str) -> tuple:
+    """Zwraca (wayfire_decoration_order, pixdecor_and_gtk_layout) dla wybranego stylu przycisków."""
+    if str(buttons_style).lower() == "circles_left":
+        return "close minimize maximize", "close,maximize,minimize:"
+    return "minimize maximize close", ":minimize,maximize,close"
+
+
+def sync_gtk_settings(decoration_layout: str = None, animations: bool = None) -> None:
+    """Aktualizuje ~/.config/gtk-3.0/settings.ini oraz gtk-4.0/settings.ini, zachowując spójność układu przycisków i motywu."""
+    updates = {}
+    if decoration_layout is not None:
+        updates["gtk-decoration-layout"] = decoration_layout
+    if animations is not None:
+        updates["gtk-enable-animations"] = "1" if animations else "0"
+
+    for gtk_ver in ("gtk-3.0", "gtk-4.0"):
+        ini_path = os.path.join(xdg_config_home(), gtk_ver, "settings.ini")
+        defaults = dict(_GTK_COMMON_DEFAULTS)
+        if gtk_ver == "gtk-3.0":
+            defaults.update(_GTK3_EXTRA_DEFAULTS)
+        try:
+            raw = ""
+            if os.path.isfile(ini_path):
+                with open(ini_path, "r", encoding="utf-8") as f:
+                    raw = f.read()
+
+            existing = {}
+            other_lines = []
+            in_settings = False
+            for line in raw.splitlines():
+                s = line.strip()
+                if s.startswith("[") and s.endswith("]"):
+                    in_settings = (s == "[Settings]")
+                    if not in_settings:
+                        other_lines.append(line)
+                    continue
+                if in_settings and "=" in s and not s.startswith("#") and not s.startswith(";"):
+                    k, v = s.split("=", 1)
+                    existing[k.strip()] = v.strip()
+                elif not in_settings and s:
+                    other_lines.append(line)
+
+            merged = dict(defaults)
+            merged.update(existing)
+            merged.update(updates)
+
+            out_lines = ["[Settings]"]
+            for k, v in merged.items():
+                out_lines.append(f"{k} = {v}")
+            if other_lines:
+                out_lines.append("")
+                out_lines.extend(other_lines)
+            atomic_write_text(ini_path, "\n".join(out_lines).rstrip() + "\n", mode=0o644)
+        except Exception:
+            pass
+
+
+def sync_gnome_wm_button_layout(gtk_layout: str) -> None:
+    """Synchronizuje układ przycisków w org.gnome.desktop.wm.preferences (dla GTK4, przeglądarek, Flatpak i portalu)."""
+    if not shutil.which("gsettings"):
+        return
+    run_cmd(["gsettings", "set", "org.gnome.desktop.wm.preferences", "button-layout", gtk_layout], timeout=2)
+
+
+def apply_window_decorations(
+    buttons_style: str = None,
+    corner_radius: int = None,
+    accent_hex: str = None,
+    _from_ensure: bool = False,
+) -> dict:
+    """Zapisuje styl przycisków, zaokrąglenie ramek okien i kolory akcentu w Wayfire, pixdecor, GTK oraz GSettings."""
+    if not _from_ensure:
+        ensure_user_configs()
     panel_file = os.path.join(okay_config_dir(), "panel.json")
     cfg = {}
     if os.path.isfile(panel_file):
@@ -1632,43 +1766,71 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
     cfg["accent_color"] = accent_hex
     atomic_write_json(panel_file, normalize_panel_config(cfg))
 
-    wf_layout = "close minimize maximize" if buttons_style == "circles_left" else "minimize maximize close"
-    pix_layout = "close,maximize,minimize:" if buttons_style == "circles_left" else ":minimize,maximize,close"
+    wf_layout, pix_layout = _get_button_layouts(buttons_style)
     contrast_text = compute_contrast_text(accent_hex)
     svg_opts = _ensure_window_button_svgs(buttons_style, accent_hex)
 
-    # Stylizacja przycisków okna GTK3/GTK4 CSD (kompatybilna z rectangles / circles_* / windows)
+    # Synchronizacja układu przycisków w GTK3/GTK4 settings.ini oraz GSettings (przeglądarki, Flatpak, libadwaita)
+    sync_gtk_settings(decoration_layout=pix_layout)
+    sync_gnome_wm_button_layout(pix_layout)
+
+    # Stylizacja przycisków okna GTK3/GTK4/libadwaita CSD (kompatybilna z rectangles / circles_* / windows)
+    btn_sel = "headerbar button.titlebutton, .titlebar button.titlebutton, headerbar windowcontrols > button, windowcontrols > button"
+    img_sel = "headerbar button.titlebutton image, .titlebar button.titlebutton image, headerbar windowcontrols > button image, windowcontrols > button image"
     if buttons_style in ("circles_left", "circles_right"):
         gtk_btn_css = (
-            f"headerbar button.titlebutton, .titlebar button.titlebutton {{\n"
+            f"{btn_sel} {{\n"
             f"    border-radius: 999px;\n"
             f"    min-width: 14px; min-height: 14px;\n"
             f"    padding: 2px; margin: 0 3px;\n"
+            f"    background-image: none;\n"
+            f"    border: none;\n"
+            f"    box-shadow: none;\n"
             f"}}\n"
-            f"headerbar button.titlebutton image, .titlebar button.titlebutton image {{ opacity: 0; }}\n"
-            f"headerbar button.titlebutton:hover image, .titlebar button.titlebutton:hover image {{ opacity: 1; }}\n"
-            f"headerbar button.titlebutton.close, .titlebar button.titlebutton.close {{ background: #ff5f57; color: #1e1e2e; }}\n"
-            f"headerbar button.titlebutton.minimize, .titlebar button.titlebutton.minimize {{ background: #febc2e; color: #1e1e2e; }}\n"
-            f"headerbar button.titlebutton.maximize, .titlebar button.titlebutton.maximize {{ background: #28c840; color: #1e1e2e; }}\n"
+            f"{img_sel} {{ opacity: 0; }}\n"
+            f"headerbar button.titlebutton:hover image, .titlebar button.titlebutton:hover image,\n"
+            f"headerbar windowcontrols > button:hover image, windowcontrols > button:hover image {{ opacity: 1; }}\n"
+            f"headerbar button.titlebutton.close, .titlebar button.titlebutton.close,\n"
+            f"headerbar windowcontrols > button.close, windowcontrols > button.close {{ background-color: #ff5f57; color: #1e1e2e; }}\n"
+            f"headerbar button.titlebutton.minimize, .titlebar button.titlebutton.minimize,\n"
+            f"headerbar windowcontrols > button.minimize, windowcontrols > button.minimize {{ background-color: #febc2e; color: #1e1e2e; }}\n"
+            f"headerbar button.titlebutton.maximize, .titlebar button.titlebutton.maximize,\n"
+            f"headerbar windowcontrols > button.maximize, windowcontrols > button.maximize {{ background-color: #28c840; color: #1e1e2e; }}\n"
         )
     elif buttons_style == "windows":
         gtk_btn_css = (
-            f"headerbar button.titlebutton, .titlebar button.titlebutton {{\n"
+            f"{btn_sel} {{\n"
             f"    border-radius: 4px;\n"
             f"    min-width: 28px; min-height: 24px;\n"
+            f"    background-image: none;\n"
+            f"    background-color: transparent;\n"
+            f"    border: none;\n"
+            f"    box-shadow: none;\n"
+            f"    color: #cdd6f4;\n"
             f"}}\n"
-            f"headerbar button.titlebutton.close:hover, .titlebar button.titlebutton.close:hover {{ background: #e81123; color: #ffffff; }}\n"
-            f"headerbar button.titlebutton:not(.close):hover, .titlebar button.titlebutton:not(.close):hover {{ background: alpha({accent_hex}, 0.28); }}\n"
+            f"headerbar button.titlebutton.close:hover, .titlebar button.titlebutton.close:hover,\n"
+            f"headerbar windowcontrols > button.close:hover, windowcontrols > button.close:hover {{ background-color: #e81123; color: #ffffff; }}\n"
+            f"headerbar button.titlebutton:not(.close):hover, .titlebar button.titlebutton:not(.close):hover,\n"
+            f"headerbar windowcontrols > button:not(.close):hover, windowcontrols > button:not(.close):hover {{ background-color: alpha({accent_hex}, 0.28); }}\n"
         )
     else:
         gtk_btn_css = (
-            f"headerbar button.titlebutton, .titlebar button.titlebutton {{\n"
+            f"{btn_sel} {{\n"
             f"    border-radius: 5px;\n"
-            f"    background: #313244;\n"
+            f"    background-image: none;\n"
+            f"    background-color: #313244;\n"
+            f"    border: 1px solid #45475a;\n"
+            f"    box-shadow: none;\n"
+            f"    color: #cdd6f4;\n"
             f"    min-width: 22px; min-height: 20px;\n"
+            f"    padding: 2px; margin: 0 2px;\n"
             f"}}\n"
-            f"headerbar button.titlebutton.close:hover, .titlebar button.titlebutton.close:hover {{ background: #f38ba8; color: #11111b; }}\n"
-            f"headerbar button.titlebutton:not(.close):hover, .titlebar button.titlebutton:not(.close):hover {{ background: {accent_hex}; color: {contrast_text}; }}\n"
+            f"headerbar button.titlebutton.close, .titlebar button.titlebutton.close,\n"
+            f"headerbar windowcontrols > button.close, windowcontrols > button.close {{ color: #f38ba8; }}\n"
+            f"headerbar button.titlebutton.close:hover, .titlebar button.titlebutton.close:hover,\n"
+            f"headerbar windowcontrols > button.close:hover, windowcontrols > button.close:hover {{ background-color: #f38ba8; border-color: #f38ba8; color: #11111b; }}\n"
+            f"headerbar button.titlebutton:not(.close):hover, .titlebar button.titlebutton:not(.close):hover,\n"
+            f"headerbar windowcontrols > button:not(.close):hover, windowcontrols > button:not(.close):hover {{ background-color: {accent_hex}; border-color: {accent_hex}; color: {contrast_text}; }}\n"
         )
 
     # Wymuszenie zaokrąglenia narożników i koloru ramki w aplikacjach GTK3 / GTK4
@@ -1794,28 +1956,7 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
 
 def sync_gtk_animations(enabled: bool) -> None:
     """Synchronizuje animacje GTK (settings.ini) oraz kompozytora Wayfire (~/.config/wayfire.ini)."""
-    val = "1" if enabled else "0"
-    for gtk_ver in ("gtk-3.0", "gtk-4.0"):
-        ini_path = os.path.join(xdg_config_home(), gtk_ver, "settings.ini")
-        try:
-            content = "[Settings]\n"
-            if os.path.isfile(ini_path):
-                with open(ini_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-            if re.search(r"^gtk-enable-animations\s*=.*$", content, flags=re.MULTILINE):
-                content = re.sub(
-                    r"^(gtk-enable-animations\s*=\s*).*$",
-                    rf"\g<1>{val}",
-                    content,
-                    flags=re.MULTILINE,
-                )
-            else:
-                if "[Settings]" not in content:
-                    content = "[Settings]\n" + content
-                content = content.rstrip() + f"\ngtk-enable-animations = {val}\n"
-            atomic_write_text(ini_path, content, mode=0o644)
-        except Exception:
-            pass
+    sync_gtk_settings(animations=bool(enabled))
 
     if enabled:
         update_wayfire_section("animate", {
@@ -1917,6 +2058,6 @@ def update_system_accent_color(new_accent: str) -> dict:
         "status": "ok",
         "accent": clean_hex,
         "notes": notes,
-        "contrast": contrast_text,
-        "hover": hover_hex,
+        "contrast": compute_contrast_text(clean_hex),
+        "hover": compute_hover_hex(clean_hex),
     }

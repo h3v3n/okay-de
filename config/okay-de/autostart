@@ -6,12 +6,18 @@
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 if command -v gsettings >/dev/null 2>&1; then
     (
+        BTN_LAYOUT=':minimize,maximize,close'
+        PANEL_JSON="${XDG_CONFIG_HOME:-$HOME/.config}/okay-de/panel.json"
+        if [ -f "$PANEL_JSON" ] && grep -qE '"window_buttons_style"[[:space:]]*:[[:space:]]*"circles_left"' "$PANEL_JSON" 2>/dev/null; then
+            BTN_LAYOUT='close,maximize,minimize:'
+        fi
         gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' 2>/dev/null || true
         gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark' 2>/dev/null || true
         gsettings set org.gnome.desktop.interface icon-theme 'Papirus-Dark' 2>/dev/null || true
         gsettings set org.gnome.desktop.interface cursor-theme 'Adwaita' 2>/dev/null || true
         gsettings set org.gnome.desktop.interface cursor-size 24 2>/dev/null || true
         gsettings set org.gnome.desktop.interface font-name 'JetBrains Mono 10' 2>/dev/null || true
+        gsettings set org.gnome.desktop.wm.preferences button-layout "$BTN_LAYOUT" 2>/dev/null || true
     ) &
 fi
 

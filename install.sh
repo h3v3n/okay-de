@@ -339,6 +339,7 @@ def patch_section(txt, sec, updates, drop=()):
     out = []
     cur = ""
     found = False
+    skip_dup = False
     pend = dict(updates)
     drop_s = set(drop)
     for ln in lines:
@@ -348,10 +349,22 @@ def patch_section(txt, sec, updates, drop=()):
                 for k, v in pend.items():
                     out.append(f"{k} = {v}")
                 pend.clear()
-            cur = s[1:-1].strip()
-            if cur == sec:
-                found = True
-            out.append(ln)
+            sec_name = s[1:-1].strip()
+            if sec_name == sec:
+                if not found:
+                    found = True
+                    cur = sec_name
+                    skip_dup = False
+                    out.append(ln)
+                else:
+                    cur = ""
+                    skip_dup = True
+            else:
+                cur = sec_name
+                skip_dup = False
+                out.append(ln)
+            continue
+        if skip_dup:
             continue
         if cur == sec and "=" in s and not s.startswith("#") and not s.startswith(";"):
             k = s.split("=", 1)[0].strip()
@@ -520,9 +533,17 @@ PYEOF
         sed -i -E 's/\|[[:space:]]*app_id is "fuzzel"/| app_id is "okay-menu" | app_id is "okay-powermenu" | app_id is "okay-clipboard"/g' "$XDG_CFG/wayfire.ini" 2>/dev/null || true
     fi
 
-    # Migracja istniejącego autostartu użytkownika dla okay-desktop
+    # Migracja istniejącego autostartu użytkownika dla okay-desktop oraz układu przycisków okien CSD (gsettings)
     if [ -f "$OKAY_CFG_DIR/autostart" ] && ! grep -q "okay-desktop" "$OKAY_CFG_DIR/autostart" 2>/dev/null; then
         printf '\n# Natywny pulpit OKay DE\n(\n    sleep 0.3\n    DESKTOP_LOG="${XDG_RUNTIME_DIR:-/tmp}/okay-desktop.log"\n    if [ -x "$HOME/.local/bin/okay-desktop" ]; then\n        "$HOME/.local/bin/okay-desktop" > "$DESKTOP_LOG" 2>&1 &\n    elif command -v okay-desktop >/dev/null 2>&1; then\n        okay-desktop > "$DESKTOP_LOG" 2>&1 &\n    fi\n) &\n' >> "$OKAY_CFG_DIR/autostart"
+    fi
+    if [ -f "$OKAY_CFG_DIR/autostart" ] && ! grep -q "org.gnome.desktop.wm.preferences" "$OKAY_CFG_DIR/autostart" 2>/dev/null; then
+        printf '\n# Układ przycisków okien CSD (minimalizacja, maksymalizacja, zamknięcie zamiast stylu GNOME)\nif command -v gsettings >/dev/null 2>&1; then\n    (\n        BTN_LAYOUT=":minimize,maximize,close"\n        PANEL_JSON="${XDG_CONFIG_HOME:-$HOME/.config}/okay-de/panel.json"\n        if [ -f "$PANEL_JSON" ] && grep -qE '\''"window_buttons_style"[[:space:]]*:[[:space:]]*"circles_left"'\'' "$PANEL_JSON" 2>/dev/null; then\n            BTN_LAYOUT="close,maximize,minimize:"\n        fi\n        gsettings set org.gnome.desktop.wm.preferences button-layout "$BTN_LAYOUT" 2>/dev/null || true\n    ) &\nfi\n' >> "$OKAY_CFG_DIR/autostart"
+    fi
+
+    # Synchronizacja ustawień GTK3/GTK4 (settings.ini, gtk.css), GSettings (button-layout) oraz Wayfire z nowym kodem
+    if command -v python3 >/dev/null 2>&1 && [ -f "$OKAY_DATA_DIR/settings/helpers.py" ]; then
+        PYTHONPATH="$OKAY_DATA_DIR" python3 -c "from settings.helpers import apply_window_decorations; apply_window_decorations(_from_ensure=True)" >/dev/null 2>&1 || true
     fi
 
     # Czyszczenie przestarzałych plików okay-dock (bez ubijania aktywnego okay-settings w trakcie aktualizacji)

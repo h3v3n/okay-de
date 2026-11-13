@@ -105,6 +105,36 @@ fi
 [ -f "$OKAY_CFG/autostart" ] && chmod +x "$OKAY_CFG/autostart" 2>/dev/null || true
 [ -f "/etc/xdg/okay-de/autostart" ] && chmod +x "/etc/xdg/okay-de/autostart" 2>/dev/null || true
 
+# Synchronizacja układu przycisków okien CSD (GTK3/GTK4/przeglądarki) przed startem sesji
+BTN_LAYOUT=":minimize,maximize,close"
+if [ -f "$OKAY_CFG/panel.json" ] && grep -qE '"window_buttons_style"[[:space:]]*:[[:space:]]*"circles_left"' "$OKAY_CFG/panel.json" 2>/dev/null; then
+    BTN_LAYOUT="close,maximize,minimize:"
+fi
+for gtk_ver in gtk-3.0 gtk-4.0; do
+    GTK_INI="$XDG_CFG/$gtk_ver/settings.ini"
+    if [ ! -f "$GTK_INI" ]; then
+        mkdir -p "$XDG_CFG/$gtk_ver"
+        for tmpl_cand in \
+            "/etc/xdg/$gtk_ver/settings.ini" \
+            "/etc/skel/.config/$gtk_ver/settings.ini"; do
+            if [ -f "$tmpl_cand" ]; then
+                cp "$tmpl_cand" "$GTK_INI" 2>/dev/null || true
+                break
+            fi
+        done
+    fi
+    if [ -f "$GTK_INI" ]; then
+        if grep -qE '^gtk-decoration-layout[[:space:]]*=' "$GTK_INI" 2>/dev/null; then
+            sed -i -E "s|^gtk-decoration-layout[[:space:]]*=.*|gtk-decoration-layout = $BTN_LAYOUT|" "$GTK_INI" 2>/dev/null || true
+        else
+            printf 'gtk-decoration-layout = %s\n' "$BTN_LAYOUT" >> "$GTK_INI" 2>/dev/null || true
+        fi
+    fi
+done
+if command -v gsettings >/dev/null 2>&1; then
+    gsettings set org.gnome.desktop.wm.preferences button-layout "$BTN_LAYOUT" 2>/dev/null || true
+fi
+
 # Uruchomienie kompozytora Wayfire
 if command -v wayfire >/dev/null 2>&1; then
     exec wayfire
