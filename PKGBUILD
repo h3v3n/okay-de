@@ -28,10 +28,13 @@ depends=(
     'gtk-layer-shell'
     'python'
     'python-gobject'
+    'librsvg'
+    'cairo'
+    'pango'
     'wlr-randr'
 )
 optdepends=(
-    'pixdecor: zaokrąglone narożniki okien i rozszerzone dekoracje SSD dla Wayfire (z AUR)'
+    'pixdecor: zaokrąglone narożniki okien i rozszerzone dekoracje SSD dla Wayfire (z AUR lub budowane przez install.sh)'
     'wayfire-plugins-extra: dodatkowe efekty i wtyczki dla Wayfire (z AUR)'
     'wlrctl: opcjonalne narzędzie CLI dla wlroots (z AUR)'
     'pavucontrol: zaawansowany mikser dźwięku dla PipeWire'

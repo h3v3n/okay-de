@@ -27,6 +27,7 @@ from .helpers import (
     compute_contrast_text,
     apply_settings_css,
     apply_window_decorations,
+    is_pixdecor_installed,
     update_system_accent_color,
     sync_gtk_animations,
     run_async,
@@ -422,10 +423,15 @@ class PanelTab(Gtk.Box):
                 accent_hex=self._current_accent
             )
 
-        def _on_done(_res):
-            self.lbl_status.set_text(
-                f"Zastosowano styl okien (przyciski={btn_style}, zaokrąglenie={corner_radius}px). Zaktualizowano Wayfire."
-            )
+        def _on_done(res):
+            if isinstance(res, dict) and res.get("pixdecor_active"):
+                self.lbl_status.set_text(
+                    f"Zastosowano styl okien pixdecor (przyciski={btn_style}, zaokrąglenie={corner_radius}px). Zaktualizowano Wayfire."
+                )
+            else:
+                self.lbl_status.set_text(
+                    f"Zastosowano kolor/układ [decoration] (przyciski={btn_style}). Zaokrąglenia SSD i kształty ikon wymagają pixdecor (sudo ./install.sh --system)."
+                )
 
         def _on_err(exc):
             self.lbl_status.set_text(f"Błąd zmiany dekoracji okien: {exc}")

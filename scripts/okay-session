@@ -87,11 +87,18 @@ if [ ! -f "$OKAY_CFG/panel.json" ]; then
     done
 fi
 
-# Jeśli dostępny jest plugin pixdecor (wayfire-plugins-extra), automatycznie aktywuj go zamiast decoration
-if [ -f "$WF_INI" ] && { [ -f /usr/lib/wayfire/libpixdecor.so ] || [ -f /usr/local/lib/wayfire/libpixdecor.so ]; }; then
+# Ścieżki wtyczek i metadanych Wayfire (obsługa pixdecor w katalogu użytkownika i systemowym)
+XDG_DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
+export WAYFIRE_PLUGIN_PATH="${XDG_DATA}/wayfire/plugins:/usr/lib/wayfire:/usr/local/lib/wayfire${WAYFIRE_PLUGIN_PATH:+:$WAYFIRE_PLUGIN_PATH}"
+export WAYFIRE_PLUGIN_XML_PATH="${XDG_DATA}/wayfire/metadata:/usr/share/wayfire/metadata:/usr/local/share/wayfire/metadata${WAYFIRE_PLUGIN_XML_PATH:+:$WAYFIRE_PLUGIN_XML_PATH}"
+
+# Jeśli dostępny jest plugin pixdecor, automatycznie aktywuj go zamiast decoration
+if [ -f "$WF_INI" ] && { [ -f "$XDG_DATA/wayfire/plugins/libpixdecor.so" ] || [ -f /usr/lib/wayfire/libpixdecor.so ] || [ -f /usr/local/lib/wayfire/libpixdecor.so ]; }; then
     if grep -qE '^plugins\s*=.*\bdecoration\b' "$WF_INI" 2>/dev/null && ! grep -qE '^plugins\s*=.*\bpixdecor\b' "$WF_INI" 2>/dev/null; then
         sed -i -E 's/(^plugins\s*=.*)\bdecoration\b/\1pixdecor/' "$WF_INI" 2>/dev/null || true
     fi
+elif [ -f "$WF_INI" ] && grep -qE '^plugins\s*=.*\bpixdecor\b' "$WF_INI" 2>/dev/null; then
+    sed -i -E 's/(^plugins\s*=.*)\bpixdecor\b/\1decoration/' "$WF_INI" 2>/dev/null || true
 fi
 
 # Zapewnienie uprawnień wykonywalności dla autostartu

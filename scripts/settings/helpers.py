@@ -93,6 +93,56 @@ def blend_hex_color(base_hex: str, accent_hex: str, ratio: float = 0.08) -> str:
     )
 
 
+def hex_to_wf_rgba(hex_color: str, alpha: float = 1.0) -> str:
+    """Konwertuje kolor #RRGGBB na format RGBA (float 0.0-1.0) wymagany przez wf-config / Wayfire."""
+    r, g, b = parse_hex_rgb(hex_color)
+    a = max(0.0, min(1.0, float(alpha)))
+    return f"{r / 255.0:.4f} {g / 255.0:.4f} {b / 255.0:.4f} {a:.4f}"
+
+
+def is_pixdecor_installed() -> bool:
+    """Sprawdza, czy wtyczka Wayfire pixdecor (libpixdecor.so) jest dostępna w systemie lub katalogu użytkownika."""
+    candidates = [
+        os.path.join(xdg_data_home(), "wayfire", "plugins", "libpixdecor.so"),
+        "/usr/lib/wayfire/libpixdecor.so",
+        "/usr/local/lib/wayfire/libpixdecor.so",
+        "/usr/lib/x86_64-linux-gnu/wayfire/libpixdecor.so",
+        "/usr/lib/aarch64-linux-gnu/wayfire/libpixdecor.so",
+    ]
+    extra_env = os.environ.get("WAYFIRE_PLUGIN_PATH", "")
+    for d in extra_env.split(":"):
+        if d.strip():
+            candidates.append(os.path.join(d.strip(), "libpixdecor.so"))
+    return any(os.path.isfile(p) for p in candidates)
+
+
+def ensure_wayfire_decorator_plugin() -> bool:
+    """Synchronizuje w [core] plugins aktywną wtyczkę dekoracji (pixdecor gdy dostępna, inaczej decoration)."""
+    wf_ini = wayfire_config_file()
+    if not os.path.isfile(wf_ini):
+        return False
+    plugins_line = read_wayfire_value("core", "plugins", "")
+    if not plugins_line:
+        return False
+    tokens = plugins_line.split()
+    has_pix = is_pixdecor_installed()
+    if has_pix and "pixdecor" not in tokens:
+        if "decoration" in tokens:
+            new_tokens = ["pixdecor" if t == "decoration" else t for t in tokens]
+        else:
+            new_tokens = tokens + ["pixdecor"]
+        update_wayfire_section("core", {"plugins": " ".join(new_tokens)})
+        return True
+    if not has_pix and "pixdecor" in tokens:
+        if "decoration" not in tokens:
+            new_tokens = ["decoration" if t == "pixdecor" else t for t in tokens]
+        else:
+            new_tokens = [t for t in tokens if t != "pixdecor"]
+        update_wayfire_section("core", {"plugins": " ".join(new_tokens)})
+        return True
+    return False
+
+
 SETTINGS_CSS_TEMPLATE = """
 window#okay-settings {
     background-color: __BG_WIN__;
@@ -768,8 +818,8 @@ def read_wayfire_value(section: str, key: str, default: str = "") -> str:
     return default
 
 
-def update_wayfire_section(section: str, updates: dict) -> bool:
-    """Atomowo aktualizuje lub dopisuje klucze w sekcji [section] pliku ~/.config/wayfire.ini."""
+def update_wayfire_section(section: str, updates: dict, remove_keys: set = None) -> bool:
+    """Atomowo aktualizuje, dopisuje lub usuwa klucze w sekcji [section] pliku ~/.config/wayfire.ini."""
     wf_ini = wayfire_config_file()
     if not os.path.isfile(wf_ini):
         tmpl = wayfire_template_file()
@@ -792,6 +842,7 @@ def update_wayfire_section(section: str, updates: dict) -> bool:
     in_sec = False
     sec_found = False
     pending = {str(k): str(v) for k, v in updates.items()}
+    drop_set = {str(k) for k in remove_keys} if remove_keys else set()
 
     def _flush_pending():
         for pk, pv in pending.items():
@@ -810,6 +861,8 @@ def update_wayfire_section(section: str, updates: dict) -> bool:
             continue
         if in_sec and "=" in s and not s.startswith("#") and not s.startswith(";"):
             k = s.split("=", 1)[0].strip()
+            if k in drop_set and k not in pending:
+                continue
             if k in pending:
                 out_lines.append(f"{k} = {pending.pop(k)}")
                 continue
@@ -1192,7 +1245,7 @@ def ensure_user_configs() -> None:
             except Exception:
                 pass
 
-    # 8b. Konfiguracja Wayfire (~/.config/wayfire.ini)
+    # 8b. Konfiguracja Wayfire (~/.config/wayfire.ini) oraz migracja starych kluczy/kolorów
     created_wf = False
     wf_ini = wayfire_config_file()
     if not os.path.exists(wf_ini):
@@ -1203,14 +1256,34 @@ def ensure_user_configs() -> None:
                 created_wf = True
             except Exception:
                 pass
-    if os.path.isfile(wf_ini) and (
-        os.path.isfile("/usr/lib/wayfire/libpixdecor.so")
-        or os.path.isfile("/usr/local/lib/wayfire/libpixdecor.so")
-    ):
-        plugins_line = read_wayfire_value("core", "plugins", "")
-        if plugins_line and "pixdecor" not in plugins_line.split() and "decoration" in plugins_line.split():
-            new_plugins = re.sub(r"\bdecoration\b", "pixdecor", plugins_line)
-            update_wayfire_section("core", {"plugins": new_plugins})
+    if os.path.isfile(wf_ini):
+        try:
+            ensure_wayfire_decorator_plugin()
+            dec_active = read_wayfire_value("decoration", "active_color", "")
+            pix_active = read_wayfire_value("pixdecor", "active_color", "")
+            pix_layout = read_wayfire_value("pixdecor", "button_layout", "")
+            pix_fg = read_wayfire_value("pixdecor", "fg_color", "")
+            anim_min = read_wayfire_value("animate", "minimize_animation", "")
+            anim_open = read_wayfire_value("animate", "open_animation", "")
+
+            if (
+                dec_active.startswith("#")
+                or pix_fg.startswith("#")
+                or bool(pix_active)
+                or not pix_layout
+            ):
+                apply_window_decorations()
+            if anim_min == "fade" or (anim_open == "fade" and anim_min != "none"):
+                panel_anim = True
+                if os.path.isfile(panel_json):
+                    try:
+                        with open(panel_json, "r", encoding="utf-8") as f:
+                            panel_anim = bool(json.load(f).get("animations", True))
+                    except Exception:
+                        pass
+                sync_gtk_animations(panel_anim)
+        except Exception:
+            pass
 
     if created_fuzzel or created_mako or created_wf:
         cur_accent = get_current_accent_color()
@@ -1512,8 +1585,79 @@ class UpdateManager:
         return out
 
 
+def _ensure_window_button_svgs(buttons_style: str, accent_hex: str) -> dict:
+    """Generuje ikony SVG przycisków okna dla wtyczki Wayfire pixdecor."""
+    btn_dir = os.path.join(okay_data_dir(), "window-buttons", buttons_style)
+    try:
+        os.makedirs(btn_dir, exist_ok=True)
+    except Exception:
+        return {}
+
+    contrast = compute_contrast_text(accent_hex)
+    if buttons_style in ("circles_left", "circles_right"):
+        specs = {
+            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="6" fill="#ff5f57"/></svg>',
+            "close-hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="6.5" fill="#ff5f57"/><path d="M6.4 6.4 L11.6 11.6 M11.6 6.4 L6.4 11.6" stroke="#1e1e2e" stroke-width="1.5" stroke-linecap="round"/></svg>',
+            "minimize.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="6" fill="#febc2e"/></svg>',
+            "minimize-hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="6.5" fill="#febc2e"/><path d="M5.8 9 L12.2 9" stroke="#1e1e2e" stroke-width="1.6" stroke-linecap="round"/></svg>',
+            "maximize.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="6" fill="#28c840"/></svg>',
+            "maximize-hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="6.5" fill="#28c840"/><rect x="6.2" y="6.2" width="5.6" height="5.6" rx="0.8" fill="none" stroke="#1e1e2e" stroke-width="1.4"/></svg>',
+            "restore.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="6" fill="#28c840"/></svg>',
+            "restore-hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="6.5" fill="#28c840"/><path d="M6.8 6.8 H11.5 V11.5 M6 7.8 H10.2 V12 H6 Z" fill="none" stroke="#1e1e2e" stroke-width="1.2"/></svg>',
+        }
+    elif buttons_style == "windows":
+        specs = {
+            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path d="M5.5 5.5 L12.5 12.5 M12.5 5.5 L5.5 12.5" stroke="#e6eaf5" stroke-width="1.35" stroke-linecap="round"/></svg>',
+            "close-hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="3" fill="#e81123"/><path d="M5.5 5.5 L12.5 12.5 M12.5 5.5 L5.5 12.5" stroke="#ffffff" stroke-width="1.45" stroke-linecap="round"/></svg>',
+            "minimize.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path d="M5 10.5 H13" stroke="#e6eaf5" stroke-width="1.35" stroke-linecap="round"/></svg>',
+            "minimize-hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="3" fill="{accent_hex}"/><path d="M5 10.5 H13" stroke="{contrast}" stroke-width="1.45" stroke-linecap="round"/></svg>',
+            "maximize.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="5" y="5" width="8" height="8" rx="0.8" fill="none" stroke="#e6eaf5" stroke-width="1.3"/></svg>',
+            "maximize-hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="3" fill="{accent_hex}"/><rect x="5" y="5" width="8" height="8" rx="0.8" fill="none" stroke="{contrast}" stroke-width="1.4"/></svg>',
+            "restore.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path d="M7 5 H13 V11 M5 7 H11 V13 H5 Z" fill="none" stroke="#e6eaf5" stroke-width="1.2"/></svg>',
+            "restore-hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="3" fill="{accent_hex}"/><path d="M7 5 H13 V11 M5 7 H11 V13 H5 Z" fill="none" stroke="{contrast}" stroke-width="1.3"/></svg>',
+        }
+    else:
+        # Styl "rectangles" (domyślne zaokrąglone prostokąty z akcentem)
+        specs = {
+            "close.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1.5" y="1.5" width="15" height="15" rx="3.5" fill="#313244" stroke="#45475a" stroke-width="1"/><path d="M6.2 6.2 L11.8 11.8 M11.8 6.2 L6.2 11.8" stroke="#f38ba8" stroke-width="1.5" stroke-linecap="round"/></svg>',
+            "close-hover.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1.5" y="1.5" width="15" height="15" rx="3.5" fill="#f38ba8"/><path d="M6.2 6.2 L11.8 11.8 M11.8 6.2 L6.2 11.8" stroke="#11111b" stroke-width="1.6" stroke-linecap="round"/></svg>',
+            "minimize.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1.5" y="1.5" width="15" height="15" rx="3.5" fill="#313244" stroke="#45475a" stroke-width="1"/><path d="M5.8 9.5 H12.2" stroke="#cdd6f4" stroke-width="1.5" stroke-linecap="round"/></svg>',
+            "minimize-hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1.5" y="1.5" width="15" height="15" rx="3.5" fill="{accent_hex}"/><path d="M5.8 9.5 H12.2" stroke="{contrast}" stroke-width="1.6" stroke-linecap="round"/></svg>',
+            "maximize.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1.5" y="1.5" width="15" height="15" rx="3.5" fill="#313244" stroke="#45475a" stroke-width="1"/><rect x="5.8" y="5.8" width="6.4" height="6.4" rx="1" fill="none" stroke="#cdd6f4" stroke-width="1.4"/></svg>',
+            "maximize-hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1.5" y="1.5" width="15" height="15" rx="3.5" fill="{accent_hex}"/><rect x="5.8" y="5.8" width="6.4" height="6.4" rx="1" fill="none" stroke="{contrast}" stroke-width="1.5"/></svg>',
+            "restore.svg": '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1.5" y="1.5" width="15" height="15" rx="3.5" fill="#313244" stroke="#45475a" stroke-width="1"/><path d="M7.2 5.4 H12.4 V10.6 M5.6 7 H10.8 V12.2 H5.6 Z" fill="none" stroke="#cdd6f4" stroke-width="1.2"/></svg>',
+            "restore-hover.svg": f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1.5" y="1.5" width="15" height="15" rx="3.5" fill="{accent_hex}"/><path d="M7.2 5.4 H12.4 V10.6 M5.6 7 H10.8 V12.2 H5.6 Z" fill="none" stroke="{contrast}" stroke-width="1.3"/></svg>',
+        }
+
+    key_map = {
+        "close.svg": "button_close_image",
+        "close-hover.svg": "button_close_hover_image",
+        "minimize.svg": "button_minimize_image",
+        "minimize-hover.svg": "button_minimize_hover_image",
+        "maximize.svg": "button_maximize_image",
+        "maximize-hover.svg": "button_maximize_hover_image",
+        "restore.svg": "button_restore_image",
+        "restore-hover.svg": "button_restore_hover_image",
+    }
+    out = {}
+    for fname, svg_data in specs.items():
+        fpath = os.path.join(btn_dir, fname)
+        try:
+            existing = ""
+            if os.path.isfile(fpath):
+                with open(fpath, "r", encoding="utf-8") as f:
+                    existing = f.read()
+            if existing != svg_data:
+                atomic_write_text(fpath, svg_data, mode=0o644)
+        except Exception:
+            pass
+        if fname in key_map:
+            out[key_map[fname]] = fpath
+    return out
+
+
 def apply_window_decorations(buttons_style: str = None, corner_radius: int = None, accent_hex: str = None) -> dict:
-    """Zapisuje styl przycisków, zaokrąglenie ramek okien w Wayfire / GTK oraz przeładowuje powiadomienia."""
+    """Zapisuje styl przycisków, zaokrąglenie ramek okien i kolory akcentu w Wayfire, pixdecor oraz GTK."""
     ensure_user_configs()
     panel_file = os.path.join(okay_config_dir(), "panel.json")
     cfg = {}
@@ -1548,9 +1692,44 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
     cfg["accent_color"] = accent_hex
     atomic_write_json(panel_file, normalize_panel_config(cfg))
 
-    layout = "close minimize maximize" if buttons_style == "circles_left" else "minimize maximize close"
+    wf_layout = "close minimize maximize" if buttons_style == "circles_left" else "minimize maximize close"
+    pix_layout = "close,maximize,minimize:" if buttons_style == "circles_left" else ":minimize,maximize,close"
+    title_bg = blend_hex_color("#181825", accent_hex, 0.12)
+    svg_opts = _ensure_window_button_svgs(buttons_style, accent_hex)
 
-    # Wymuszenie zaokrąglenia wszystkich 4 narożników w aplikacjach GTK3 / GTK4
+    # Stylizacja przycisków okna GTK3/GTK4 CSD (kompatybilna z rectangles / circles_* / windows)
+    if buttons_style in ("circles_left", "circles_right"):
+        gtk_btn_css = (
+            f"headerbar button.titlebutton, .titlebar button.titlebutton {{\n"
+            f"    border-radius: 999px;\n"
+            f"    min-width: 14px; min-height: 14px;\n"
+            f"    padding: 2px; margin: 0 3px;\n"
+            f"}}\n"
+            f"headerbar button.titlebutton.close, .titlebar button.titlebutton.close {{ background: #ff5f57; color: #1e1e2e; }}\n"
+            f"headerbar button.titlebutton.minimize, .titlebar button.titlebutton.minimize {{ background: #febc2e; color: #1e1e2e; }}\n"
+            f"headerbar button.titlebutton.maximize, .titlebar button.titlebutton.maximize {{ background: #28c840; color: #1e1e2e; }}\n"
+        )
+    elif buttons_style == "windows":
+        gtk_btn_css = (
+            f"headerbar button.titlebutton, .titlebar button.titlebutton {{\n"
+            f"    border-radius: 4px;\n"
+            f"    min-width: 28px; min-height: 24px;\n"
+            f"}}\n"
+            f"headerbar button.titlebutton.close:hover, .titlebar button.titlebutton.close:hover {{ background: #e81123; color: #ffffff; }}\n"
+            f"headerbar button.titlebutton:not(.close):hover, .titlebar button.titlebutton:not(.close):hover {{ background: alpha({accent_hex}, 0.28); }}\n"
+        )
+    else:
+        gtk_btn_css = (
+            f"headerbar button.titlebutton, .titlebar button.titlebutton {{\n"
+            f"    border-radius: 5px;\n"
+            f"    background: #313244;\n"
+            f"    min-width: 22px; min-height: 20px;\n"
+            f"}}\n"
+            f"headerbar button.titlebutton.close:hover, .titlebar button.titlebutton.close:hover {{ background: #f38ba8; color: #11111b; }}\n"
+            f"headerbar button.titlebutton:not(.close):hover, .titlebar button.titlebutton:not(.close):hover {{ background: {accent_hex}; color: {compute_contrast_text(accent_hex)}; }}\n"
+        )
+
+    # Wymuszenie zaokrąglenia narożników i koloru ramki w aplikacjach GTK3 / GTK4
     marker_start = "/* OKAY-DE-CORNERS-START */"
     marker_end = "/* OKAY-DE-CORNERS-END */"
     gtk3_block = (
@@ -1559,10 +1738,14 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         f"decoration, messagedialog, dialog, popover > contents, menu {{\n"
         f"    border-radius: {corner_radius}px;\n"
         f"}}\n"
+        f"window.csd decoration {{\n"
+        f"    border: 1px solid {accent_hex};\n"
+        f"}}\n"
         f"window.background > box, window.background > stack, window.background > paned {{\n"
         f"    border-bottom-left-radius: {corner_radius}px;\n"
         f"    border-bottom-right-radius: {corner_radius}px;\n"
         f"}}\n"
+        f"{gtk_btn_css}"
         f"{marker_end}\n"
     )
     gtk4_block = (
@@ -1572,6 +1755,10 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         f"    border-radius: {corner_radius}px;\n"
         f"    overflow: hidden;\n"
         f"}}\n"
+        f"window.csd decoration {{\n"
+        f"    border: 1px solid {accent_hex};\n"
+        f"}}\n"
+        f"{gtk_btn_css}"
         f"{marker_end}\n"
     )
     for gtk_ver, gtk_block in (("gtk-3.0", gtk3_block), ("gtk-4.0", gtk4_block)):
@@ -1621,17 +1808,36 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         except Exception:
             pass
 
-    # Aktualizacja Wayfire (~/.config/wayfire.ini przeładowuje się automatycznie) oraz mako
+    # Aktualizacja Wayfire (~/.config/wayfire.ini: format float RGBA wymagany przez wf-config)
+    ensure_wayfire_decorator_plugin()
     update_wayfire_section("decoration", {
-        "button_order": layout,
-        "active_color": f"{accent_hex}ff",
+        "button_order": wf_layout,
+        "active_color": hex_to_wf_rgba(accent_hex, 1.0),
+        "inactive_color": hex_to_wf_rgba("#313244", 1.0),
+        "border_size": "2",
     })
-    update_wayfire_section("pixdecor", {
-        "button_order": layout,
+    pix_updates = {
+        "titlebar": "true",
+        "csd_titlebar_height": "28",
+        "border_size": "2",
         "rounded_corner_radius": str(corner_radius),
-        "rounded_corners": "true" if corner_radius > 0 else "false",
-        "active_color": f"{accent_hex}ff",
-    })
+        "overlay_engine": "rounded_corners" if corner_radius > 0 else "none",
+        "always_decorate": "all",
+        "button_layout": pix_layout,
+        "fg_color": hex_to_wf_rgba(title_bg, 1.0),
+        "bg_color": hex_to_wf_rgba("#1e1e2e", 1.0),
+        "fg_text_color": "0.9412 0.9490 0.9765 1.0000",
+        "bg_text_color": "0.6510 0.6784 0.7843 1.0000",
+        "effect_color": hex_to_wf_rgba(accent_hex, 1.0),
+        "maximized_borders": "true",
+        "maximized_shadows": "true",
+    }
+    pix_updates.update(svg_opts)
+    update_wayfire_section(
+        "pixdecor",
+        pix_updates,
+        remove_keys={"rounded_corners", "active_color", "inactive_color", "button_order"},
+    )
 
     if shutil.which("makoctl"):
         run_cmd(["makoctl", "reload"], timeout=2)
@@ -1640,7 +1846,8 @@ def apply_window_decorations(buttons_style: str = None, corner_radius: int = Non
         "status": "ok",
         "buttons_style": buttons_style,
         "corner_radius": corner_radius,
-        "layout": layout,
+        "layout": wf_layout,
+        "pixdecor_active": is_pixdecor_installed(),
     }
 
 
@@ -1669,26 +1876,35 @@ def sync_gtk_animations(enabled: bool) -> None:
         except Exception:
             pass
 
-    anim_mode = "fade" if enabled else "none"
-    update_wayfire_section("animate", {
-        "open_animation": anim_mode,
-        "close_animation": anim_mode,
-        "minimize_animation": anim_mode,
-    })
+    if enabled:
+        update_wayfire_section("animate", {
+            "open_animation": "zoom",
+            "close_animation": "zoom",
+            "minimize_animation": "squeezimize",
+            "duration": "220",
+            "zoom_duration": "220",
+            "fade_duration": "180",
+            "squeezimize_duration": "250",
+            "fade_enabled_for": '(type is "overlay" | (type is "x-or" & focusable is true))',
+        })
+    else:
+        update_wayfire_section("animate", {
+            "open_animation": "none",
+            "close_animation": "none",
+            "minimize_animation": "none",
+            "fade_enabled_for": "none",
+        })
 
 
 def update_system_accent_color(new_accent: str) -> dict:
     """Aktualizuje kolor akcentu w całej przestrzeni użytkownika OKay DE:
     - ~/.config/okay-de/panel.json (klucz accent_color)
-    - ~/.config/wayfire.ini (sekcje [decoration] i [pixdecor])
+    - ~/.config/wayfire.ini (sekcje [decoration] i [pixdecor] w formacie float RGBA)
     - ~/.config/mako/config (border-color, background-color)
     - ~/.config/fuzzel/fuzzel.ini (prompt, match, selection-match, border, background)
     oraz przeładowuje powiadomienia (makoctl reload).
     """
     clean_hex = sanitize_hex_color(new_accent)
-    hover_hex = compute_hover_hex(clean_hex)
-    contrast_text = compute_contrast_text(clean_hex)
-    title_bg = blend_hex_color("#181825", clean_hex, 0.12)
     mako_bg = blend_hex_color("#1e1e2e", clean_hex, 0.08)
 
     notes = []
@@ -1713,12 +1929,10 @@ def update_system_accent_color(new_accent: str) -> dict:
     except Exception:
         pass
 
-    # 2. ~/.config/wayfire.ini
-    if update_wayfire_section("decoration", {"active_color": f"{clean_hex}ff"}) and update_wayfire_section("pixdecor", {"active_color": f"{clean_hex}ff", "fg_color": f"{title_bg}ff"}):
-        notes.append("wayfire.ini")
-
+    # 2. ~/.config/wayfire.ini ([decoration], [pixdecor], SVG przycisków, GTK CSS)
     try:
         apply_window_decorations(buttons_style=cur_btn_style, corner_radius=cur_radius, accent_hex=clean_hex)
+        notes.append("wayfire.ini")
         notes.append("decorations")
     except Exception:
         pass

@@ -16,8 +16,26 @@ if [ "$MODE" = "--system" ]; then
     # Instalacja pakietów systemowych (Wayfire jako kompozytor bazowy oraz zależności GTK3/Wayland)
     if command -v pacman >/dev/null 2>&1; then
         echo "Weryfikacja i instalacja pakietów systemowych (wayfire, gtk3, gtk-layer-shell, python-gobject, wlr-randr)..."
-        pacman -S --needed --noconfirm wayfire swaybg foot fuzzel mako pcmanfm swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber gtk3 gtk-layer-shell python python-gobject wlr-randr xdg-user-dirs papirus-icon-theme adwaita-icon-theme || \
+        pacman -S --needed --noconfirm wayfire swaybg foot fuzzel mako pcmanfm swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber gtk3 gtk-layer-shell python python-gobject wlr-randr xdg-user-dirs papirus-icon-theme adwaita-icon-theme librsvg meson ninja git pkgconf cairo pango || \
+            pacman -S --needed --noconfirm wayfire swaybg foot fuzzel mako pcmanfm swaylock grim slurp wl-clipboard cliphist brightnessctl wireplumber gtk3 gtk-layer-shell python python-gobject wlr-randr xdg-user-dirs papirus-icon-theme adwaita-icon-theme || \
             pacman -S --needed --noconfirm wayfire gtk3 gtk-layer-shell python-gobject wlr-randr
+    fi
+
+    # Opcjonalna kompilacja i instalacja wtyczki pixdecor (zaokrąglone narożniki okien i własne przyciski dla Wayfire)
+    if [ ! -f /usr/lib/wayfire/libpixdecor.so ] && [ ! -f /usr/local/lib/wayfire/libpixdecor.so ]; then
+        if command -v git >/dev/null 2>&1 && command -v meson >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && pkg-config --exists wayfire cairo pango librsvg-2.0 2>/dev/null; then
+            echo "Kompilowanie wtyczki Wayfire pixdecor (zaokrąglone narożniki i styl przycisków)..."
+            PIX_TMP="$(mktemp -d /tmp/okay-pixdecor-XXXXXX)"
+            if git clone --depth 1 https://github.com/soreau/pixdecor.git "$PIX_TMP/src" >/dev/null 2>&1; then
+                if meson setup "$PIX_TMP/build" "$PIX_TMP/src" --prefix=/usr >/dev/null 2>&1 && ninja -C "$PIX_TMP/build" >/dev/null 2>&1; then
+                    ninja -C "$PIX_TMP/build" install >/dev/null 2>&1 || true
+                    echo "Zainstalowano wtyczkę pixdecor w /usr/lib/wayfire."
+                else
+                    echo "Uwaga: Kompilacja pixdecor nie powiodła się — używam wbudowanej wtyczki decoration." >&2
+                fi
+            fi
+            rm -rf "$PIX_TMP" 2>/dev/null || true
+        fi
     fi
 
     # Instalacja reguł uprawnień Polkit i Sudoers dla okay-settings
@@ -232,10 +250,158 @@ elif [ "$MODE" = "--user" ]; then
     if [ -f config/wayfire/wayfire.ini ]; then
         atomic_copy_file config/wayfire/wayfire.ini "$OKAY_DATA_DIR/defaults/wayfire/wayfire.ini" 644
         copy_if_missing config/wayfire/wayfire.ini "$XDG_CFG/wayfire.ini" 644
-        if [ -f /usr/lib/wayfire/libpixdecor.so ] || [ -f /usr/local/lib/wayfire/libpixdecor.so ]; then
+
+        # Opcjonalna kompilacja pixdecor do przestrzeni użytkownika (~/.local/share/wayfire), jeśli systemowo brak wtyczki
+        if [ ! -f /usr/lib/wayfire/libpixdecor.so ] && [ ! -f /usr/local/lib/wayfire/libpixdecor.so ] && [ ! -f "$XDG_DATA/wayfire/plugins/libpixdecor.so" ]; then
+            if command -v git >/dev/null 2>&1 && command -v meson >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && pkg-config --exists wayfire cairo pango librsvg-2.0 2>/dev/null; then
+                echo "Budowanie wtyczki pixdecor w przestrzeni użytkownika ($XDG_DATA/wayfire)..."
+                PIX_TMP="$(mktemp -d "${TMPDIR:-/tmp}/okay-pixdecor-XXXXXX")"
+                if git clone --depth 1 https://github.com/soreau/pixdecor.git "$PIX_TMP/src" >/dev/null 2>&1 && \
+                   meson setup "$PIX_TMP/build" "$PIX_TMP/src" --prefix=/usr >/dev/null 2>&1 && \
+                   ninja -C "$PIX_TMP/build" >/dev/null 2>&1; then
+                    mkdir -p "$XDG_DATA/wayfire/plugins" "$XDG_DATA/wayfire/metadata"
+                    SO_BUILT="$(find "$PIX_TMP/build" -maxdepth 4 -name 'libpixdecor.so' | head -n 1)"
+                    XML_BUILT="$(find "$PIX_TMP/src" "$PIX_TMP/build" -maxdepth 4 -name 'pixdecor.xml' | head -n 1)"
+                    if [ -n "$SO_BUILT" ]; then
+                        install -m 755 "$SO_BUILT" "$XDG_DATA/wayfire/plugins/libpixdecor.so" 2>/dev/null || true
+                    fi
+                    if [ -n "$XML_BUILT" ]; then
+                        install -m 644 "$XML_BUILT" "$XDG_DATA/wayfire/metadata/pixdecor.xml" 2>/dev/null || true
+                    fi
+                fi
+                rm -rf "$PIX_TMP" 2>/dev/null || true
+            fi
+        fi
+
+        if [ -f "$XDG_DATA/wayfire/plugins/libpixdecor.so" ] || [ -f /usr/lib/wayfire/libpixdecor.so ] || [ -f /usr/local/lib/wayfire/libpixdecor.so ]; then
             if grep -qE '^plugins\s*=.*\bdecoration\b' "$XDG_CFG/wayfire.ini" 2>/dev/null && ! grep -qE '^plugins\s*=.*\bpixdecor\b' "$XDG_CFG/wayfire.ini" 2>/dev/null; then
                 sed -i -E 's/(^plugins\s*=.*)\bdecoration\b/\1pixdecor/' "$XDG_CFG/wayfire.ini" 2>/dev/null || true
             fi
+        fi
+
+        # Migracja istniejącego ~/.config/wayfire.ini: poprawne animacje ([animate]), kolory float RGBA i klucze pixdecor
+        if [ -f "$XDG_CFG/wayfire.ini" ] && command -v python3 >/dev/null 2>&1; then
+            python3 - "$XDG_CFG/wayfire.ini" "$OKAY_CFG_DIR/panel.json" <<'PYEOF'
+import json, os, re, sys, tempfile
+wf_path, panel_path = sys.argv[1], sys.argv[2]
+
+def parse_hex(h, default=(0, 230, 118)):
+    h = (h or "").strip()
+    if h.startswith("#"):
+        h = h[1:]
+    if len(h) >= 6:
+        try:
+            return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+        except Exception:
+            pass
+    return default
+
+def to_rgba(rgb, a=1.0):
+    return f"{rgb[0]/255.0:.4f} {rgb[1]/255.0:.4f} {rgb[2]/255.0:.4f} {a:.4f}"
+
+accent = "#00e676"
+btn_style = "rectangles"
+radius = 8
+anim_on = True
+if os.path.isfile(panel_path):
+    try:
+        with open(panel_path, "r", encoding="utf-8") as f:
+            pc = json.load(f)
+        accent = pc.get("accent_color", accent)
+        btn_style = str(pc.get("window_buttons_style", btn_style)).lower()
+        radius = int(pc.get("window_corner_radius", radius))
+        anim_on = bool(pc.get("animations", True))
+    except Exception:
+        pass
+
+acc_rgb = parse_hex(accent)
+title_rgb = tuple(int(b * 0.88 + a * 0.12) for b, a in zip((24, 24, 37), acc_rgb))
+wf_layout = "close minimize maximize" if btn_style == "circles_left" else "minimize maximize close"
+pix_layout = "close,maximize,minimize:" if btn_style == "circles_left" else ":minimize,maximize,close"
+
+with open(wf_path, "r", encoding="utf-8") as f:
+    raw = f.read()
+
+def patch_section(txt, sec, updates, drop=()):
+    lines = txt.splitlines()
+    out = []
+    cur = ""
+    found = False
+    pend = dict(updates)
+    drop_s = set(drop)
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("[") and s.endswith("]"):
+            if cur == sec and pend:
+                for k, v in pend.items():
+                    out.append(f"{k} = {v}")
+                pend.clear()
+            cur = s[1:-1].strip()
+            if cur == sec:
+                found = True
+            out.append(ln)
+            continue
+        if cur == sec and "=" in s and not s.startswith("#") and not s.startswith(";"):
+            k = s.split("=", 1)[0].strip()
+            if k in drop_s and k not in pend:
+                continue
+            if k in pend:
+                out.append(f"{k} = {pend.pop(k)}")
+                continue
+        out.append(ln)
+    if cur == sec and pend:
+        for k, v in pend.items():
+            out.append(f"{k} = {v}")
+        pend.clear()
+    elif not found and pend:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"[{sec}]")
+        for k, v in pend.items():
+            out.append(f"{k} = {v}")
+    return "\n".join(out).rstrip() + "\n"
+
+if anim_on:
+    raw = patch_section(raw, "animate", {
+        "open_animation": "zoom",
+        "close_animation": "zoom",
+        "minimize_animation": "squeezimize",
+        "duration": "220",
+        "zoom_duration": "220",
+        "fade_duration": "180",
+        "squeezimize_duration": "250",
+        "fade_enabled_for": '(type is "overlay" | (type is "x-or" & focusable is true))',
+    })
+raw = patch_section(raw, "decoration", {
+    "button_order": wf_layout,
+    "active_color": to_rgba(acc_rgb, 1.0),
+    "inactive_color": to_rgba((49, 50, 68), 1.0),
+    "border_size": "2",
+})
+raw = patch_section(raw, "pixdecor", {
+    "titlebar": "true",
+    "csd_titlebar_height": "28",
+    "border_size": "2",
+    "rounded_corner_radius": str(max(0, min(32, radius))),
+    "overlay_engine": "rounded_corners" if radius > 0 else "none",
+    "always_decorate": "all",
+    "button_layout": pix_layout,
+    "fg_color": to_rgba(title_rgb, 1.0),
+    "bg_color": to_rgba((30, 30, 46), 1.0),
+    "fg_text_color": "0.9412 0.9490 0.9765 1.0000",
+    "bg_text_color": "0.6510 0.6784 0.7843 1.0000",
+    "effect_color": to_rgba(acc_rgb, 1.0),
+    "maximized_borders": "true",
+    "maximized_shadows": "true",
+}, drop=("rounded_corners", "active_color", "inactive_color", "button_order"))
+
+fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=os.path.dirname(os.path.abspath(wf_path)))
+with os.fdopen(fd, "w", encoding="utf-8") as out:
+    out.write(raw)
+    out.flush()
+    os.fsync(out.fileno())
+os.replace(tmp, wf_path)
+PYEOF
         fi
     fi
     if [ -f backgrounds/default.png ]; then

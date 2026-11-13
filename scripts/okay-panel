@@ -40,9 +40,10 @@ os.environ["GDK_BACKEND"] = "wayland"
 gc.set_threshold(500, 5, 5)
 
 # 2. Ustawienie nazwy procesu w jądrze Linux oraz dostęp do malloc_trim(0)
+import ctypes
+
 _LIBC = None
 try:
-    import ctypes
     try:
         _LIBC = ctypes.CDLL("libc.so.6")
     except OSError:
@@ -1255,8 +1256,72 @@ class AppHelper:
 # Natywny klient Wayland wlr-foreign-toplevel-management-v1
 # ============================================================================
 
+class _WlMessage(ctypes.Structure):
+    _fields_ = [
+        ("name", ctypes.c_char_p),
+        ("signature", ctypes.c_char_p),
+        ("types", ctypes.POINTER(ctypes.c_void_p)),
+    ]
+
+
+class _WlInterface(ctypes.Structure):
+    _fields_ = [
+        ("name", ctypes.c_char_p),
+        ("version", ctypes.c_int),
+        ("method_count", ctypes.c_int),
+        ("methods", ctypes.POINTER(_WlMessage)),
+        ("event_count", ctypes.c_int),
+        ("events", ctypes.POINTER(_WlMessage)),
+    ]
+
+
+class _WlArray(ctypes.Structure):
+    _fields_ = [
+        ("size", ctypes.c_size_t),
+        ("alloc", ctypes.c_size_t),
+        ("data", ctypes.c_void_p),
+    ]
+
+
+class _WlArgument(ctypes.Union):
+    _fields_ = [
+        ("i", ctypes.c_int32),
+        ("u", ctypes.c_uint32),
+        ("f", ctypes.c_int32),
+        ("s", ctypes.c_char_p),
+        ("o", ctypes.c_void_p),
+        ("n", ctypes.c_uint32),
+        ("a", ctypes.c_void_p),
+        ("h", ctypes.c_int32),
+    ]
+
+
+def _gobject_c_ptr(gobj) -> int:
+    """Bezpiecznie pobiera natywny wskaźnik C z obiektu PyGObject."""
+    if gobj is None:
+        return 0
+    try:
+        libgobj = ctypes.CDLL("libgobject-2.0.so.0")
+        libgobj.g_type_name_from_instance.argtypes = [ctypes.c_void_p]
+        libgobj.g_type_name_from_instance.restype = ctypes.c_char_p
+        cand = ctypes.c_void_p.from_address(id(gobj) + 2 * ctypes.sizeof(ctypes.c_void_p)).value or 0
+        if cand:
+            tname = libgobj.g_type_name_from_instance(ctypes.c_void_p(cand))
+            if tname and tname.startswith(b"Gdk"):
+                return int(cand)
+    except Exception:
+        pass
+    try:
+        h = hash(gobj)
+        if h and h > 4096:
+            return int(h)
+    except Exception:
+        pass
+    return 0
+
+
 class WaylandToplevelClient:
-    """Natywny klient protokołu Wayland zwlr_foreign_toplevel_manager_v1 (zero zależności zewnętrznych)."""
+    """Klient protokołu Wayland zwlr_foreign_toplevel_manager_v1 (GDK bridge + fallback gniazda)."""
     IGNORED_APP_IDS = {"okay-panel", "okay-desktop", "okay-quick-settings", "okay-dock", "fuzzel", "mako", "waybar", "sfwbar"}
 
     DISPLAY_ID = 1
@@ -1275,11 +1340,378 @@ class WaylandToplevelClient:
         self.seat_bound = False
         self.handles = {}
         self.connected = False
+
+        self._gdk_mode = False
+        self._libwl = None
+        self._libgdk = None
+        self._wl_display = 0
+        self._wl_registry = 0
+        self._manager_proxy = 0
+        self._manager_ver = 2
+        self._seat_proxy = 0
+        self._rect_cache = {}
+        self._keepalive = []
+        self._change_idle_queued = False
+        self._init_done = False
+
+        if self._try_connect_gdk_wayland():
+            return
+
         try:
             self._connect()
         except Exception as e:
             print(f"[okay-panel] Wyjątek klienta wlr-foreign-toplevel (fallback): {e}", file=sys.stderr)
             self._close_socket()
+
+    def _schedule_on_change(self):
+        if not self._init_done or not self.on_change_cb or self._change_idle_queued:
+            return
+        self._change_idle_queued = True
+
+        def _fire():
+            self._change_idle_queued = False
+            try:
+                self.on_change_cb()
+            except Exception:
+                pass
+            return False
+
+        GLib.idle_add(_fire)
+
+    def _try_connect_gdk_wayland(self) -> bool:
+        """Wiąże zwlr_foreign_toplevel_manager_v1 bezpośrednio na wl_display GDK (obsługa set_rectangle)."""
+        try:
+            disp = Gdk.Display.get_default()
+            disp_ptr = _gobject_c_ptr(disp)
+            if not disp_ptr:
+                return False
+
+            libgdk = ctypes.CDLL("libgdk-3.so.0")
+            libwl = ctypes.CDLL("libwayland-client.so.0")
+
+            libgdk.gdk_wayland_display_get_wl_display.argtypes = [ctypes.c_void_p]
+            libgdk.gdk_wayland_display_get_wl_display.restype = ctypes.c_void_p
+
+            wl_display = libgdk.gdk_wayland_display_get_wl_display(ctypes.c_void_p(disp_ptr))
+            if not wl_display or not hasattr(libwl, "wl_proxy_marshal_array_flags"):
+                return False
+
+            libwl.wl_proxy_marshal_array_flags.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
+                ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+            ]
+            libwl.wl_proxy_marshal_array_flags.restype = ctypes.c_void_p
+            libwl.wl_proxy_add_listener.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            libwl.wl_proxy_add_listener.restype = ctypes.c_int
+            libwl.wl_display_roundtrip.argtypes = [ctypes.c_void_p]
+            libwl.wl_display_roundtrip.restype = ctypes.c_int
+            libwl.wl_display_flush.argtypes = [ctypes.c_void_p]
+            libwl.wl_display_flush.restype = ctypes.c_int
+
+            wl_registry_iface = ctypes.addressof(ctypes.c_byte.in_dll(libwl, "wl_registry_interface"))
+            wl_seat_iface = ctypes.addressof(ctypes.c_byte.in_dll(libwl, "wl_seat_interface"))
+            wl_surface_iface = ctypes.addressof(ctypes.c_byte.in_dll(libwl, "wl_surface_interface"))
+            wl_output_iface = ctypes.addressof(ctypes.c_byte.in_dll(libwl, "wl_output_interface"))
+
+            handle_iface = _WlInterface()
+            mgr_iface = _WlInterface()
+
+            null_types_1 = (ctypes.c_void_p * 1)(0)
+            seat_types = (ctypes.c_void_p * 1)(wl_seat_iface)
+            surf_types = (ctypes.c_void_p * 5)(wl_surface_iface, 0, 0, 0, 0)
+            out_types = (ctypes.c_void_p * 1)(wl_output_iface)
+            handle_ptr_types = (ctypes.c_void_p * 1)(ctypes.addressof(handle_iface))
+
+            handle_methods = (_WlMessage * 10)(
+                _WlMessage(b"set_maximized", b"", None),
+                _WlMessage(b"unset_maximized", b"", None),
+                _WlMessage(b"set_minimized", b"", None),
+                _WlMessage(b"unset_minimized", b"", None),
+                _WlMessage(b"activate", b"o", seat_types),
+                _WlMessage(b"close", b"", None),
+                _WlMessage(b"set_rectangle", b"oiiii", surf_types),
+                _WlMessage(b"destroy", b"", None),
+                _WlMessage(b"set_fullscreen", b"2?o", out_types),
+                _WlMessage(b"unset_fullscreen", b"2", None),
+            )
+            handle_events = (_WlMessage * 8)(
+                _WlMessage(b"title", b"s", null_types_1),
+                _WlMessage(b"app_id", b"s", null_types_1),
+                _WlMessage(b"output_enter", b"o", out_types),
+                _WlMessage(b"output_leave", b"o", out_types),
+                _WlMessage(b"state", b"a", null_types_1),
+                _WlMessage(b"done", b"", None),
+                _WlMessage(b"closed", b"", None),
+                _WlMessage(b"parent", b"3?o", handle_ptr_types),
+            )
+            handle_iface.name = b"zwlr_foreign_toplevel_handle_v1"
+            handle_iface.version = 3
+            handle_iface.method_count = 10
+            handle_iface.methods = handle_methods
+            handle_iface.event_count = 8
+            handle_iface.events = handle_events
+
+            mgr_methods = (_WlMessage * 1)(_WlMessage(b"stop", b"", None))
+            mgr_events = (_WlMessage * 2)(
+                _WlMessage(b"toplevel", b"n", handle_ptr_types),
+                _WlMessage(b"finished", b"", None),
+            )
+            mgr_iface.name = b"zwlr_foreign_toplevel_manager_v1"
+            mgr_iface.version = 3
+            mgr_iface.method_count = 1
+            mgr_iface.methods = mgr_methods
+            mgr_iface.event_count = 2
+            mgr_iface.events = mgr_events
+
+            cb_title_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p)
+            cb_appid_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p)
+            cb_out_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+            cb_state_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(_WlArray))
+            cb_void_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
+
+            def _on_title(_data, handle_ptr, title_bytes):
+                h = self.handles.get(int(handle_ptr or 0))
+                if h is not None:
+                    h["pending"]["title"] = title_bytes.decode("utf-8", errors="replace") if title_bytes else ""
+
+            def _on_app_id(_data, handle_ptr, app_id_bytes):
+                h = self.handles.get(int(handle_ptr or 0))
+                if h is not None:
+                    h["pending"]["app_id"] = app_id_bytes.decode("utf-8", errors="replace") if app_id_bytes else ""
+
+            def _on_output(_data, _handle_ptr, _output_ptr):
+                return
+
+            def _on_state(_data, handle_ptr, arr_ptr):
+                h = self.handles.get(int(handle_ptr or 0))
+                if h is None or not arr_ptr:
+                    return
+                arr = arr_ptr.contents
+                n = int(arr.size) // 4
+                states = set()
+                if n > 0 and arr.data:
+                    raw = (ctypes.c_uint32 * n).from_address(arr.data)
+                    states = {int(raw[i]) for i in range(n)}
+                h["pending"]["maximized"] = (0 in states)
+                h["pending"]["minimized"] = (1 in states)
+                h["pending"]["focused"] = (2 in states)
+
+            def _on_done(_data, handle_ptr):
+                h = self.handles.get(int(handle_ptr or 0))
+                if h is None:
+                    return
+                p = h["pending"]
+                h["app_id"] = p["app_id"]
+                h["title"] = p["title"]
+                h["maximized"] = p["maximized"]
+                h["minimized"] = p["minimized"]
+                h["focused"] = p["focused"]
+                h["ready"] = True
+                self._schedule_on_change()
+
+            def _on_closed(_data, handle_ptr):
+                hid = int(handle_ptr or 0)
+                self.handles.pop(hid, None)
+                self._rect_cache.pop(hid, None)
+                if hid:
+                    try:
+                        libwl.wl_proxy_marshal_array_flags(
+                            ctypes.c_void_p(hid), 7, None, self._manager_ver, 1, None
+                        )
+                    except Exception:
+                        pass
+                self._schedule_on_change()
+
+            def _on_parent(_data, _handle_ptr, _parent_ptr):
+                return
+
+            fn_title = cb_title_t(_on_title)
+            fn_app_id = cb_appid_t(_on_app_id)
+            fn_out = cb_out_t(_on_output)
+            fn_state = cb_state_t(_on_state)
+            fn_done = cb_void_t(_on_done)
+            fn_closed = cb_void_t(_on_closed)
+            fn_parent = cb_out_t(_on_parent)
+
+            handle_listener = (ctypes.c_void_p * 8)(
+                ctypes.cast(fn_title, ctypes.c_void_p),
+                ctypes.cast(fn_app_id, ctypes.c_void_p),
+                ctypes.cast(fn_out, ctypes.c_void_p),
+                ctypes.cast(fn_out, ctypes.c_void_p),
+                ctypes.cast(fn_state, ctypes.c_void_p),
+                ctypes.cast(fn_done, ctypes.c_void_p),
+                ctypes.cast(fn_closed, ctypes.c_void_p),
+                ctypes.cast(fn_parent, ctypes.c_void_p),
+            )
+
+            cb_toplevel_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+            cb_finished_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
+
+            def _on_toplevel(_data, _mgr_ptr, handle_ptr):
+                hid = int(handle_ptr or 0)
+                if not hid:
+                    return
+                self.handles[hid] = {
+                    "handle_id": hid,
+                    "app_id": "",
+                    "title": "",
+                    "focused": False,
+                    "minimized": False,
+                    "maximized": False,
+                    "ready": False,
+                    "pending": {
+                        "app_id": "",
+                        "title": "",
+                        "focused": False,
+                        "minimized": False,
+                        "maximized": False,
+                    },
+                }
+                libwl.wl_proxy_add_listener(ctypes.c_void_p(hid), handle_listener, None)
+
+            def _on_finished(_data, _mgr_ptr):
+                self.manager_bound = False
+                self.connected = False
+                self.handles.clear()
+                self._rect_cache.clear()
+                self._schedule_on_change()
+
+            fn_toplevel = cb_toplevel_t(_on_toplevel)
+            fn_finished = cb_finished_t(_on_finished)
+            mgr_listener = (ctypes.c_void_p * 2)(
+                ctypes.cast(fn_toplevel, ctypes.c_void_p),
+                ctypes.cast(fn_finished, ctypes.c_void_p),
+            )
+
+            cb_global_t = ctypes.CFUNCTYPE(
+                None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32
+            )
+            cb_global_rem_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32)
+
+            def _on_global(_data, reg_ptr, name, iface_bytes, ver):
+                if not iface_bytes or ver < 1:
+                    return
+                if iface_bytes == b"zwlr_foreign_toplevel_manager_v1" and not self.manager_bound:
+                    bind_ver = min(int(ver), 2)
+                    args = (_WlArgument * 4)()
+                    args[0].u = int(name)
+                    args[1].s = b"zwlr_foreign_toplevel_manager_v1"
+                    args[2].u = bind_ver
+                    args[3].n = 0
+                    proxy = libwl.wl_proxy_marshal_array_flags(
+                        ctypes.c_void_p(reg_ptr), 0, ctypes.addressof(mgr_iface), bind_ver, 0, args
+                    )
+                    if proxy:
+                        self._manager_proxy = int(proxy)
+                        self._manager_ver = bind_ver
+                        self.manager_bound = True
+                        libwl.wl_proxy_add_listener(ctypes.c_void_p(proxy), mgr_listener, None)
+                elif iface_bytes == b"wl_seat" and not self.seat_bound:
+                    args = (_WlArgument * 4)()
+                    args[0].u = int(name)
+                    args[1].s = b"wl_seat"
+                    args[2].u = 1
+                    args[3].n = 0
+                    proxy = libwl.wl_proxy_marshal_array_flags(
+                        ctypes.c_void_p(reg_ptr), 0, wl_seat_iface, 1, 0, args
+                    )
+                    if proxy:
+                        self._seat_proxy = int(proxy)
+                        self.seat_bound = True
+
+            def _on_global_remove(_data, _reg_ptr, _name):
+                return
+
+            fn_global = cb_global_t(_on_global)
+            fn_global_rem = cb_global_rem_t(_on_global_remove)
+            reg_listener = (ctypes.c_void_p * 2)(
+                ctypes.cast(fn_global, ctypes.c_void_p),
+                ctypes.cast(fn_global_rem, ctypes.c_void_p),
+            )
+
+            self._keepalive = [
+                null_types_1, seat_types, surf_types, out_types, handle_ptr_types,
+                handle_methods, handle_events, handle_iface,
+                mgr_methods, mgr_events, mgr_iface,
+                fn_title, fn_app_id, fn_out, fn_state, fn_done, fn_closed, fn_parent, handle_listener,
+                fn_toplevel, fn_finished, mgr_listener,
+                fn_global, fn_global_rem, reg_listener,
+            ]
+
+            args_reg = (_WlArgument * 1)()
+            args_reg[0].n = 0
+            reg_proxy = libwl.wl_proxy_marshal_array_flags(
+                ctypes.c_void_p(wl_display), 1, wl_registry_iface, 1, 0, args_reg
+            )
+            if not reg_proxy:
+                return False
+
+            self._wl_registry = int(reg_proxy)
+            libwl.wl_proxy_add_listener(ctypes.c_void_p(reg_proxy), reg_listener, None)
+            libwl.wl_display_roundtrip(ctypes.c_void_p(wl_display))
+            if not self.manager_bound:
+                return False
+            libwl.wl_display_roundtrip(ctypes.c_void_p(wl_display))
+
+            self._libwl = libwl
+            self._libgdk = libgdk
+            self._wl_display = int(wl_display)
+            self._gdk_mode = True
+            self.connected = True
+            self._init_done = True
+            print(
+                f"[okay-panel] Połączono z wlr-foreign-toplevel na sesji GDK (okien: {len(self.handles)}, set_rectangle aktywny)",
+                file=sys.stderr,
+            )
+            return True
+        except Exception as exc:
+            print(f"[okay-panel] Mostek GDK Wayland niedostępny (używam gniazda fallback): {exc}", file=sys.stderr)
+            self.manager_bound = False
+            self.seat_bound = False
+            self.handles.clear()
+            return False
+
+    def get_gdk_wl_surface(self, gdk_window) -> int:
+        if not self._gdk_mode or self._libgdk is None or gdk_window is None:
+            return 0
+        try:
+            self._libgdk.gdk_wayland_window_get_wl_surface.argtypes = [ctypes.c_void_p]
+            self._libgdk.gdk_wayland_window_get_wl_surface.restype = ctypes.c_void_p
+            win_ptr = _gobject_c_ptr(gdk_window)
+            if not win_ptr:
+                return 0
+            surf = self._libgdk.gdk_wayland_window_get_wl_surface(ctypes.c_void_p(win_ptr))
+            return int(surf or 0)
+        except Exception:
+            return 0
+
+    def _gdk_marshal(self, handle_id: int, opcode: int, args=None) -> bool:
+        if not self._gdk_mode or not self.connected or handle_id not in self.handles:
+            return False
+        try:
+            arg_ptr = ctypes.cast(args, ctypes.c_void_p) if args is not None else None
+            self._libwl.wl_proxy_marshal_array_flags(
+                ctypes.c_void_p(handle_id), opcode, None, self._manager_ver, 0, arg_ptr
+            )
+            self._libwl.wl_display_flush(ctypes.c_void_p(self._wl_display))
+            return True
+        except Exception:
+            return False
+
+    def set_rectangle(self, handle_id: int, wl_surface_ptr: int, x: int, y: int, width: int, height: int):
+        if not self._gdk_mode or not self.connected or not wl_surface_ptr or handle_id not in self.handles:
+            return
+        rect = (int(wl_surface_ptr), int(x), int(y), max(16, int(width)), max(16, int(height)))
+        if self._rect_cache.get(handle_id) == rect:
+            return
+        args = (_WlArgument * 5)()
+        args[0].o = ctypes.c_void_p(rect[0])
+        args[1].i = rect[1]
+        args[2].i = rect[2]
+        args[3].i = rect[3]
+        args[4].i = rect[4]
+        if self._gdk_marshal(handle_id, 6, args):
+            self._rect_cache[handle_id] = rect
 
     def _alloc_id(self) -> int:
         obj_id = self._next_id
@@ -1586,8 +2018,19 @@ class WaylandToplevelClient:
             })
         return res
 
+    def _activate_gdk(self, handle_id: int, is_minimized: bool):
+        if is_minimized:
+            self._gdk_marshal(handle_id, 3)
+        if self.seat_bound and self._seat_proxy:
+            args = (_WlArgument * 1)()
+            args[0].o = ctypes.c_void_p(self._seat_proxy)
+            self._gdk_marshal(handle_id, 4, args)
+
     def activate_window(self, handle_id: int, is_minimized: bool):
         if not self.connected or handle_id not in self.handles:
+            return
+        if self._gdk_mode:
+            self._activate_gdk(handle_id, is_minimized)
             return
         if is_minimized:
             self._send(self._pack_msg(handle_id, 3))
@@ -1596,6 +2039,12 @@ class WaylandToplevelClient:
 
     def activate_or_minimize(self, handle_id: int, is_focused: bool, is_minimized: bool):
         if not self.connected or handle_id not in self.handles:
+            return
+        if self._gdk_mode:
+            if is_focused:
+                self._gdk_marshal(handle_id, 2)
+            else:
+                self._activate_gdk(handle_id, is_minimized)
             return
         if is_focused:
             self._send(self._pack_msg(handle_id, 2))
@@ -1608,6 +2057,12 @@ class WaylandToplevelClient:
     def set_minimized(self, handle_id: int, minimized: bool):
         if not self.connected or handle_id not in self.handles:
             return
+        if self._gdk_mode:
+            if minimized:
+                self._gdk_marshal(handle_id, 2)
+            else:
+                self._activate_gdk(handle_id, True)
+            return
         if minimized:
             self._send(self._pack_msg(handle_id, 2))
         else:
@@ -1616,8 +2071,12 @@ class WaylandToplevelClient:
                 self._send(self._pack_msg(handle_id, 4, struct.pack("<I", self.seat_id)))
 
     def close_window(self, handle_id: int):
-        if self.connected and handle_id in self.handles:
-            self._send(self._pack_msg(handle_id, 5))
+        if not self.connected or handle_id not in self.handles:
+            return
+        if self._gdk_mode:
+            self._gdk_marshal(handle_id, 5)
+            return
+        self._send(self._pack_msg(handle_id, 5))
 
 
 # ============================================================================
@@ -1635,6 +2094,17 @@ class WindowManager:
         except Exception as e:
             print(f"[okay-panel] Błąd uruchamiania klienta wlr-foreign-toplevel (fallback): {e}", file=sys.stderr)
             cls._wl_client = None
+
+    @classmethod
+    def get_gdk_wl_surface(cls, gdk_window) -> int:
+        if cls._wl_client and cls._wl_client.connected:
+            return cls._wl_client.get_gdk_wl_surface(gdk_window)
+        return 0
+
+    @classmethod
+    def set_window_rectangle(cls, handle_id: int, wl_surface_ptr: int, x: int, y: int, width: int, height: int):
+        if cls._wl_client and cls._wl_client.connected and handle_id and wl_surface_ptr:
+            cls._wl_client.set_rectangle(handle_id, wl_surface_ptr, x, y, width, height)
 
     @classmethod
     def get_open_windows(cls) -> list:
@@ -1835,11 +2305,16 @@ class OkayPanel(Gtk.Window):
         self._quick_settings = None
         self._preview_popup = None
         self._last_applied_accent = None
+        self._wl_surface_ptr = 0
+        self._rect_sync_queued = False
 
         self._build_right_section()
         self._apply_theme_colors()
         self._apply_layout_mode()
         self._apply_animations()
+
+        self.connect("realize", self._on_panel_realized)
+        self.tasks_box.connect("size-allocate", self._on_tasks_size_allocated)
 
         # Obserwacja ~/.config/okay-de/panel.json przez Gio/inotify
         self._cfg_monitor = None
@@ -1868,6 +2343,58 @@ class OkayPanel(Gtk.Window):
 
         self._update_tasks()
         self._update_clock_and_battery()
+
+    def _ensure_wl_surface_ptr(self) -> int:
+        if self._wl_surface_ptr:
+            return self._wl_surface_ptr
+        if self.get_realized():
+            gdk_win = self.get_window()
+            if gdk_win is not None:
+                self._wl_surface_ptr = WindowManager.get_gdk_wl_surface(gdk_win)
+        return self._wl_surface_ptr
+
+    def _on_panel_realized(self, *_args):
+        self._ensure_wl_surface_ptr()
+        self._schedule_rect_sync()
+
+    def _on_tasks_size_allocated(self, *_args):
+        self._schedule_rect_sync()
+
+    def _schedule_rect_sync(self):
+        if self._rect_sync_queued:
+            return
+        self._rect_sync_queued = True
+
+        def _run():
+            self._rect_sync_queued = False
+            self._sync_taskbar_rectangles()
+            return False
+
+        GLib.idle_add(_run)
+
+    def _sync_taskbar_rectangles(self):
+        surf_ptr = self._ensure_wl_surface_ptr()
+        if not surf_ptr:
+            return
+        for btn, grp in self._task_buttons:
+            wins = grp.get("windows") or []
+            if not wins or not btn.get_realized() or not btn.get_mapped():
+                continue
+            alloc = btn.get_allocation()
+            if alloc.width <= 0 or alloc.height <= 0:
+                continue
+            try:
+                ok, bx, by = btn.translate_coordinates(self, 0, 0)
+            except Exception:
+                ok, bx, by = False, 0, 0
+            if not ok:
+                continue
+            bw = max(16, int(alloc.width))
+            bh = max(16, int(alloc.height))
+            for w in wins:
+                hid = w.get("handle_id", 0)
+                if hid:
+                    WindowManager.set_window_rectangle(hid, surf_ptr, int(bx), int(by), bw, bh)
 
     def _on_config_file_changed(self, *_args):
         self._config_mtime = -1
@@ -2412,6 +2939,7 @@ class OkayPanel(Gtk.Window):
                     preview_matched = True
                     self._preview_popup.refresh_group(grp, self._preview_position_info(btn, grp["win_count"]))
             self._task_buttons = [(btn, grp) for (btn, _), grp in zip(self._task_buttons, groups)]
+            self._schedule_rect_sync()
             if cur_preview_key and not preview_matched:
                 self._hide_preview()
             return True
@@ -2442,6 +2970,7 @@ class OkayPanel(Gtk.Window):
                 fade_widget(nb, True, start_alpha=0.0, end_alpha=1.0, duration_ms=160)
         if is_dock:
             self.resize(1, 1)
+        self._schedule_rect_sync()
         _trim_heap()
         return True
 
