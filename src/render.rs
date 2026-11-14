@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use smithay::{
@@ -8,23 +9,26 @@ use smithay::{
             damage::{OutputDamageTracker, RenderOutputResult},
             element::{
                 memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
-                solid::{SolidColorBuffer, SolidColorRenderElement},
+                solid::SolidColorRenderElement,
                 surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
-                AsRenderElements, Kind,
+                texture::TextureRenderElement,
+                AsRenderElements, Id, Kind,
             },
             gles::{
-                element::PixelShaderElement, GlesError, GlesPixelProgram, GlesRenderer, GlesTarget,
+                element::{PixelShaderElement, TextureShaderElement},
+                GlesError, GlesPixelProgram, GlesRenderer, GlesTarget, GlesTexProgram, GlesTexture,
                 Uniform, UniformName, UniformType,
             },
-            Color32F,
+            utils::{draw_render_elements, DamageSnapshot},
+            Bind, Color32F, Frame, Offscreen, Renderer,
         },
     },
     desktop::{layer_map_for_output, utils::send_frames_surface_tree},
     input::pointer::{CursorImageAttributes, CursorImageStatus},
     output::Output,
-    reexports::wayland_server::Resource,
+    reexports::wayland_server::{backend::ObjectId, Resource},
     render_elements,
-    utils::{IsAlive, Logical, Physical, Point, Rectangle, Scale, Transform},
+    utils::{IsAlive, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
     wayland::{compositor::with_states, shell::wlr_layer::Layer},
 };
 
@@ -36,6 +40,7 @@ render_elements! {
     Solid=SolidColorRenderElement,
     Memory=MemoryRenderBufferRenderElement<GlesRenderer>,
     Shader=PixelShaderElement,
+    TexShader=TextureShaderElement,
 }
 
 /// Collects all render elements for a given `Output` in front-to-back order
@@ -115,7 +120,7 @@ pub fn collect_output_elements(
         if let Some(toplevel) = window.toplevel() {
             let id = toplevel.wl_surface().id();
             if state.animations.is_animating_minimize(&id) {
-                elements.extend(state.animations.render_minimize_effect(&id, scale));
+                elements.extend(state.animations.render_minimize_effect(&id, renderer, scale));
             }
         }
     }
@@ -163,69 +168,87 @@ pub fn collect_output_elements(
         let local_loc = win_loc - output_geo.loc + Point::from((ws_slide_x + move_dx, move_dy));
         let phys_loc: Point<i32, Physical> = local_loc.to_physical_precise_round(scale);
 
-        // Window surfaces (toplevel + subsurfaces + popups)
-        let win_elements: Vec<OkayRenderElements> =
-            window.render_elements(renderer, phys_loc, scale, alpha);
-        elements.extend(win_elements);
-
-        // Server-side titlebar & subtle 1px macOS border around non-fullscreen windows
-        if !state.workspaces.is_fullscreen(window) {
+        if state.workspaces.is_fullscreen(window) {
+            let win_elements: Vec<OkayRenderElements> =
+                window.render_elements(renderer, phys_loc, scale, alpha);
+            elements.extend(win_elements);
+        } else {
             let is_focused = win_id.as_ref() == focused_id.as_ref();
             let is_pinned = state.workspaces.is_pinned(window);
             let pointer_local = state.pointer_location - output_geo.loc.to_f64();
-
-            if let Some(tb_elem) = crate::panel::render_titlebar_element(
-                window,
-                local_loc,
-                pointer_local,
-                is_focused,
-                is_pinned,
-                accent,
-                renderer,
-                scale,
-            ) {
-                elements.push(tb_elem);
-            }
-
             let win_geo = window.geometry();
             let tb_h = crate::state::TITLEBAR_HEIGHT;
-            let pad = 14;
-            let shader_area = Rectangle::new(
-                local_loc + win_geo.loc - Point::from((pad, pad + tb_h)),
-                (
-                    win_geo.size.w.max(120) + pad * 2,
-                    win_geo.size.h + tb_h + pad * 2,
-                )
-                    .into(),
-            );
-            let border_alpha = if is_focused { 0.16f32 } else { 0.08f32 };
-            if let Some(sdf_elem) =
-                sdf_rounded_window_element(renderer, shader_area, 12.0, pad as f32, border_alpha, alpha)
-            {
-                elements.push(sdf_elem);
+            let full_w = win_geo.size.w.max(120);
+            let full_h = win_geo.size.h + tb_h;
+            let border_alpha = if is_focused {
+                0.16f32
             } else {
-                let border_color = if is_focused {
-                    [1.0f32, 1.0, 1.0, 0.18]
-                } else {
-                    state.theme.inactive_border_color
-                };
-                let bw = state.theme.border_width.min(1);
-                if bw > 0 {
-                    let border_geo = Rectangle::new(
-                        local_loc + win_geo.loc - Point::from((bw, bw + tb_h)),
-                        (
-                            win_geo.size.w.max(120) + bw * 2,
-                            win_geo.size.h + tb_h + bw * 2,
-                        )
-                            .into(),
-                    );
-                    let border_elems = build_border_elements(
-                        border_geo,
-                        bw,
-                        Color32F::from(border_color),
-                        scale,
-                    );
-                    elements.extend(border_elems);
+                state.theme.inactive_border_color[3].clamp(0.06, 0.14)
+            };
+
+            let rendered_offscreen = win_id.as_ref().and_then(|id| {
+                render_rounded_window_offscreen(
+                    renderer,
+                    window,
+                    id,
+                    local_loc,
+                    pointer_local,
+                    is_focused,
+                    is_pinned,
+                    accent,
+                    scale,
+                    alpha,
+                    border_alpha,
+                )
+            });
+
+            if let Some(rounded_elem) = rendered_offscreen {
+                elements.push(rounded_elem);
+
+                // Soft ambient drop shadow behind all 4 rounded corners
+                let pad = 14;
+                let shadow_area = Rectangle::new(
+                    local_loc + win_geo.loc - Point::from((pad, pad + tb_h)),
+                    (full_w + pad * 2, full_h + pad * 2).into(),
+                );
+                if let Some(sdf_elem) =
+                    sdf_rounded_window_element(renderer, shadow_area, 12.0, pad as f32, 0.0, alpha)
+                {
+                    elements.push(sdf_elem);
+                }
+            } else {
+                // Fallback direct rendering
+                let win_elements: Vec<OkayRenderElements> =
+                    window.render_elements(renderer, phys_loc, scale, alpha);
+                elements.extend(win_elements);
+
+                if let Some(tb_elem) = crate::panel::render_titlebar_element(
+                    window,
+                    local_loc,
+                    pointer_local,
+                    is_focused,
+                    is_pinned,
+                    accent,
+                    renderer,
+                    scale,
+                ) {
+                    elements.push(tb_elem);
+                }
+
+                let pad = 14;
+                let shader_area = Rectangle::new(
+                    local_loc + win_geo.loc - Point::from((pad, pad + tb_h)),
+                    (full_w + pad * 2, full_h + pad * 2).into(),
+                );
+                if let Some(sdf_elem) = sdf_rounded_window_element(
+                    renderer,
+                    shader_area,
+                    12.0,
+                    pad as f32,
+                    border_alpha,
+                    alpha,
+                ) {
+                    elements.push(sdf_elem);
                 }
             }
         }
@@ -381,6 +404,184 @@ fn default_cursor_buffer() -> &'static MemoryRenderBuffer {
     })
 }
 
+thread_local! {
+    static OFFSCREEN_WIN_CACHE: RefCell<HashMap<ObjectId, (Size<i32, Physical>, GlesTexture)>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Returns the most recently rendered offscreen `GlesTexture` for a window, if available
+/// (used by the Magic Lamp minimize shader to warp the live window contents smoothly).
+pub fn get_cached_window_texture(id: &ObjectId) -> Option<GlesTexture> {
+    OFFSCREEN_WIN_CACHE.with(|cache| cache.borrow().get(id).map(|(_, tex)| tex.clone()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_rounded_window_offscreen(
+    renderer: &mut GlesRenderer,
+    window: &smithay::desktop::Window,
+    win_id: &ObjectId,
+    local_loc: Point<i32, Logical>,
+    pointer_local: Point<f64, Logical>,
+    is_focused: bool,
+    is_pinned: bool,
+    accent: [u8; 3],
+    scale: Scale<f64>,
+    alpha: f32,
+    border_alpha: f32,
+) -> Option<OkayRenderElements> {
+    let win_geo = window.geometry();
+    let tb_h = crate::state::TITLEBAR_HEIGHT;
+    let full_w = win_geo.size.w.max(120);
+    let full_h = win_geo.size.h + tb_h;
+    if full_w <= 0 || full_h <= 0 {
+        return None;
+    }
+
+    let logical_size: Size<i32, Logical> = (full_w, full_h).into();
+    let phys_size: Size<i32, Physical> = logical_size.to_physical_precise_round(scale);
+    let buf_size: Size<i32, smithay::utils::Buffer> = (phys_size.w, phys_size.h).into();
+
+    let mut tex = OFFSCREEN_WIN_CACHE.with(|cache| {
+        let mut map = cache.borrow_mut();
+        if let Some((cached_sz, existing)) = map.get(win_id) {
+            if *cached_sz == phys_size {
+                return Some(existing.clone());
+            }
+        }
+        if let Ok(new_tex) =
+            <GlesRenderer as Offscreen<GlesTexture>>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
+        {
+            map.insert(win_id.clone(), (phys_size, new_tex.clone()));
+            Some(new_tex)
+        } else {
+            None
+        }
+    })?;
+
+    // Origin inside the offscreen texture so titlebar sits at (0, 0) and client surface at (0, tb_h)
+    let off_local_loc = Point::from((-win_geo.loc.x, tb_h - win_geo.loc.y));
+    let off_phys_loc: Point<i32, Physical> = off_local_loc.to_physical_precise_round(scale);
+    let off_pointer = pointer_local - (local_loc - off_local_loc).to_f64();
+
+    let mut inner_elems: Vec<OkayRenderElements> = Vec::new();
+    if let Some(tb_elem) = crate::panel::render_titlebar_element(
+        window,
+        off_local_loc,
+        off_pointer,
+        is_focused,
+        is_pinned,
+        accent,
+        renderer,
+        scale,
+    ) {
+        inner_elems.push(tb_elem);
+    }
+    let win_elements: Vec<OkayRenderElements> =
+        window.render_elements(renderer, off_phys_loc, scale, 1.0);
+    inner_elems.extend(win_elements);
+
+    {
+        let mut target = renderer.bind(&mut tex).ok()?;
+        let mut frame = renderer
+            .render(&mut target, phys_size, Transform::Normal)
+            .ok()?;
+        let dmg = Rectangle::from_size(phys_size);
+        let _ = frame.clear(Color32F::TRANSPARENT, &[dmg]);
+        let _ = draw_render_elements(&mut frame, scale, &inner_elems, &[dmg]);
+        let _ = frame.finish().ok()?;
+    }
+
+    const ROUNDED_TEX_FRAG: &str = r#"
+//_DEFINES
+precision mediump float;
+varying vec2 v_coords;
+uniform float alpha;
+uniform vec2 u_size;
+uniform float u_radius;
+uniform float u_border_alpha;
+#ifdef EXTERNAL
+uniform samplerExternalOES tex;
+#else
+uniform sampler2D tex;
+#endif
+
+float sdRoundedBox(vec2 p, vec2 b, float r) {
+    vec2 q = abs(p) - b + vec2(r);
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+}
+
+void main() {
+    vec4 texel = texture2D(tex, v_coords);
+    #ifdef NO_ALPHA
+    texel.a = 1.0;
+    #endif
+
+    vec2 px = v_coords * u_size;
+    float d = sdRoundedBox(px - u_size * 0.5, u_size * 0.5, u_radius);
+
+    // Smooth anti-aliased clip across all 4 corners (top-left, top-right, bottom-left, bottom-right)
+    float mask = 1.0 - smoothstep(-0.75, 0.75, d);
+
+    // Continuous 1px inner hairline border around the entire rounded perimeter
+    float border = (1.0 - smoothstep(0.0, 1.05, abs(d + 0.5))) * u_border_alpha;
+
+    vec4 clipped = texel * mask;
+    vec3 out_rgb = clipped.rgb * (1.0 - border) + vec3(border) * mask;
+    float out_a = clamp(clipped.a + border * mask * (1.0 - clipped.a), 0.0, 1.0);
+    gl_FragColor = vec4(out_rgb * alpha, out_a * alpha);
+}
+"#;
+
+    thread_local! {
+        static ROUNDED_TEX_SHADER: RefCell<Option<GlesTexProgram>> = const { RefCell::new(None) };
+    }
+
+    let program = ROUNDED_TEX_SHADER.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if borrow.is_none() {
+            if let Ok(prog) = renderer.compile_custom_texture_shader(
+                ROUNDED_TEX_FRAG,
+                &[
+                    UniformName::new("u_size", UniformType::_2f),
+                    UniformName::new("u_radius", UniformType::_1f),
+                    UniformName::new("u_border_alpha", UniformType::_1f),
+                ],
+            ) {
+                *borrow = Some(prog);
+            }
+        }
+        borrow.clone()
+    })?;
+
+    let screen_loc: Point<i32, Physical> =
+        (local_loc + win_geo.loc - Point::from((0, tb_h))).to_physical_precise_round(scale);
+
+    let tex_elem = TextureRenderElement::from_texture_with_damage(
+        Id::new(),
+        renderer.context_id(),
+        screen_loc.to_f64(),
+        tex,
+        scale.x.round().max(1.0) as i32,
+        Transform::Normal,
+        Some(alpha),
+        None,
+        Some(logical_size),
+        None,
+        DamageSnapshot::empty(),
+        Kind::Unspecified,
+    );
+
+    Some(OkayRenderElements::TexShader(TextureShaderElement::new(
+        tex_elem,
+        program,
+        vec![
+            Uniform::new("u_size", [full_w as f32, full_h as f32]),
+            Uniform::new("u_radius", 12.0f32),
+            Uniform::new("u_border_alpha", border_alpha),
+        ],
+    )))
+}
+
 /// Compiles (once) and instantiates an OpenGL ES SDF rounded-corner shadow + 1px hairline border shader.
 fn sdf_rounded_window_element(
     renderer: &mut GlesRenderer,
@@ -455,54 +656,6 @@ void main() {
         ],
         Kind::Unspecified,
     )))
-}
-
-/// Builds 4 crisp solid-color border strips (top, bottom, left, right) around `rect`.
-fn build_border_elements(
-    rect: Rectangle<i32, Logical>,
-    thickness: i32,
-    color: Color32F,
-    scale: Scale<f64>,
-) -> Vec<OkayRenderElements> {
-    if thickness <= 0 || rect.size.w <= 0 || rect.size.h <= 0 {
-        return Vec::new();
-    }
-
-    let strips = [
-        // Top
-        Rectangle::new(rect.loc, (rect.size.w, thickness).into()),
-        // Bottom
-        Rectangle::new(
-            (rect.loc.x, rect.loc.y + rect.size.h - thickness).into(),
-            (rect.size.w, thickness).into(),
-        ),
-        // Left
-        Rectangle::new(
-            (rect.loc.x, rect.loc.y + thickness).into(),
-            (thickness, (rect.size.h - 2 * thickness).max(0)).into(),
-        ),
-        // Right
-        Rectangle::new(
-            (rect.loc.x + rect.size.w - thickness, rect.loc.y + thickness).into(),
-            (thickness, (rect.size.h - 2 * thickness).max(0)).into(),
-        ),
-    ];
-
-    strips
-        .into_iter()
-        .filter(|s| s.size.w > 0 && s.size.h > 0)
-        .map(|strip| {
-            let buf = SolidColorBuffer::new(strip.size, color);
-            let phys_loc = strip.loc.to_physical_precise_round(scale);
-            OkayRenderElements::Solid(SolidColorRenderElement::from_buffer(
-                &buf,
-                phys_loc,
-                scale,
-                1.0,
-                Kind::Unspecified,
-            ))
-        })
-        .collect()
 }
 
 /// Renders a single frame for `output` using `OutputDamageTracker`.

@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::HashMap,
     time::Instant,
 };
@@ -7,12 +8,18 @@ use smithay::{
     backend::renderer::{
         element::{
             solid::{SolidColorBuffer, SolidColorRenderElement},
-            Kind,
+            texture::TextureRenderElement,
+            Id, Kind,
         },
-        Color32F,
+        gles::{
+            element::{PixelShaderElement, TextureShaderElement},
+            GlesPixelProgram, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType,
+        },
+        utils::DamageSnapshot,
+        Color32F, Renderer,
     },
     reexports::wayland_server::backend::ObjectId,
-    utils::{Logical, Physical, Point, Rectangle, Scale},
+    utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform},
 };
 
 use crate::render::OkayRenderElements;
@@ -347,11 +354,12 @@ impl AnimationManager {
         }
     }
 
-    /// Renders the **Magic Lamp (Genie)** multi-slice funnel mesh (or Scale/Glide card) for a window
-    /// that is mid-minimize or mid-unminimize!
+    /// Renders the **Magic Lamp (Genie)** continuous GLSL fragment UV-warp (or Scale/Glide card)
+    /// for a window that is mid-minimize or mid-unminimize — zero stair-stepping!
     pub fn render_minimize_effect(
         &self,
         id: &ObjectId,
+        renderer: &mut GlesRenderer,
         scale: Scale<f64>,
     ) -> Vec<OkayRenderElements> {
         let Some(anim) = self.windows.get(id) else {
@@ -375,7 +383,6 @@ impl AnimationManager {
             let blur_pad = (6.0 + 18.0 * (t * (1.0 - t) * 4.0)).round() as i32;
 
             let mut out = Vec::with_capacity(3);
-            // Soft-focus blur halo pass during minimize/unminimize
             for (pad, a_mul) in [(blur_pad, 0.16), (blur_pad / 2, 0.24)] {
                 let halo_buf = SolidColorBuffer::new(
                     (cur_w + pad * 2, cur_h + pad * 2),
@@ -404,105 +411,236 @@ impl AnimationManager {
             return out;
         }
 
-        // Magic Lamp (Genie) multi-slice S-curve funnel deformation + lightweight soft-focus blur pass!
-        // Divides the window into 28 horizontal slices. Lower slices get pulled horizontally
-        // into the dock icon neck first, while upper slices cascade down the Genie funnel.
-        const SLICES: usize = 28;
-        let mut elems = Vec::with_capacity(SLICES * 2);
+        // Continuous full-bounds quad with GLSL cubic-Bezier UV warp + velocity-based minimize blur
+        let bbox_x = src.loc.x.min(dst.loc.x) - 16;
+        let bbox_y = src.loc.y.min(dst.loc.y) - 8;
+        let bbox_r = (src.loc.x + src.size.w).max(dst.loc.x + dst.size.w) + 16;
+        let bbox_b = (src.loc.y + src.size.h).max(dst.loc.y + dst.size.h) + 8;
+        let bbox_w = (bbox_r - bbox_x).max(16);
+        let bbox_h = (bbox_b - bbox_y).max(16);
+        let area: Rectangle<i32, Logical> = Rectangle::new((bbox_x, bbox_y).into(), (bbox_w, bbox_h).into());
 
-        // Soft-focus blur intensity peaks mid-flight (`t * (1 - t) * 4`)
-        let blur_intensity = (t * (1.0 - t) * 4.0).clamp(0.0, 1.0);
-        let blur_spread_x = (4.0 + 16.0 * blur_intensity).round() as i32;
+        // Normalized rect coords inside the bounding box [0..1]
+        let src_x0 = (src.loc.x - bbox_x) as f32;
+        let src_y0 = (src.loc.y - bbox_y) as f32;
+        let src_x1 = (src.loc.x + src.size.w - bbox_x) as f32;
+        let src_y1 = (src.loc.y + src.size.h - bbox_y) as f32;
+        let dst_x0 = (dst.loc.x - bbox_x) as f32;
+        let dst_y0 = (dst.loc.y - bbox_y) as f32;
+        let dst_x1 = (dst.loc.x + dst.size.w - bbox_x) as f32;
+        let dst_y1 = (dst.loc.y + dst.size.h - bbox_y) as f32;
+        let velocity_blur = (t * (1.0 - t) * 4.0).clamp(0.0, 1.0);
+        let alpha = (1.0 - t * 0.28).clamp(0.25, 1.0);
 
-        let top_y = lerp(src.loc.y as f32, dst.loc.y as f32, (t * 1.15 - 0.15).clamp(0.0, 1.0));
-        let bot_y = lerp((src.loc.y + src.size.h) as f32, (dst.loc.y + dst.size.h) as f32, (t * 1.35).clamp(0.0, 1.0));
-        let total_h = (bot_y - top_y).max(14.0);
-        let slice_h = (total_h / SLICES as f32).ceil().max(2.0) as i32;
+        if let Some(tex) = crate::render::get_cached_window_texture(id) {
+            const GENIE_TEX_FRAG: &str = r#"
+//_DEFINES
+precision mediump float;
+varying vec2 v_coords;
+uniform float alpha;
+uniform vec2 u_bbox_size;
+uniform vec4 u_src;
+uniform vec4 u_dst;
+uniform float u_t;
+uniform float u_blur;
+#ifdef EXTERNAL
+uniform samplerExternalOES tex;
+#else
+uniform sampler2D tex;
+#endif
 
-        for i in 0..SLICES {
-            // `v` goes from 0.0 (top of window) to 1.0 (bottom of window nearest the dock)
-            let v = i as f32 / (SLICES - 1) as f32;
-            let sy = (top_y + v * total_h).round() as i32;
+float genieCurve(float x) {
+    float c = clamp(x, 0.0, 1.0);
+    return c * c * (3.0 - 2.0 * c);
+}
 
-            // Genie funnel factor: bottom slices pinch toward the dock icon immediately (`v` high),
-            // while top slices retain window width early and then funnel smoothly in the second half of `t`.
-            let pinch_phase = ((t * 1.45) + v * 0.75 - 0.25).clamp(0.0, 1.0);
-            let s_curve = smoothstep(pinch_phase);
+void main() {
+    vec2 px = v_coords * u_bbox_size;
 
-            let src_left = src.loc.x as f32;
-            let src_right = (src.loc.x + src.size.w) as f32;
-            let dst_left = dst.loc.x as f32;
-            let dst_right = (dst.loc.x + dst.size.w) as f32;
+    float top_y = mix(u_src.y, u_dst.y, clamp(u_t * 1.15 - 0.15, 0.0, 1.0));
+    float bot_y = mix(u_src.w, u_dst.w, clamp(u_t * 1.35, 0.0, 1.0));
+    float span_y = max(bot_y - top_y, 2.0);
+    float v = (px.y - top_y) / span_y;
 
-            let left_x = lerp(src_left, dst_left, s_curve).round() as i32;
-            let right_x = lerp(src_right, dst_right, s_curve).round() as i32;
-            let sw = (right_x - left_x).max(8);
+    float pinch = clamp(u_t * 1.45 + clamp(v, 0.0, 1.0) * 0.75 - 0.25, 0.0, 1.0);
+    float s = genieCurve(pinch);
+    float left_x = mix(u_src.x, u_dst.x, s);
+    float right_x = mix(u_src.z, u_dst.z, s);
+    float span_x = max(right_x - left_x, 2.0);
+    float u = (px.x - left_x) / span_x;
 
-            let is_title_slice = i <= 1;
-            let r = if is_title_slice {
-                0.24 + (accent[0] as f32 / 255.0) * 0.35
-            } else {
-                lerp(0.11, 0.18 + (accent[0] as f32 / 255.0) * 0.24, v * 0.7 + blur_intensity * 0.3)
-            };
-            let g = if is_title_slice {
-                0.26 + (accent[1] as f32 / 255.0) * 0.35
-            } else {
-                lerp(0.12, 0.20 + (accent[1] as f32 / 255.0) * 0.24, v * 0.7 + blur_intensity * 0.3)
-            };
-            let b = if is_title_slice {
-                0.34 + (accent[2] as f32 / 255.0) * 0.40
-            } else {
-                lerp(0.18, 0.28 + (accent[2] as f32 / 255.0) * 0.30, v * 0.7 + blur_intensity * 0.3)
-            };
-            let alpha = (0.86 - t * 0.34).clamp(0.22, 0.88);
+    // Smooth anti-aliased boundary mask (zero stair-stepping)
+    float mask_x = smoothstep(left_x - 1.2, left_x + 0.6, px.x) *
+                   (1.0 - smoothstep(right_x - 0.6, right_x + 1.2, px.x));
+    float mask_y = smoothstep(top_y - 1.0, top_y + 0.5, px.y) *
+                   (1.0 - smoothstep(bot_y - 0.5, bot_y + 1.0, px.y));
+    float mask = mask_x * mask_y;
+    if (mask <= 0.001) {
+        gl_FragColor = vec4(0.0);
+        return;
+    }
 
-            // Fast GPU soft-focus blur halo pass behind each deforming slice
-            let blur_alpha = alpha * (0.14 + 0.16 * blur_intensity);
-            let blur_buf = SolidColorBuffer::new(
-                (sw + blur_spread_x * 2, slice_h + 4),
-                Color32F::new(r * 1.15, g * 1.15, b * 1.20, blur_alpha),
-            );
-            let blur_phys: Point<i32, Physical> =
-                Point::<i32, Logical>::from((left_x - blur_spread_x, sy - 2))
-                    .to_physical_precise_round(scale);
-            elems.push(OkayRenderElements::Solid(
-                SolidColorRenderElement::from_buffer(
-                    &blur_buf,
-                    blur_phys,
-                    scale,
-                    blur_alpha,
+    // Velocity-based vertical & horizontal minimize blur
+    float dv = u_blur * 0.014;
+    float du = u_blur * 0.006;
+    vec4 col = texture2D(tex, clamp(vec2(u, v), 0.0, 1.0)) * 0.36;
+    col += texture2D(tex, clamp(vec2(u - du, v - dv), 0.0, 1.0)) * 0.16;
+    col += texture2D(tex, clamp(vec2(u + du, v + dv), 0.0, 1.0)) * 0.16;
+    col += texture2D(tex, clamp(vec2(u, v - dv * 1.8), 0.0, 1.0)) * 0.16;
+    col += texture2D(tex, clamp(vec2(u, v + dv * 1.8), 0.0, 1.0)) * 0.16;
+
+    #ifdef NO_ALPHA
+    col.a = 1.0;
+    #endif
+    gl_FragColor = col * (mask * alpha);
+}
+"#;
+
+            thread_local! {
+                static GENIE_TEX_SHADER: RefCell<Option<GlesTexProgram>> = const { RefCell::new(None) };
+            }
+
+            if let Some(prog) = GENIE_TEX_SHADER.with(|cell| {
+                let mut borrow = cell.borrow_mut();
+                if borrow.is_none() {
+                    if let Ok(p) = renderer.compile_custom_texture_shader(
+                        GENIE_TEX_FRAG,
+                        &[
+                            UniformName::new("u_bbox_size", UniformType::_2f),
+                            UniformName::new("u_src", UniformType::_4f),
+                            UniformName::new("u_dst", UniformType::_4f),
+                            UniformName::new("u_t", UniformType::_1f),
+                            UniformName::new("u_blur", UniformType::_1f),
+                        ],
+                    ) {
+                        *borrow = Some(p);
+                    }
+                }
+                borrow.clone()
+            }) {
+                let phys_loc: Point<i32, Physical> =
+                    Point::<i32, Logical>::from((bbox_x, bbox_y)).to_physical_precise_round(scale);
+                let tex_elem = TextureRenderElement::from_texture_with_damage(
+                    Id::new(),
+                    renderer.context_id(),
+                    phys_loc.to_f64(),
+                    tex,
+                    scale.x.round().max(1.0) as i32,
+                    Transform::Normal,
+                    Some(alpha),
+                    None,
+                    Some(Size::from((bbox_w, bbox_h))),
+                    None,
+                    DamageSnapshot::empty(),
                     Kind::Unspecified,
-                ),
-            ));
-
-            // Core frosted slice
-            let slice_buf = SolidColorBuffer::new((sw, slice_h), Color32F::new(r, g, b, alpha));
-            let phys_loc: Point<i32, Physical> =
-                Point::<i32, Logical>::from((left_x, sy)).to_physical_precise_round(scale);
-            elems.push(OkayRenderElements::Solid(
-                SolidColorRenderElement::from_buffer(
-                    &slice_buf,
-                    phys_loc,
-                    scale,
-                    alpha,
-                    Kind::Unspecified,
-                ),
-            ));
+                );
+                return vec![OkayRenderElements::TexShader(TextureShaderElement::new(
+                    tex_elem,
+                    prog,
+                    vec![
+                        Uniform::new("u_bbox_size", [bbox_w as f32, bbox_h as f32]),
+                        Uniform::new("u_src", [src_x0, src_y0, src_x1, src_y1]),
+                        Uniform::new("u_dst", [dst_x0, dst_y0, dst_x1, dst_y1]),
+                        Uniform::new("u_t", t),
+                        Uniform::new("u_blur", velocity_blur),
+                    ],
+                ))];
+            }
         }
 
-        elems
+        // Fallback single-quad continuous GLSL Genie shader (no discrete scanlines)
+        const GENIE_PIX_FRAG: &str = r#"
+precision mediump float;
+varying vec2 v_coords;
+uniform vec2 size;
+uniform float alpha;
+uniform vec4 u_src;
+uniform vec4 u_dst;
+uniform float u_t;
+uniform float u_blur;
+uniform vec3 u_accent;
+
+float genieCurve(float x) {
+    float c = clamp(x, 0.0, 1.0);
+    return c * c * (3.0 - 2.0 * c);
+}
+
+void main() {
+    vec2 px = v_coords * size;
+    float top_y = mix(u_src.y, u_dst.y, clamp(u_t * 1.15 - 0.15, 0.0, 1.0));
+    float bot_y = mix(u_src.w, u_dst.w, clamp(u_t * 1.35, 0.0, 1.0));
+    float span_y = max(bot_y - top_y, 2.0);
+    float v = (px.y - top_y) / span_y;
+
+    float pinch = clamp(u_t * 1.45 + clamp(v, 0.0, 1.0) * 0.75 - 0.25, 0.0, 1.0);
+    float s = genieCurve(pinch);
+    float left_x = mix(u_src.x, u_dst.x, s);
+    float right_x = mix(u_src.z, u_dst.z, s);
+
+    float mask_x = smoothstep(left_x - 1.5, left_x + 0.8, px.x) *
+                   (1.0 - smoothstep(right_x - 0.8, right_x + 1.5, px.x));
+    float mask_y = smoothstep(top_y - 1.0, top_y + 0.5, px.y) *
+                   (1.0 - smoothstep(bot_y - 0.5, bot_y + 1.0, px.y));
+    float mask = mask_x * mask_y;
+
+    vec3 col = mix(vec3(0.14, 0.16, 0.24), u_accent * 0.45 + vec3(0.14), v * 0.6 + u_blur * 0.3);
+    float a = mask * alpha * 0.85;
+    gl_FragColor = vec4(col * a, a);
+}
+"#;
+
+        thread_local! {
+            static GENIE_PIX_SHADER: RefCell<Option<GlesPixelProgram>> = const { RefCell::new(None) };
+        }
+
+        if let Some(prog) = GENIE_PIX_SHADER.with(|cell| {
+            let mut borrow = cell.borrow_mut();
+            if borrow.is_none() {
+                if let Ok(p) = renderer.compile_custom_pixel_shader(
+                    GENIE_PIX_FRAG,
+                    &[
+                        UniformName::new("u_src", UniformType::_4f),
+                        UniformName::new("u_dst", UniformType::_4f),
+                        UniformName::new("u_t", UniformType::_1f),
+                        UniformName::new("u_blur", UniformType::_1f),
+                        UniformName::new("u_accent", UniformType::_3f),
+                    ],
+                ) {
+                    *borrow = Some(p);
+                }
+            }
+            borrow.clone()
+        }) {
+            return vec![OkayRenderElements::Shader(PixelShaderElement::new(
+                prog,
+                area,
+                None,
+                alpha,
+                vec![
+                    Uniform::new("u_src", [src_x0, src_y0, src_x1, src_y1]),
+                    Uniform::new("u_dst", [dst_x0, dst_y0, dst_x1, dst_y1]),
+                    Uniform::new("u_t", t),
+                    Uniform::new("u_blur", velocity_blur),
+                    Uniform::new(
+                        "u_accent",
+                        [
+                            accent[0] as f32 / 255.0,
+                            accent[1] as f32 / 255.0,
+                            accent[2] as f32 / 255.0,
+                        ],
+                    ),
+                ],
+                Kind::Unspecified,
+            ))];
+        }
+
+        Vec::new()
     }
 }
 
 #[inline]
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
-}
-
-#[inline]
-fn smoothstep(x: f32) -> f32 {
-    let t = x.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 #[inline]
