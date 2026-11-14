@@ -100,24 +100,23 @@ def hex_to_wf_rgba(hex_color: str, alpha: float = 1.0) -> str:
     return f"{r / 255.0:.4f} {g / 255.0:.4f} {b / 255.0:.4f} {a:.4f}"
 
 
-def is_pixdecor_installed() -> bool:
-    """Sprawdza, czy wtyczka Wayfire pixdecor (libpixdecor.so) jest dostępna w systemie lub katalogu użytkownika."""
+def is_okay_decor_installed() -> bool:
+    """Sprawdza, czy natywny silnik dekoracji OKay-DE (libdecoration.so) jest zainstalowany."""
     candidates = [
-        os.path.join(xdg_data_home(), "wayfire", "plugins", "libpixdecor.so"),
-        "/usr/lib/wayfire/libpixdecor.so",
-        "/usr/local/lib/wayfire/libpixdecor.so",
-        "/usr/lib/x86_64-linux-gnu/wayfire/libpixdecor.so",
-        "/usr/lib/aarch64-linux-gnu/wayfire/libpixdecor.so",
+        os.path.join(xdg_data_home(), "wayfire", "plugins", "libdecoration.so"),
+        "/usr/lib/wayfire/libdecoration.so",
+        "/usr/local/lib/wayfire/libdecoration.so",
     ]
-    extra_env = os.environ.get("WAYFIRE_PLUGIN_PATH", "")
-    for d in extra_env.split(":"):
-        if d.strip():
-            candidates.append(os.path.join(d.strip(), "libpixdecor.so"))
     return any(os.path.isfile(p) for p in candidates)
 
 
+def is_pixdecor_installed() -> bool:
+    """Zachowane dla kompatybilności API: zwraca True, gdy dostępny jest silnik dekoracji OKay-DE."""
+    return is_okay_decor_installed()
+
+
 def ensure_wayfire_decorator_plugin() -> bool:
-    """Synchronizuje w [core] plugins aktywną wtyczkę dekoracji (pixdecor gdy dostępna, inaczej decoration)."""
+    """Upewnia się, że w [core] plugins aktywna jest wtyczka `decoration` (silnik OKay-DE libdecoration.so)."""
     wf_ini = wayfire_config_file()
     if not os.path.isfile(wf_ini):
         return False
@@ -125,36 +124,39 @@ def ensure_wayfire_decorator_plugin() -> bool:
     if not plugins_line:
         return False
     tokens = plugins_line.split()
-    has_pix = is_pixdecor_installed()
-    if has_pix and "pixdecor" not in tokens:
-        if "decoration" in tokens:
-            new_tokens = ["pixdecor" if t == "decoration" else t for t in tokens]
-        else:
-            new_tokens = tokens + ["pixdecor"]
-        update_wayfire_section("core", {"plugins": " ".join(new_tokens)})
-        return True
-    if not has_pix and "pixdecor" in tokens:
+    changed = False
+    if "pixdecor" in tokens:
         if "decoration" not in tokens:
-            new_tokens = ["decoration" if t == "pixdecor" else t for t in tokens]
+            tokens = ["decoration" if t == "pixdecor" else t for t in tokens]
         else:
-            new_tokens = [t for t in tokens if t != "pixdecor"]
-        update_wayfire_section("core", {"plugins": " ".join(new_tokens)})
-        return True
-    return False
+            tokens = [t for t in tokens if t != "pixdecor"]
+        changed = True
+    if "decoration" not in tokens:
+        tokens.append("decoration")
+        changed = True
+    if changed:
+        update_wayfire_section("core", {"plugins": " ".join(tokens)})
+    return changed
 
 
 SETTINGS_CSS_TEMPLATE = """
+window#okay-settings,
+window#okay-settings * {
+    font-family: "Inter", "Cantarell", "Noto Sans", system-ui, sans-serif;
+    text-shadow: none;
+    -gtk-icon-shadow: none;
+}
+
 window#okay-settings {
     background-color: __BG_WIN__;
     color: __FG_MAIN__;
-    font-family: "Inter", "JetBrains Mono", system-ui, sans-serif;
-    font-size: 13px;
+    font-size: 14px;
 }
 
 .settings-sidebar {
     background-color: __BG_SIDEBAR__;
     border-right: 1px solid __BORDER_COL__;
-    padding: 8px 6px;
+    padding: 10px 8px;
 }
 
 .settings-sidebar list {
@@ -163,11 +165,11 @@ window#okay-settings {
 
 .settings-sidebar row {
     color: __FG_MAIN__;
-    border-radius: 6px;
-    margin: 2px 4px;
-    padding: 10px 14px;
-    font-size: 13.5px;
-    font-weight: 500;
+    border-radius: 8px;
+    margin: 3px 6px;
+    padding: 12px 16px;
+    font-size: 14px;
+    font-weight: 600;
 }
 
 .settings-sidebar row:hover {
@@ -176,7 +178,7 @@ window#okay-settings {
 }
 
 .settings-sidebar row:selected {
-    background-color: rgba(__ACCENT_RGB__, 0.16);
+    background-color: rgba(__ACCENT_RGB__, 0.20);
     color: __ACCENT__;
     font-weight: 700;
     border-left: 3px solid __ACCENT__;
@@ -186,97 +188,100 @@ window#okay-settings {
     background-color: __BG_SIDEBAR__;
     border-right: 1px solid __BORDER_COL__;
     border-bottom: 1px solid __BORDER_COL__;
-    padding: 14px 16px;
+    padding: 16px 18px;
 }
 
 .brand-title {
     color: __ACCENT__;
-    font-size: 15.5px;
+    font-size: 17px;
     font-weight: 800;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.4px;
 }
 
 .brand-subtitle {
     color: __FG_SUB__;
-    font-size: 12px;
+    font-size: 12.5px;
+    font-weight: 500;
 }
 
 .page-title {
     color: __FG_MAIN__;
-    font-size: 20px;
-    font-weight: 700;
+    font-size: 22px;
+    font-weight: 800;
 }
 
 .page-subtitle {
     color: __FG_SUB__;
-    font-size: 13px;
+    font-size: 13.5px;
+    font-weight: 500;
 }
 
 .card-frame {
     background-color: __BG_CARD__;
-    border: 1px solid rgba(__ACCENT_RGB__, 0.22);
-    border-radius: 10px;
-    padding: 14px 16px;
+    border: 1px solid rgba(__ACCENT_RGB__, 0.28);
+    border-radius: 12px;
+    padding: 18px 20px;
 }
 
 .card-title {
     color: __ACCENT__;
-    font-size: 12.5px;
-    font-weight: 700;
+    font-size: 13px;
+    font-weight: 800;
     letter-spacing: 0.6px;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
 }
 
 .row-title {
     color: __FG_MAIN__;
-    font-size: 13.5px;
+    font-size: 14.5px;
     font-weight: 600;
 }
 
 .row-subtitle {
     color: __FG_SUB__;
-    font-size: 12px;
+    font-size: 13px;
+    font-weight: 400;
 }
 
 .status-ok {
     color: __ACCENT__;
-    font-weight: 600;
-    font-size: 12.5px;
+    font-weight: 700;
+    font-size: 13px;
 }
 
 .status-warn {
     color: #f9e2af;
-    font-weight: 600;
-    font-size: 12.5px;
+    font-weight: 700;
+    font-size: 13px;
 }
 
 .status-err {
     color: #f38ba8;
-    font-weight: 600;
-    font-size: 12.5px;
+    font-weight: 700;
+    font-size: 13px;
 }
 
 .badge-connected {
-    background-color: rgba(__ACCENT_RGB__, 0.16);
+    background-color: rgba(__ACCENT_RGB__, 0.18);
     color: __ACCENT__;
-    border: 1px solid rgba(__ACCENT_RGB__, 0.45);
-    border-radius: 5px;
-    padding: 3px 8px;
-    font-size: 12px;
+    border: 1px solid rgba(__ACCENT_RGB__, 0.48);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12.5px;
     font-weight: 700;
 }
 
 list.settings-list {
     background-color: __BG_LIST__;
     border: 1px solid __BORDER_COL__;
-    border-radius: 8px;
+    border-radius: 10px;
 }
 
 list.settings-list row {
-    padding: 9px 12px;
+    padding: 11px 14px;
     border-bottom: 1px solid __BORDER_COL__;
     color: __FG_MAIN__;
-    font-size: 13px;
+    font-size: 13.5px;
 }
 
 list.settings-list row:last-child {
@@ -288,8 +293,14 @@ list.settings-list row:hover {
 }
 
 list.settings-list row:selected {
-    background-color: rgba(__ACCENT_RGB__, 0.14);
+    background-color: rgba(__ACCENT_RGB__, 0.18);
     color: __FG_MAIN__;
+}
+
+button {
+    text-shadow: none;
+    -gtk-icon-shadow: none;
+    box-shadow: none;
 }
 
 button.accent-btn {
@@ -297,10 +308,15 @@ button.accent-btn {
     background-image: none;
     color: __ACCENT_CONTRAST__;
     border: none;
-    border-radius: 6px;
-    padding: 7px 15px;
+    border-radius: 8px;
+    padding: 8px 16px;
     font-weight: 700;
-    font-size: 12.5px;
+    font-size: 13.5px;
+}
+
+button.accent-btn label {
+    color: __ACCENT_CONTRAST__;
+    font-weight: 700;
 }
 
 button.accent-btn:hover {
@@ -317,10 +333,10 @@ button.secondary-btn {
     background-image: none;
     color: __FG_MAIN__;
     border: 1px solid __BORDER_COL__;
-    border-radius: 6px;
-    padding: 7px 13px;
+    border-radius: 8px;
+    padding: 8px 14px;
     font-weight: 600;
-    font-size: 12.5px;
+    font-size: 13.5px;
 }
 
 button.secondary-btn:hover {
@@ -333,10 +349,10 @@ button.danger-btn {
     background-image: none;
     color: #f38ba8;
     border: 1px solid #592632;
-    border-radius: 6px;
-    padding: 7px 13px;
+    border-radius: 8px;
+    padding: 8px 14px;
     font-weight: 600;
-    font-size: 12.5px;
+    font-size: 13.5px;
 }
 
 button.danger-btn:hover {
@@ -348,16 +364,17 @@ button.scale-pill {
     background-image: none;
     color: __FG_MAIN__;
     border: 1px solid __BORDER_COL__;
-    border-radius: 6px;
-    padding: 6px 13px;
+    border-radius: 8px;
+    padding: 7px 14px;
     font-weight: 600;
-    font-size: 12.5px;
+    font-size: 13px;
 }
 
 button.scale-pill:checked {
-    background-color: rgba(__ACCENT_RGB__, 0.18);
+    background-color: rgba(__ACCENT_RGB__, 0.22);
     color: __ACCENT__;
     border-color: __ACCENT__;
+    font-weight: 700;
 }
 
 button.color-preset-btn {
@@ -365,10 +382,10 @@ button.color-preset-btn {
     background-image: none;
     color: __FG_MAIN__;
     border: 1px solid __BORDER_COL__;
-    border-radius: 6px;
-    padding: 6px 10px;
+    border-radius: 8px;
+    padding: 7px 12px;
     font-weight: 600;
-    font-size: 12.5px;
+    font-size: 13px;
 }
 
 button.color-preset-btn:hover {
@@ -377,15 +394,17 @@ button.color-preset-btn:hover {
 }
 
 button.color-preset-btn:checked {
-    background-color: rgba(__ACCENT_RGB__, 0.16);
+    background-color: rgba(__ACCENT_RGB__, 0.20);
     color: __FG_MAIN__;
-    border: 1px solid __ACCENT__;
+    border: 1.5px solid __ACCENT__;
 }
 
 switch {
     background-color: __BG_BTN__;
     border: 1px solid __BORDER_COL__;
-    border-radius: 12px;
+    border-radius: 14px;
+    min-width: 46px;
+    min-height: 24px;
 }
 
 switch:checked {
@@ -395,17 +414,19 @@ switch:checked {
 
 switch slider {
     background-color: #ffffff;
-    border-radius: 10px;
+    border-radius: 12px;
+    min-width: 20px;
+    min-height: 20px;
 }
 
 scale highlight {
     background-color: __ACCENT__;
-    border-radius: 3px;
+    border-radius: 4px;
 }
 
 scale trough {
     background-color: __BG_BTN__;
-    border-radius: 3px;
+    border-radius: 4px;
     min-height: 6px;
 }
 
@@ -413,21 +434,23 @@ scale slider {
     background-color: __ACCENT__;
     border: 2px solid __BG_WIN__;
     border-radius: 10px;
-    min-width: 16px;
-    min-height: 16px;
+    min-width: 18px;
+    min-height: 18px;
 }
 
-entry, combobox button {
+entry, combobox button, spinbutton {
     background-color: __BG_ENTRY__;
     background-image: none;
     color: __FG_MAIN__;
     border: 1px solid __BORDER_COL__;
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 12.5px;
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-size: 13.5px;
+    text-shadow: none;
+    box-shadow: none;
 }
 
-entry:focus {
+entry:focus, combobox button:focus, spinbutton:focus {
     border-color: __ACCENT__;
 }
 
@@ -438,8 +461,8 @@ combobox window menu {
     background-image: none;
     color: __FG_MAIN__;
     border: 1px solid rgba(__ACCENT_RGB__, 0.45);
-    border-radius: 6px;
-    padding: 4px 0;
+    border-radius: 8px;
+    padding: 6px 0;
 }
 
 menu menuitem,
@@ -447,14 +470,15 @@ combobox menuitem {
     background-color: transparent;
     background-image: none;
     color: __FG_MAIN__;
-    padding: 6px 12px;
-    font-size: 12.5px;
+    padding: 8px 14px;
+    font-size: 13.5px;
 }
 
 menu menuitem label,
 combobox menuitem label,
 combobox cellview {
     color: __FG_MAIN__;
+    text-shadow: none;
 }
 
 menu menuitem:hover,
@@ -517,27 +541,27 @@ def get_settings_css(accent_hex: str = DEFAULT_ACCENT_COLOR, theme_mode: str = N
     hover = compute_hover_hex(clean)
     contrast = compute_contrast_text(clean)
     if mode == "light":
-        bg_win = blend_hex_color("#f4f5f8", clean, 0.03)
-        bg_sidebar = blend_hex_color("#ebedf2", clean, 0.04)
+        bg_win = blend_hex_color("#eff1f5", clean, 0.03)
+        bg_sidebar = blend_hex_color("#e6e9ef", clean, 0.04)
         bg_card = "#ffffff"
         bg_list = "#f8f9fc"
-        bg_btn = "#e6e8f0"
-        bg_hover = "#dcdff0"
+        bg_btn = "#dce0e8"
+        bg_hover = "#ccd0da"
         bg_entry = "#ffffff"
-        fg_main = "#181825"
+        fg_main = "#1e1e2e"
         fg_sub = "#4c4f69"
-        border_col = "#d0d4e0"
+        border_col = "#ccd0da"
     else:
-        bg_win = blend_hex_color("#111111", clean, 0.035)
-        bg_sidebar = blend_hex_color("#151515", clean, 0.045)
-        bg_card = blend_hex_color("#1a1a1a", clean, 0.045)
-        bg_list = "#161616"
-        bg_btn = "#242424"
-        bg_hover = "#2c2c34"
-        bg_entry = "#121212"
-        fg_main = "#f5f5f5"
-        fg_sub = "#bac2de"
-        border_col = "#282828"
+        bg_win = blend_hex_color("#181825", clean, 0.03)
+        bg_sidebar = blend_hex_color("#11111b", clean, 0.04)
+        bg_card = blend_hex_color("#1e1e2e", clean, 0.04)
+        bg_list = "#181825"
+        bg_btn = "#313244"
+        bg_hover = "#45475a"
+        bg_entry = "#11111b"
+        fg_main = "#f5f7ff"
+        fg_sub = "#c8d0ee"
+        border_col = "#313244"
 
     return (
         SETTINGS_CSS_TEMPLATE
@@ -578,6 +602,12 @@ def apply_settings_css(accent_hex: str = None, theme_mode: str = None):
     global _SETTINGS_CSS_PROVIDER
     target_hex = sanitize_hex_color(accent_hex) if accent_hex else get_current_accent_color()
     target_mode = theme_mode if theme_mode in ("dark", "light") else get_current_theme_mode()
+    try:
+        gtk_settings = Gtk.Settings.get_default()
+        if gtk_settings is not None:
+            gtk_settings.set_property("gtk-application-prefer-dark-theme", target_mode != "light")
+    except Exception:
+        pass
     css_data = get_settings_css(target_hex, target_mode).encode("utf-8")
     if _SETTINGS_CSS_PROVIDER is None:
         _SETTINGS_CSS_PROVIDER = Gtk.CssProvider()
@@ -586,7 +616,7 @@ def apply_settings_css(accent_hex: str = None, theme_mode: str = None):
             Gtk.StyleContext.add_provider_for_screen(
                 screen,
                 _SETTINGS_CSS_PROVIDER,
-                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                Gtk.STYLE_PROVIDER_PRIORITY_USER
             )
     try:
         _SETTINGS_CSS_PROVIDER.load_from_data(css_data)
@@ -784,7 +814,7 @@ DEFAULT_PANEL_CONFIG = {
     "open_effect": "zoom",
     "minimize_effect": "squeezimize",
     "blur_enabled": False,
-    "wobbly_enabled": False,
+    "wobbly_enabled": True,
     "window_opacity": 1.0,
     "focus_mode": False,
     "idle_timeout": 600,
@@ -1803,7 +1833,7 @@ def _ensure_window_button_svgs(buttons_style: str, accent_hex: str) -> dict:
 _GTK_COMMON_DEFAULTS = {
     "gtk-theme-name": "Adwaita-dark",
     "gtk-icon-theme-name": "Papirus-Dark",
-    "gtk-font-name": "JetBrains Mono 10",
+    "gtk-font-name": "Sans 10.5",
     "gtk-cursor-theme-name": "Adwaita",
     "gtk-cursor-theme-size": "24",
     "gtk-application-prefer-dark-theme": "1",
@@ -1834,7 +1864,9 @@ def _get_button_layouts(buttons_style: str) -> tuple:
 
 def sync_gtk_settings(decoration_layout: str = None, animations: bool = None, theme_mode: str = None) -> None:
     """Aktualizuje ~/.config/gtk-3.0/settings.ini oraz gtk-4.0/settings.ini, zachowując spójność układu przycisków i motywu."""
-    updates = {}
+    updates = {
+        "gtk-font-name": "Sans 10.5",
+    }
     if decoration_layout is not None:
         updates["gtk-decoration-layout"] = decoration_layout
     if animations is not None:
@@ -1844,11 +1876,19 @@ def sync_gtk_settings(decoration_layout: str = None, animations: bool = None, th
         updates["gtk-application-prefer-dark-theme"] = "0" if is_light else "1"
         updates["gtk-theme-name"] = "Adwaita" if is_light else "Adwaita-dark"
         updates["gtk-icon-theme-name"] = "Papirus" if is_light else "Papirus-Dark"
+        try:
+            gtk_settings = Gtk.Settings.get_default()
+            if gtk_settings is not None:
+                gtk_settings.set_property("gtk-application-prefer-dark-theme", not is_light)
+        except Exception:
+            pass
         if shutil.which("gsettings"):
             color_scheme = "prefer-light" if is_light else "prefer-dark"
             gtk_theme = "Adwaita" if is_light else "Adwaita-dark"
+            icon_theme = "Papirus" if is_light else "Papirus-Dark"
             run_cmd(["gsettings", "set", "org.gnome.desktop.interface", "color-scheme", color_scheme], timeout=2)
             run_cmd(["gsettings", "set", "org.gnome.desktop.interface", "gtk-theme", gtk_theme], timeout=2)
+            run_cmd(["gsettings", "set", "org.gnome.desktop.interface", "icon-theme", icon_theme], timeout=2)
 
     for gtk_ver in ("gtk-3.0", "gtk-4.0"):
         ini_path = os.path.join(xdg_config_home(), gtk_ver, "settings.ini")
@@ -1899,23 +1939,95 @@ def sync_gnome_wm_button_layout(gtk_layout: str) -> None:
     run_cmd(["gsettings", "set", "org.gnome.desktop.wm.preferences", "button-layout", gtk_layout], timeout=2)
 
 
+def _sync_browser_dark_mode_prefs(is_light: bool) -> None:
+    """Aktualizuje preferencje motywu (dark/light) w profilach przeglądarek Floorp / Firefox (również Flatpak)."""
+    profile_globs = [
+        os.path.expanduser("~/.var/app/one.ablaze.floorp/.floorp/*"),
+        os.path.expanduser("~/.floorp/*"),
+        os.path.expanduser("~/.var/app/org.mozilla.firefox/.mozilla/firefox/*"),
+        os.path.expanduser("~/.mozilla/firefox/*"),
+    ]
+    dark_val = 0 if is_light else 1
+    scheme_override = 1 if is_light else 0  # 0=dark, 1=light in Gecko
+    marker_s = "// OKAY-DE-THEME-START"
+    marker_e = "// OKAY-DE-THEME-END"
+    block = (
+        f"{marker_s}\n"
+        f'user_pref("ui.systemUsesDarkTheme", {dark_val});\n'
+        f'user_pref("layout.css.prefers-color-scheme.content-override", {scheme_override});\n'
+        f'user_pref("browser.theme.content-theme", {scheme_override});\n'
+        f'user_pref("browser.theme.toolbar-theme", {scheme_override});\n'
+        f"{marker_e}\n"
+    )
+    for pat in profile_globs:
+        for prof_dir in glob.glob(pat):
+            if not os.path.isdir(prof_dir):
+                continue
+            if not (os.path.isfile(os.path.join(prof_dir, "prefs.js")) or prof_dir.endswith((".default", ".default-release"))):
+                continue
+            user_js = os.path.join(prof_dir, "user.js")
+            try:
+                existing = ""
+                if os.path.isfile(user_js):
+                    with open(user_js, "r", encoding="utf-8") as f:
+                        existing = f.read()
+                if marker_s in existing and marker_e in existing:
+                    updated = re.sub(
+                        re.escape(marker_s) + r".*?" + re.escape(marker_e) + r"\n?",
+                        block,
+                        existing,
+                        flags=re.DOTALL,
+                    )
+                else:
+                    updated = (existing.rstrip() + "\n\n" if existing.strip() else "") + block
+                atomic_write_text(user_js, updated, mode=0o644)
+            except Exception:
+                pass
+
+
 def sync_flatpak_environment(theme_mode: str = "dark") -> None:
-    """Synchronizuje w tle uprawnienia i zmienne sandboxa Flatpaka z motywem oraz arkuszami CSS OKay DE."""
-    if not shutil.which("flatpak"):
-        return
-    gtk_theme = "Adwaita" if str(theme_mode).lower() == "light" else "Adwaita-dark"
+    """Synchronizuje uprawnienia, pliki konfiguracyjne GTK3/GTK4 wewnątrz ~/.var/app/* oraz zmienne sandboxa Flatpaka."""
+    is_light = (str(theme_mode).lower() == "light")
+    gtk_theme = "Adwaita:light" if is_light else "Adwaita:dark"
+    adw_scheme = "prefer-light" if is_light else "prefer-dark"
 
     def _worker():
-        run_cmd([
-            "flatpak", "override", "--user",
-            "--filesystem=xdg-config/gtk-3.0:ro",
-            "--filesystem=xdg-config/gtk-4.0:ro",
-            "--filesystem=xdg-config/okay-de:ro",
-            "--env=GTK_CSD=0",
-            f"--env=GTK_THEME={gtk_theme}",
-            "--env=XCURSOR_THEME=Adwaita",
-            "--env=XCURSOR_SIZE=24",
-        ], timeout=6)
+        # 1. Kopiuj aktualne settings.ini i gtk.css bezpośrednio do prywatnych katalogów aplikacji Flatpak (~/.var/app/*/config/)
+        var_app = os.path.expanduser("~/.var/app")
+        if os.path.isdir(var_app):
+            for app_id in os.listdir(var_app):
+                app_cfg_root = os.path.join(var_app, app_id, "config")
+                if not os.path.isdir(os.path.join(var_app, app_id)):
+                    continue
+                for gtk_ver in ("gtk-3.0", "gtk-4.0"):
+                    src_dir = os.path.join(xdg_config_home(), gtk_ver)
+                    dst_dir = os.path.join(app_cfg_root, gtk_ver)
+                    try:
+                        os.makedirs(dst_dir, exist_ok=True)
+                        for fname in ("settings.ini", "gtk.css"):
+                            sp = os.path.join(src_dir, fname)
+                            dp = os.path.join(dst_dir, fname)
+                            if os.path.isfile(sp):
+                                atomic_copy_file(sp, dp, mode=0o644)
+                    except Exception:
+                        pass
+
+        # 2. Zsynchronizuj profile przeglądarek (Floorp / Firefox)
+        _sync_browser_dark_mode_prefs(is_light)
+
+        # 3. Ustaw globalne override dla Flatpaka
+        if shutil.which("flatpak"):
+            run_cmd([
+                "flatpak", "override", "--user",
+                "--filesystem=xdg-config/gtk-3.0:ro",
+                "--filesystem=xdg-config/gtk-4.0:ro",
+                "--filesystem=xdg-config/okay-de:ro",
+                "--env=GTK_CSD=0",
+                f"--env=GTK_THEME={gtk_theme}",
+                f"--env=ADW_DEBUG_COLOR_SCHEME={adw_scheme}",
+                "--env=XCURSOR_THEME=Adwaita",
+                "--env=XCURSOR_SIZE=24",
+            ], timeout=6)
 
     threading.Thread(target=_worker, daemon=True).start()
 
@@ -2070,12 +2182,16 @@ def apply_window_decorations(
             f"headerbar windowcontrols > button:not(.close):hover, windowcontrols > button:not(.close):hover {{ background-color: {accent_hex}; border-color: {accent_hex}; color: {contrast_text}; }}\n"
         )
 
-    # Wymuszenie zaokrąglenia narożników, palety barw i koloru ramki w aplikacjach GTK3 / GTK4 / libadwaita
+    # Wymuszenie zaokrąglenia narożników, palety barw, wyłączenia obramówek czcionki i koloru ramki w aplikacjach GTK3 / GTK4 / libadwaita
     marker_start = "/* OKAY-DE-CORNERS-START */"
     marker_end = "/* OKAY-DE-CORNERS-END */"
     gtk3_block = (
         f"{marker_start}\n"
         f"{adw_color_defs}"
+        f"*, label, button, entry, menuitem, tab, headerbar, .titlebar {{\n"
+        f"    text-shadow: none;\n"
+        f"    -gtk-icon-shadow: none;\n"
+        f"}}\n"
         f"window, window.background, window.csd, window.ssd, window.solid-csd,\n"
         f"decoration, messagedialog, dialog, popover > contents, menu {{\n"
         f"    border-radius: {corner_radius}px;\n"
@@ -2109,6 +2225,10 @@ def apply_window_decorations(
     gtk4_block = (
         f"{marker_start}\n"
         f"{adw_color_defs}"
+        f"*, label, button, entry, menuitem, tab, headerbar, .titlebar {{\n"
+        f"    text-shadow: none;\n"
+        f"    -gtk-icon-shadow: none;\n"
+        f"}}\n"
         f"window, window.background, window.csd, window.ssd, window.solid-csd,\n"
         f"decoration, messagedialog, dialog, popover > contents {{\n"
         f"    border-radius: {corner_radius}px;\n"
@@ -2154,16 +2274,24 @@ def apply_window_decorations(
         except Exception:
             pass
 
-    # Synchronizacja zaokrąglenia w mako (~/.config/mako/config)
+    # Synchronizacja zaokrąglenia i motywu w mako (~/.config/mako/config)
     mako_cfg = os.path.join(xdg_config_home(), "mako", "config")
     if os.path.isfile(mako_cfg):
         try:
             with open(mako_cfg, "r", encoding="utf-8") as f:
                 m_txt = f.read()
-            if re.search(r"^border-radius\s*=.*$", m_txt, flags=re.MULTILINE):
-                m_txt = re.sub(r"^(border-radius\s*=\s*).*$", rf"\g<1>{corner_radius}", m_txt, flags=re.MULTILINE)
-            else:
-                m_txt = m_txt.rstrip() + f"\nborder-radius={corner_radius}\n"
+            mako_bg = "#ffffff" if is_light else "#181825"
+            mako_fg = "#181825" if is_light else "#f2f2f7"
+            for mk_key, mk_val in (
+                ("border-radius", str(corner_radius)),
+                ("background-color", mako_bg),
+                ("text-color", mako_fg),
+                ("border-color", accent_hex),
+            ):
+                if re.search(rf"^{re.escape(mk_key)}\s*=.*$", m_txt, flags=re.MULTILINE):
+                    m_txt = re.sub(rf"^({re.escape(mk_key)}\s*=\s*).*$", rf"\g<1>{mk_val}", m_txt, flags=re.MULTILINE)
+                else:
+                    m_txt = m_txt.rstrip() + f"\n{mk_key}={mk_val}\n"
             atomic_write_text(mako_cfg, m_txt, mode=0o644)
         except Exception:
             pass
@@ -2176,13 +2304,15 @@ def apply_window_decorations(
         "button_order": wf_layout,
         "active_color": hex_to_wf_rgba(accent_hex, 1.0),
         "inactive_color": hex_to_wf_rgba(inactive_hex, 1.0),
-        "border_size": "2",
+        "title_height": "32",
+        "border_size": "3",
+        "font": "Sans 10.5",
         "ignore_views": "none",
     })
     pix_updates = {
         "titlebar": "true",
-        "csd_titlebar_height": "28",
-        "border_size": "2",
+        "csd_titlebar_height": "32",
+        "border_size": "3",
         "rounded_corner_radius": str(corner_radius),
         "overlay_engine": "rounded_corners" if corner_radius > 0 else "none",
         "always_decorate": "all",
@@ -2211,7 +2341,7 @@ def apply_window_decorations(
         "corner_radius": corner_radius,
         "theme_mode": theme_mode,
         "layout": wf_layout,
-        "pixdecor_active": is_pixdecor_installed(),
+        "pixdecor_active": True,
     }
 
 
@@ -2238,7 +2368,7 @@ def apply_wayfire_animations_and_effects(cfg: dict = None) -> dict:
     open_eff = str(cfg.get("open_effect", "zoom"))
     min_eff = str(cfg.get("minimize_effect", "squeezimize"))
     blur_enabled = bool(cfg.get("blur_enabled", False))
-    wobbly_enabled = bool(cfg.get("wobbly_enabled", False))
+    wobbly_enabled = bool(cfg.get("wobbly_enabled", True))
     win_opacity = max(0.50, min(1.00, float(cfg.get("window_opacity", 1.0))))
     ws_count = max(1, min(9, int(cfg.get("workspace_count", 3))))
     idle_timeout = max(0, min(7200, int(cfg.get("idle_timeout", 600))))
@@ -2274,20 +2404,29 @@ def apply_wayfire_animations_and_effects(cfg: dict = None) -> dict:
             "open_animation": open_eff,
             "close_animation": open_eff,
             "minimize_animation": min_eff,
-            "duration": _scaled_ms(180, "circle"),
-            "startup_duration": _scaled_ms(260, "circle"),
-            "fade_duration": _scaled_ms(150, "circle"),
-            "zoom_duration": _scaled_ms(180, "circle"),
-            "fire_duration": _scaled_ms(220, "linear"),
-            "squeezimize_duration": _scaled_ms(160, "linear"),
+            "duration": _scaled_ms(220, "circle"),
+            "startup_duration": _scaled_ms(300, "circle"),
+            "fade_duration": _scaled_ms(180, "circle"),
+            "zoom_duration": _scaled_ms(220, "circle"),
+            "fire_duration": _scaled_ms(260, "linear"),
+            "squeezimize_duration": _scaled_ms(200, "linear"),
             "fire_color": hex_to_wf_rgba(accent_hex, 1.0),
             "fade_enabled_for": '(type is "overlay" | (type is "x-or" & focusable is true))',
         })
 
-    update_wayfire_section("vswitch", {"duration": _scaled_ms(180, "circle")})
-    update_wayfire_section("expo", {"duration": _scaled_ms(200, "circle")})
-    update_wayfire_section("grid", {"duration": _scaled_ms(160, "circle")})
-    update_wayfire_section("switcher", {"speed": _scaled_ms(180, "circle")})
+    update_wayfire_section("vswitch", {"duration": _scaled_ms(220, "circle")})
+    update_wayfire_section("expo", {"duration": _scaled_ms(240, "circle")})
+    update_wayfire_section("grid", {"duration": _scaled_ms(200, "circle")})
+    update_wayfire_section("switcher", {"speed": _scaled_ms(200, "circle")})
+
+    # Płynne, miękkie i mniej sztywne Wobbly Windows (spring_k ~ 2.8, friction ~ 1.9, grid_resolution = 8)
+    wobbly_spring = max(1.6, min(4.2, 2.8 * speed))
+    wobbly_friction = max(1.4, min(2.6, 1.9 * (0.85 + 0.15 * speed)))
+    update_wayfire_section("wobbly", {
+        "spring_k": f"{wobbly_spring:.2f}",
+        "friction": f"{wobbly_friction:.2f}",
+        "grid_resolution": "8",
+    })
 
     # Aktualizacja [core]: vwidth, preferred_decoration_mode oraz dynamiczne wtyczki (blur, wobbly)
     plugins_str = read_wayfire_value(

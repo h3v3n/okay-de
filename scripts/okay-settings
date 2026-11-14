@@ -102,7 +102,7 @@ class OkaySettingsWindow(Gtk.Window):
     def __init__(self, initial_tab: str = None):
         super().__init__(title="Ustawienia systemowe — OKay DE")
         self.set_name("okay-settings")
-        self.set_default_size(940, 620)
+        self.set_default_size(1000, 680)
         self.set_position(Gtk.WindowPosition.CENTER)
 
         ensure_user_configs()

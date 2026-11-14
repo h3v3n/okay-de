@@ -9,7 +9,7 @@
   "window_buttons_style": "rectangles",
   "window_opacity": 1.0,
   "blur_enabled": false,
-  "wobbly_enabled": false,
+  "wobbly_enabled": true,
   "reduce_motion": false,
   "animation_speed": 1.0,
   "open_effect": "zoom",

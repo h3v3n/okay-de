@@ -71,16 +71,30 @@ class PanelTab(Gtk.Box):
         # =====================================================================
         card_color, box_color = make_card("Motyw systemu i paleta akcentu")
 
+        theme_ctrl_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.btn_theme_dark = Gtk.ToggleButton(label="🌙 Ciemny (Dark)")
+        self.btn_theme_dark.get_style_context().add_class("color-preset-btn")
+        self.btn_theme_light = Gtk.ToggleButton(label="☀️ Jasny (Light)")
+        self.btn_theme_light.get_style_context().add_class("color-preset-btn")
+
         self.combo_theme_mode = Gtk.ComboBoxText()
         self.combo_theme_mode.append("dark", "Ciemny (OKay Dark)")
         self.combo_theme_mode.append("light", "Jasny (OKay Light)")
         self.combo_theme_mode.set_active_id("dark")
         self.combo_theme_mode.connect("changed", self._on_theme_mode_changed)
+
+        self.btn_theme_dark.connect("toggled", self._on_theme_btn_toggled, "dark")
+        self.btn_theme_light.connect("toggled", self._on_theme_btn_toggled, "light")
+
+        theme_ctrl_box.pack_start(self.btn_theme_dark, False, False, 0)
+        theme_ctrl_box.pack_start(self.btn_theme_light, False, False, 0)
+        theme_ctrl_box.pack_start(self.combo_theme_mode, False, False, 0)
+
         box_color.pack_start(
             make_setting_row(
                 "Motyw kolorystyczny środowiska",
-                "Przełącza na żywo motyw paska, ustawień, aplikacji GTK3/GTK4/libadwaita oraz Flatpak",
-                self.combo_theme_mode,
+                "Przełącza natychmiast motyw paska, ustawień, ramek okien oraz aplikacji GTK3/GTK4/libadwaita i Flatpak",
+                theme_ctrl_box,
             ),
             False,
             False,
@@ -447,7 +461,6 @@ class PanelTab(Gtk.Box):
             btn.set_active(preset_hex == clean)
 
     def _refresh_decor_hint(self, cfg: dict):
-        pix_ok = is_pixdecor_installed()
         style_map = {
             "rectangles": "Prostokąty z akcentem (po prawej)",
             "circles_left": "Kolorowe kółka (po lewej)",
@@ -456,21 +469,22 @@ class PanelTab(Gtk.Box):
         }
         style_label = style_map.get(cfg.get("window_buttons_style", "rectangles"), "Prostokąty")
         radius = int(cfg.get("window_corner_radius", 12))
-        if pix_ok:
-            self.lbl_decor_hint.set_text(
-                f"Aktywne dekoracje SSD Wayfire (pixdecor) + GTK3/GTK4/libadwaita + Flatpak: {style_label} • zaokrąglenie {radius} px."
-            )
-        else:
-            self.lbl_decor_hint.set_text(
-                f"Aktywne dekoracje SSD Wayfire (decoration) + GTK3/GTK4/libadwaita + Flatpak: {style_label} • zaokrąglenie {radius} px."
-            )
+        self.lbl_decor_hint.set_text(
+            f"Aktywny silnik dekoracji: OKay-DE Native SSD (libdecoration.so) + GTK3/GTK4/libadwaita + Flatpak: {style_label} • zaokrąglenie {radius} px."
+        )
+
+    def _sync_theme_mode_buttons(self, mode: str):
+        is_light = (mode == "light")
+        self.btn_theme_dark.set_active(not is_light)
+        self.btn_theme_light.set_active(is_light)
+        self.combo_theme_mode.set_active_id("light" if is_light else "dark")
 
     def load_config(self):
         ensure_user_configs()
         cfg = self._state.reload(notify=False)
 
         self._updating_ui = True
-        self.combo_theme_mode.set_active_id(cfg.get("theme_mode", "dark"))
+        self._sync_theme_mode_buttons(cfg.get("theme_mode", "dark"))
         self._sync_color_controls(cfg.get("accent_color", DEFAULT_ACCENT_COLOR))
         self.combo_btn_style.set_active_id(cfg.get("window_buttons_style", "rectangles"))
         self.scale_corner_radius.set_value(float(cfg.get("window_corner_radius", 12)))
@@ -485,7 +499,7 @@ class PanelTab(Gtk.Box):
         self.combo_open_effect.set_sensitive(not reduce_motion)
         self.combo_min_effect.set_active_id(cfg.get("minimize_effect", "squeezimize"))
         self.combo_min_effect.set_sensitive(not reduce_motion)
-        self.switch_wobbly.set_active(bool(cfg.get("wobbly_enabled", False)))
+        self.switch_wobbly.set_active(bool(cfg.get("wobbly_enabled", True)))
         self.switch_wobbly.set_sensitive(not reduce_motion)
 
         self.combo_mode.set_active_id(cfg.get("mode", "panel"))
@@ -509,14 +523,31 @@ class PanelTab(Gtk.Box):
                 if not ctx.has_class("no-animations"):
                     ctx.add_class("no-animations")
 
+    def _on_theme_btn_toggled(self, btn: Gtk.ToggleButton, mode: str):
+        if self._updating_ui:
+            return
+        if not btn.get_active():
+            self._updating_ui = True
+            btn.set_active(True)
+            self._updating_ui = False
+            return
+        self._apply_theme_mode(mode)
+
     def _on_theme_mode_changed(self, _combo):
         if self._updating_ui:
             return
         mode = self.combo_theme_mode.get_active_id() or "dark"
+        self._apply_theme_mode(mode)
+
+    def _apply_theme_mode(self, mode: str):
+        mode = "light" if str(mode).lower() == "light" else "dark"
+        self._updating_ui = True
+        self._sync_theme_mode_buttons(mode)
+        self._updating_ui = False
         cfg = self._state.update({"theme_mode": mode}, sync_wayfire=True)
         apply_settings_css(cfg.get("accent_color", DEFAULT_ACCENT_COLOR), theme_mode=mode)
         self.lbl_color_status.set_text(
-            f"Zastosowano motyw {'Jasny (Light)' if mode == 'light' else 'Ciemny (Dark)'} w całym środowisku i Flatpaku."
+            f"Zastosowano motyw {'Jasny (Light)' if mode == 'light' else 'Ciemny (Dark)'} na żywo w całym środowisku, aplikacjach GTK i Flatpaku."
         )
 
     def _on_preset_toggled(self, button: Gtk.ToggleButton, hex_color: str):

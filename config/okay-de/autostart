@@ -28,18 +28,17 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 
 # 2. Synchronizacja ustawień dconf/gsettings, stylów GTK3/GTK4/libadwaita oraz sandboxa Flatpak
-if command -v gsettings >/dev/null 2>&1; then
-    gsettings set org.gnome.desktop.wm.preferences button-layout ':minimize,maximize,close' >/dev/null 2>&1 &
-    gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark' >/dev/null 2>&1 &
-    gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' >/dev/null 2>&1 &
-    gsettings set org.gnome.desktop.interface icon-theme 'Papirus-Dark' >/dev/null 2>&1 &
-    gsettings set org.gnome.desktop.interface cursor-theme 'Adwaita' >/dev/null 2>&1 &
-fi
-
 if command -v python3 >/dev/null 2>&1; then
     python3 -c '
 import sys, os
-for p in [os.path.expanduser("~/.local/bin"), "/usr/bin", "/usr/local/bin"]:
+for p in [
+    os.path.expanduser("~/.local/share/okay-de"),
+    os.path.expanduser("~/.local/bin"),
+    "/usr/local/share/okay-de",
+    "/usr/share/okay-de",
+    "/usr/bin",
+    "/usr/local/bin",
+]:
     if os.path.isdir(os.path.join(p, "settings")) and p not in sys.path:
         sys.path.insert(0, p)
 try:
@@ -48,16 +47,25 @@ try:
 except Exception:
     pass
 ' >/dev/null 2>&1 &
+elif command -v gsettings >/dev/null 2>&1; then
+    gsettings set org.gnome.desktop.wm.preferences button-layout ":minimize,maximize,close" >/dev/null 2>&1 &
+    gsettings set org.gnome.desktop.interface gtk-theme "Adwaita-dark" >/dev/null 2>&1 &
+    gsettings set org.gnome.desktop.interface color-scheme "prefer-dark" >/dev/null 2>&1 &
+    gsettings set org.gnome.desktop.interface icon-theme "Papirus-Dark" >/dev/null 2>&1 &
+    gsettings set org.gnome.desktop.interface cursor-theme "Adwaita" >/dev/null 2>&1 &
 fi
 
 # 3. Tapeta pulpitu (swaybg)
 WALLPAPER_USER="$HOME/.config/okay-de/wallpaper"
-WALLPAPER_SYS="/usr/share/okay-de/wallpapers/default.png"
+WALLPAPER_PNG="$HOME/.config/okay-de/wallpaper.png"
+WALLPAPER_SYS="/usr/share/backgrounds/okay-de/default.png"
 
 pkill -x swaybg 2>/dev/null || true
 if command -v swaybg >/dev/null 2>&1; then
     if [ -f "$WALLPAPER_USER" ]; then
         swaybg -i "$WALLPAPER_USER" -m fill >/dev/null 2>&1 &
+    elif [ -f "$WALLPAPER_PNG" ]; then
+        swaybg -i "$WALLPAPER_PNG" -m fill >/dev/null 2>&1 &
     elif [ -f "$WALLPAPER_SYS" ]; then
         swaybg -i "$WALLPAPER_SYS" -m fill >/dev/null 2>&1 &
     else
@@ -65,13 +73,18 @@ if command -v swaybg >/dev/null 2>&1; then
     fi
 fi
 
-# 4. Natywny pasek systemowy OKay Panel (GTK3 + GtkLayerShell)
+# 4. Natywny pulpit z siatką ikon (okay-desktop) oraz pasek systemowy (okay-panel)
 pkill -x waybar 2>/dev/null || true
-pkill -f "okay-panel" 2>/dev/null || true
-if command -v okay-panel >/dev/null 2>&1; then
-    okay-panel >/dev/null 2>&1 &
-elif [ -x "$HOME/.local/bin/okay-panel" ]; then
-    "$HOME/.local/bin/okay-panel" >/dev/null 2>&1 &
+if [ -x "$HOME/.local/bin/okay-desktop" ]; then
+    "$HOME/.local/bin/okay-desktop" --restart >/dev/null 2>&1 &
+elif command -v okay-desktop >/dev/null 2>&1; then
+    okay-desktop --restart >/dev/null 2>&1 &
+fi
+
+if [ -x "$HOME/.local/bin/okay-panel" ]; then
+    "$HOME/.local/bin/okay-panel" --restart >/dev/null 2>&1 &
+elif command -v okay-panel >/dev/null 2>&1; then
+    okay-panel --restart >/dev/null 2>&1 &
 fi
 
 # 5. Demon powiadomień (mako)

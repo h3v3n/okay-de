@@ -18,6 +18,17 @@ install:
 	install -m 755 scripts/okay-panel $(DESTDIR)$(PREFIX)/bin/okay-panel
 	install -m 755 scripts/okay-desktop $(DESTDIR)$(PREFIX)/bin/okay-desktop
 
+	# Kompilacja i instalacja natywnego silnika dekoracji okien OKay-DE (libdecoration.so dla Wayfire)
+	if command -v g++ >/dev/null 2>&1 && [ -f plugins/okay-decor/okay-decoration.cpp ] && [ -d /usr/include/wayfire ]; then \
+		install -d $(DESTDIR)$(PREFIX)/lib/wayfire; \
+		if [ -f $(DESTDIR)$(PREFIX)/lib/wayfire/libdecoration.so ] && [ ! -f $(DESTDIR)$(PREFIX)/lib/wayfire/libdecoration.so.orig ]; then \
+			cp -f $(DESTDIR)$(PREFIX)/lib/wayfire/libdecoration.so $(DESTDIR)$(PREFIX)/lib/wayfire/libdecoration.so.orig || true; \
+		fi; \
+		WLROOTS_INC=$$(pkg-config --cflags wayfire cairo pangocairo wlroots-0.20 pixman-1 2>/dev/null || echo "-I/usr/include/wayfire -I/usr/include/wlroots-0.20 -I/usr/include/cairo -I/usr/include/pango-1.0 -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/harfbuzz -I/usr/include/libpng16 -I/usr/include/libdrm"); \
+		WLROOTS_LIBS=$$(pkg-config --libs cairo pangocairo wlroots-0.20 wayland-server pixman-1 2>/dev/null || echo "-lcairo -lpangocairo-1.0 -lpango-1.0 -lgobject-2.0 -lglib-2.0 -lwlroots-0.20 -lwayland-server -lpixman-1"); \
+		g++ -std=c++17 -O2 -fPIC -shared -DWLR_USE_UNSTABLE plugins/okay-decor/okay-decoration.cpp -o $(DESTDIR)$(PREFIX)/lib/wayfire/libdecoration.so $$WLROOTS_INC $$WLROOTS_LIBS || true; \
+	fi
+
 	# Moduły centrum sterowania OKay Settings oraz aplety panelu OKay Panel (GTK3)
 	install -d $(DESTDIR)$(PREFIX)/share/okay-de/settings $(DESTDIR)$(PREFIX)/share/okay-de/panel
 	install -m 644 scripts/settings/*.py $(DESTDIR)$(PREFIX)/share/okay-de/settings/

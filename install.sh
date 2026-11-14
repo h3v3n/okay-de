@@ -21,23 +21,17 @@ if [ "$MODE" = "--system" ]; then
             pacman -S --needed --noconfirm wayfire gtk3 gtk-layer-shell python-gobject wlr-randr
     fi
 
-    # Opcjonalna kompilacja i instalacja wtyczki pixdecor (zaokrąglone narożniki okien i własne przyciski dla Wayfire)
-    if [ ! -f /usr/lib/wayfire/libpixdecor.so ] && [ ! -f /usr/local/lib/wayfire/libpixdecor.so ]; then
-        if command -v git >/dev/null 2>&1 && command -v meson >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && { command -v g++ >/dev/null 2>&1 || command -v c++ >/dev/null 2>&1; } && { [ -f /usr/include/glm/glm.hpp ] || pkg-config --exists glm 2>/dev/null; } && pkg-config --exists wayfire cairo pango librsvg-2.0 2>/dev/null; then
-            echo "Kompilowanie wtyczki Wayfire pixdecor (zaokrąglone narożniki i styl przycisków)..."
-            PIX_TMP="$(mktemp -d /tmp/okay-pixdecor-XXXXXX)"
-            PIX_LOG="/tmp/okay-pixdecor-build.log"
-            if git clone --depth 1 https://github.com/soreau/pixdecor.git "$PIX_TMP/src" >"$PIX_LOG" 2>&1; then
-                if meson setup "$PIX_TMP/build" "$PIX_TMP/src" --prefix=/usr --buildtype=release >>"$PIX_LOG" 2>&1 && ninja -C "$PIX_TMP/build" >>"$PIX_LOG" 2>&1; then
-                    ninja -C "$PIX_TMP/build" install >>"$PIX_LOG" 2>&1 || true
-                    echo "Zainstalowano wtyczkę pixdecor w /usr/lib/wayfire."
-                else
-                    echo "Uwaga: Kompilacja pixdecor nie powiodła się (log: $PIX_LOG) — używam wbudowanej wtyczki decoration." >&2
-                fi
-            fi
-            rm -rf "$PIX_TMP" 2>/dev/null || true
-        else
-            echo "Uwaga: Pominięto kompilację pixdecor (brak pakietów: glm, gcc, meson, ninja, wayfire, cairo, pango, librsvg)." >&2
+    # Kompilacja i instalacja natywnego silnika dekoracji okien OKay-DE (libdecoration.so dla Wayfire)
+    if command -v g++ >/dev/null 2>&1 && [ -f plugins/okay-decor/okay-decoration.cpp ] && [ -d /usr/include/wayfire ]; then
+        echo "Kompilowanie natywnego silnika dekoracji okien OKay-DE (libdecoration.so)..."
+        install -d /usr/lib/wayfire
+        if [ -f /usr/lib/wayfire/libdecoration.so ] && [ ! -f /usr/lib/wayfire/libdecoration.so.orig ]; then
+            cp -f /usr/lib/wayfire/libdecoration.so /usr/lib/wayfire/libdecoration.so.orig 2>/dev/null || true
+        fi
+        WLROOTS_INC="$(pkg-config --cflags wayfire cairo pangocairo wlroots-0.20 pixman-1 2>/dev/null || echo "-I/usr/include/wayfire -I/usr/include/wlroots-0.20 -I/usr/include/cairo -I/usr/include/pango-1.0 -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/harfbuzz -I/usr/include/libpng16 -I/usr/include/libdrm")"
+        WLROOTS_LIBS="$(pkg-config --libs cairo pangocairo wlroots-0.20 wayland-server pixman-1 2>/dev/null || echo "-lcairo -lpangocairo-1.0 -lpango-1.0 -lgobject-2.0 -lglib-2.0 -lwlroots-0.20 -lwayland-server -lpixman-1")"
+        if g++ -std=c++17 -O2 -fPIC -shared -DWLR_USE_UNSTABLE plugins/okay-decor/okay-decoration.cpp -o /usr/lib/wayfire/libdecoration.so $WLROOTS_INC $WLROOTS_LIBS; then
+            echo "Zainstalowano natywny silnik dekoracji OKay-DE w /usr/lib/wayfire/libdecoration.so."
         fi
     fi
 
@@ -108,13 +102,6 @@ if [ "$MODE" = "--system" ]; then
         install -m 644 config/wayfire/wayfire.ini /etc/okay-de/wayfire.ini
         install -m 644 config/wayfire/wayfire.ini /etc/skel/.config/wayfire.ini
         install -m 644 config/wayfire/wayfire.ini /usr/share/okay-de/defaults/wayfire/wayfire.ini
-        if [ -f /usr/lib/wayfire/libpixdecor.so ] || [ -f /usr/local/lib/wayfire/libpixdecor.so ]; then
-            for wf_target in /etc/xdg/wayfire.ini /etc/xdg/okay-de/wayfire.ini /etc/okay-de/wayfire.ini /etc/skel/.config/wayfire.ini /usr/share/okay-de/defaults/wayfire/wayfire.ini; do
-                if [ -f "$wf_target" ] && grep -qE '^plugins\s*=.*\bdecoration\b' "$wf_target" 2>/dev/null && ! grep -qE '^plugins\s*=.*\bpixdecor\b' "$wf_target" 2>/dev/null; then
-                    sed -i -E 's/(^plugins\s*=.*)\bdecoration\b/\1pixdecor/' "$wf_target" 2>/dev/null || true
-                fi
-            done
-        fi
     fi
     if [ -f backgrounds/default.png ]; then
         install -m 644 backgrounds/default.png /usr/share/okay-de/defaults/backgrounds/default.png
@@ -253,42 +240,22 @@ elif [ "$MODE" = "--user" ]; then
         atomic_copy_file config/wayfire/wayfire.ini "$OKAY_DATA_DIR/defaults/wayfire/wayfire.ini" 644
         copy_if_missing config/wayfire/wayfire.ini "$XDG_CFG/wayfire.ini" 644
 
-        # Opcjonalna kompilacja pixdecor do przestrzeni użytkownika (~/.local/share/wayfire), jeśli systemowo brak wtyczki
-        if [ ! -f /usr/lib/wayfire/libpixdecor.so ] && [ ! -f /usr/local/lib/wayfire/libpixdecor.so ] && [ ! -f "$XDG_DATA/wayfire/plugins/libpixdecor.so" ]; then
-            if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-                if [ ! -f /usr/include/glm/glm.hpp ] || ! command -v g++ >/dev/null 2>&1 || ! command -v meson >/dev/null 2>&1; then
-                    sudo pacman -S --needed --noconfirm glm gcc meson ninja pkgconf cairo pango librsvg >/dev/null 2>&1 || true
-                fi
+        # Kompilacja natywnego silnika dekoracji okien OKay-DE (libdecoration.so) do przestrzeni użytkownika (~/.local/share/wayfire/plugins)
+        if command -v g++ >/dev/null 2>&1 && [ -f plugins/okay-decor/okay-decoration.cpp ] && [ -d /usr/include/wayfire ]; then
+            echo "Budowanie natywnego silnika dekoracji okien OKay-DE ($XDG_DATA/wayfire/plugins/libdecoration.so)..."
+            mkdir -p "$XDG_DATA/wayfire/plugins"
+            WLROOTS_INC="$(pkg-config --cflags wayfire cairo pangocairo wlroots-0.20 pixman-1 2>/dev/null || echo "-I/usr/include/wayfire -I/usr/include/wlroots-0.20 -I/usr/include/cairo -I/usr/include/pango-1.0 -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/harfbuzz -I/usr/include/libpng16 -I/usr/include/libdrm")"
+            WLROOTS_LIBS="$(pkg-config --libs cairo pangocairo wlroots-0.20 wayland-server pixman-1 2>/dev/null || echo "-lcairo -lpangocairo-1.0 -lpango-1.0 -lgobject-2.0 -lglib-2.0 -lwlroots-0.20 -lwayland-server -lpixman-1")"
+            TMP_SO="$(mktemp "${TMPDIR:-/tmp}/libdecoration-XXXXXX.so")"
+            if g++ -std=c++17 -O2 -fPIC -shared -DWLR_USE_UNSTABLE plugins/okay-decor/okay-decoration.cpp -o "$TMP_SO" $WLROOTS_INC $WLROOTS_LIBS 2>/dev/null; then
+                atomic_copy_file "$TMP_SO" "$XDG_DATA/wayfire/plugins/libdecoration.so" 755
             fi
-            if command -v git >/dev/null 2>&1 && command -v meson >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && { command -v g++ >/dev/null 2>&1 || command -v c++ >/dev/null 2>&1; } && { [ -f /usr/include/glm/glm.hpp ] || pkg-config --exists glm 2>/dev/null; } && pkg-config --exists wayfire cairo pango librsvg-2.0 2>/dev/null; then
-                echo "Budowanie wtyczki pixdecor w przestrzeni użytkownika ($XDG_DATA/wayfire)..."
-                PIX_TMP="$(mktemp -d "${TMPDIR:-/tmp}/okay-pixdecor-XXXXXX")"
-                PIX_LOG="/tmp/okay-pixdecor-build.log"
-                if git clone --depth 1 https://github.com/soreau/pixdecor.git "$PIX_TMP/src" >"$PIX_LOG" 2>&1 && \
-                   meson setup "$PIX_TMP/build" "$PIX_TMP/src" --prefix=/usr --buildtype=release >>"$PIX_LOG" 2>&1 && \
-                   ninja -C "$PIX_TMP/build" >>"$PIX_LOG" 2>&1; then
-                    mkdir -p "$XDG_DATA/wayfire/plugins" "$XDG_DATA/wayfire/metadata"
-                    SO_BUILT="$(find "$PIX_TMP/build" -maxdepth 4 -name 'libpixdecor.so' | head -n 1)"
-                    XML_BUILT="$(find "$PIX_TMP/src" "$PIX_TMP/build" -maxdepth 4 -name 'pixdecor.xml' | head -n 1)"
-                    if [ -n "$SO_BUILT" ]; then
-                        install -m 755 "$SO_BUILT" "$XDG_DATA/wayfire/plugins/libpixdecor.so" 2>/dev/null || true
-                    fi
-                    if [ -n "$XML_BUILT" ]; then
-                        install -m 644 "$XML_BUILT" "$XDG_DATA/wayfire/metadata/pixdecor.xml" 2>/dev/null || true
-                    fi
-                else
-                    echo "Uwaga: Kompilacja pixdecor nie powiodła się (log: $PIX_LOG)." >&2
-                fi
-                rm -rf "$PIX_TMP" 2>/dev/null || true
-            else
-                echo "Uwaga: Brak narzędzi do kompilacji pixdecor (zainstaluj: sudo pacman -S --needed glm gcc meson ninja librsvg)." >&2
-            fi
+            rm -f "$TMP_SO" 2>/dev/null || true
         fi
 
-        if [ -f "$XDG_DATA/wayfire/plugins/libpixdecor.so" ] || [ -f /usr/lib/wayfire/libpixdecor.so ] || [ -f /usr/local/lib/wayfire/libpixdecor.so ]; then
-            if grep -qE '^plugins\s*=.*\bdecoration\b' "$XDG_CFG/wayfire.ini" 2>/dev/null && ! grep -qE '^plugins\s*=.*\bpixdecor\b' "$XDG_CFG/wayfire.ini" 2>/dev/null; then
-                sed -i -E 's/(^plugins\s*=.*)\bdecoration\b/\1pixdecor/' "$XDG_CFG/wayfire.ini" 2>/dev/null || true
-            fi
+        # Upewnij się, że w ~/.config/wayfire.ini aktywna jest wtyczka `decoration`
+        if grep -qE '^plugins\s*=.*\bpixdecor\b' "$XDG_CFG/wayfire.ini" 2>/dev/null; then
+            sed -i -E 's/\bpixdecor\b/decoration/g' "$XDG_CFG/wayfire.ini" 2>/dev/null || true
         fi
 
         # Migracja istniejącego ~/.config/wayfire.ini: poprawne animacje ([animate]), kolory float RGBA i klucze pixdecor
@@ -543,7 +510,7 @@ PYEOF
 
     # Synchronizacja ustawień GTK3/GTK4 (settings.ini, gtk.css), GSettings (button-layout) oraz Wayfire z nowym kodem
     if command -v python3 >/dev/null 2>&1 && [ -f "$OKAY_DATA_DIR/settings/helpers.py" ]; then
-        PYTHONPATH="$OKAY_DATA_DIR" python3 -c "from settings.helpers import apply_window_decorations; apply_window_decorations(_from_ensure=True)" >/dev/null 2>&1 || true
+        PYTHONPATH="$OKAY_DATA_DIR" python3 -c "from settings.helpers import apply_window_decorations, apply_wayfire_animations_and_effects; apply_window_decorations(_from_ensure=True); apply_wayfire_animations_and_effects()" >/dev/null 2>&1 || true
     fi
 
     # Czyszczenie przestarzałych plików okay-dock (bez ubijania aktywnego okay-settings w trakcie aktualizacji)
@@ -569,8 +536,13 @@ PYEOF
     mv -f "$TMP_VER" "$OKAY_CFG_DIR/version"
     atomic_copy_file "$OKAY_CFG_DIR/version" "$OKAY_DATA_DIR/defaults/version" 644
 
-    # Przeładowanie sesji Wayfire bez błędu (restart okay-panel i okay-desktop)
+    # Przeładowanie sesji Wayfire bez błędu (hot-reload libdecoration.so + restart okay-panel i okay-desktop)
     if [ "${OKAY_DE_SKIP_RELOAD:-0}" != "1" ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        if [ -f "$XDG_CFG/wayfire.ini" ] && [ -f "$XDG_DATA/wayfire/plugins/libdecoration.so" ]; then
+            sed -i -E 's/\bdecoration[[:space:]]*//g' "$XDG_CFG/wayfire.ini" 2>/dev/null || true
+            sleep 0.35
+            PYTHONPATH="$OKAY_DATA_DIR" python3 -c "from settings.helpers import ensure_wayfire_decorator_plugin; ensure_wayfire_decorator_plugin()" >/dev/null 2>&1 || true
+        fi
         if [ -x "$BIN_DIR/okay-panel" ]; then
             nohup "$BIN_DIR/okay-panel" --restart </dev/null >/dev/null 2>&1 &
         elif command -v okay-panel >/dev/null 2>&1; then

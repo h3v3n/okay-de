@@ -371,14 +371,16 @@ def blend_hex_color(base_hex: str, accent_hex: str, ratio: float = 0.08) -> str:
 
 
 PANEL_CSS_TEMPLATE = """
-* {
-    font-family: "JetBrains Mono", sans-serif;
-    font-size: 11px;
+*, label, button, entry, menuitem, image {
+    font-family: "Inter", "Cantarell", "Noto Sans", system-ui, sans-serif;
+    font-size: 13px;
+    text-shadow: none;
+    -gtk-icon-shadow: none;
 }
 
 window#okay-panel {
     background-color: transparent;
-    color: #cdd6f4;
+    color: __TEXT_FG__;
 }
 
 .panel-surface {
@@ -409,7 +411,7 @@ button {
     background-image: none;
     border: none;
     border-radius: 8px;
-    color: #cdd6f4;
+    color: __TEXT_FG__;
     padding: 0 6px;
     margin: 4px 1px;
     min-height: 32px;
@@ -419,7 +421,7 @@ button {
 }
 
 button:hover {
-    background-color: rgba(49, 50, 68, 0.85);
+    background-color: __BTN_HOVER_BG__;
 }
 
 /* Przycisk Start ("OK") z kolorem akcentu */
@@ -427,9 +429,9 @@ button:hover {
     background-color: __ACCENT__;
     color: __ACCENT_CONTRAST__;
     font-weight: bold;
-    font-size: 12px;
+    font-size: 13px;
     border-radius: 8px;
-    padding: 0 10px;
+    padding: 0 11px;
     margin: 4px 6px 4px 2px;
     min-height: 28px;
 }
@@ -457,7 +459,7 @@ window#okay-panel.dock-mode #start-button {
     margin: 4px 2px;
     min-width: 30px;
     min-height: 28px;
-    color: #bac2de;
+    color: __TEXT_FG__;
     transition: all 180ms ease-out;
 }
 
@@ -470,59 +472,59 @@ window#okay-panel.dock-mode .task-item {
 }
 
 .task-item:hover {
-    background-color: rgba(205, 214, 244, 0.09);
+    background-color: __BTN_HOVER_BG__;
     border-top-color: transparent;
     border-bottom-color: transparent;
-    color: #ffffff;
+    color: __TEXT_FG__;
 }
 
 /* Przypięta zamknięta aplikacja */
 .task-item.app-pinned {
-    opacity: 0.88;
+    opacity: 0.90;
 }
 
 .task-item.app-pinned:hover {
-    background-color: rgba(205, 214, 244, 0.09);
+    background-color: __BTN_HOVER_BG__;
     border-color: transparent;
     opacity: 1.0;
 }
 
 /* Otwarta nieaktywna aplikacja */
 .task-item.app-open {
-    background-color: rgba(49, 50, 68, 0.38);
+    background-color: __BTN_BG__;
     border-color: transparent;
     border-bottom: 2px solid rgba(__ACCENT_RGB__, 0.72);
 }
 
 .task-item.app-open:hover {
-    background-color: rgba(205, 214, 244, 0.12);
+    background-color: __BTN_HOVER_BG__;
     border-color: transparent;
     border-bottom: 2px solid rgba(__ACCENT_RGB__, 0.90);
-    color: #ffffff;
+    color: __TEXT_FG__;
 }
 
 /* Aktywne / sfokusowane okno */
 .task-item.app-focused {
-    background-color: rgba(__ACCENT_RGB__, 0.16);
+    background-color: rgba(__ACCENT_RGB__, 0.18);
     border-color: transparent;
     border-bottom: 2px solid __ACCENT__;
-    color: #ffffff;
+    color: __TEXT_FG__;
     font-weight: bold;
 }
 
 .task-item.app-focused:hover {
-    background-color: rgba(__ACCENT_RGB__, 0.22);
+    background-color: rgba(__ACCENT_RGB__, 0.24);
     border-color: transparent;
     border-bottom: 2px solid __ACCENT__;
-    color: #ffffff;
+    color: __TEXT_FG__;
 }
 
 /* Zminimalizowane okno */
 .task-item.app-minimized {
-    opacity: 0.56;
+    opacity: 0.58;
     background-color: transparent;
-    border-bottom: 2px solid rgba(205, 214, 244, 0.28);
-    color: #6c7086;
+    border-bottom: 2px solid rgba(__ACCENT_RGB__, 0.30);
+    color: __TEXT_SUB__;
 }
 
 /* Stackowana aplikacja (wiele okien w jednej ikonie) */
@@ -537,7 +539,7 @@ window#okay-panel.dock-mode .task-item {
 .stack-badge {
     background-color: __ACCENT__;
     color: __ACCENT_CONTRAST__;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: bold;
     border-radius: 7px;
     padding: 0 4px;
@@ -567,25 +569,25 @@ window#okay-panel.dock-mode .task-item {
     margin: 4px 1px;
     border-radius: 7px;
     min-height: 28px;
-    color: #cdd6f4;
+    color: __TEXT_FG__;
     transition: all 140ms ease-out;
 }
 
 .status-item:hover, .tray-item:hover {
-    background-color: rgba(205, 214, 244, 0.09);
+    background-color: __BTN_HOVER_BG__;
 }
 
 #clock-button {
     padding: 0 10px;
     margin: 4px 2px;
     border-radius: 8px;
-    color: #cdd6f4;
+    color: __TEXT_FG__;
     font-weight: bold;
     transition: all 140ms ease-out;
 }
 
 #clock-button:hover {
-    background-color: rgba(49, 50, 68, 0.85);
+    background-color: __BTN_HOVER_BG__;
 }
 
 #desktop-button {
@@ -605,13 +607,13 @@ window#okay-panel.dock-mode .task-item {
 menu {
     background-color: __POP_BG__;
     border: 1px solid rgba(__ACCENT_RGB__, 0.36);
-    border-radius: 8px;
-    padding: 4px 0px;
+    border-radius: 10px;
+    padding: 6px 0px;
 }
 
 menuitem {
-    padding: 6px 14px;
-    color: #cdd6f4;
+    padding: 7px 14px;
+    color: __TEXT_FG__;
     transition: all 140ms ease-out;
 }
 
@@ -623,43 +625,43 @@ menuitem:hover {
 /* Quick Settings Popover */
 window#okay-quick-settings {
     background-color: __POP_BG__;
-    color: #cdd6f4;
+    color: __TEXT_FG__;
 }
 
 .popover-card {
     background-color: __POP_BG__;
     border: 1px solid __ACCENT__;
-    border-radius: 6px;
+    border-radius: 10px;
     padding: 14px;
-    box-shadow: 0 8px 24px rgba(__ACCENT_RGB__, 0.20), 0 4px 12px rgba(17, 17, 27, 0.60);
+    box-shadow: 0 8px 24px rgba(__ACCENT_RGB__, 0.20), 0 4px 12px rgba(17, 17, 27, 0.45);
 }
 
 .popover-title {
     color: __ACCENT__;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: bold;
 }
 
 .popover-subtitle {
-    color: #cdd6f4;
-    font-size: 12px;
+    color: __TEXT_FG__;
+    font-size: 13px;
     font-weight: bold;
 }
 
 .popover-status {
-    color: #a6adc8;
-    font-size: 11px;
+    color: __TEXT_SUB__;
+    font-size: 12px;
 }
 
 .qs-list {
     background-color: rgba(__SURFACE_RGB__, 0.96);
     border: 1px solid rgba(__ACCENT_RGB__, 0.22);
-    border-radius: 4px;
+    border-radius: 6px;
 }
 
 .qs-list row {
     padding: 6px 8px;
-    border-bottom: 1px solid #242436;
+    border-bottom: 1px solid __BORDER_SUB__;
 }
 
 .qs-list row:last-child {
@@ -667,35 +669,35 @@ window#okay-quick-settings {
 }
 
 .qs-ssid {
-    color: #cdd6f4;
-    font-size: 11px;
+    color: __TEXT_FG__;
+    font-size: 12px;
 }
 
 .qs-ssid-active {
     color: __ACCENT__;
     font-weight: bold;
-    font-size: 11px;
+    font-size: 12px;
 }
 
 button.qs-icon-btn {
-    background-color: #313244;
-    border-radius: 4px;
-    min-height: 26px;
-    min-width: 26px;
+    background-color: __BTN_BG__;
+    border-radius: 6px;
+    min-height: 28px;
+    min-width: 28px;
     padding: 4px 6px;
-    color: #cdd6f4;
+    color: __TEXT_FG__;
 }
 
 button.qs-icon-btn:hover {
-    background-color: #45475a;
+    background-color: __BTN_HOVER_BG__;
 }
 
 button.qs-accent-btn {
     background-color: __ACCENT__;
     color: __ACCENT_CONTRAST__;
     font-weight: bold;
-    border-radius: 4px;
-    min-height: 28px;
+    border-radius: 6px;
+    min-height: 30px;
     padding: 5px 12px;
 }
 
@@ -705,10 +707,10 @@ button.qs-accent-btn:hover {
 }
 
 button.qs-mini-btn {
-    background-color: #313244;
-    color: #cdd6f4;
-    border-radius: 4px;
-    min-height: 24px;
+    background-color: __BTN_BG__;
+    color: __TEXT_FG__;
+    border-radius: 6px;
+    min-height: 26px;
     padding: 2px 10px;
 }
 
@@ -720,13 +722,13 @@ button.qs-mini-btn-active {
     background-color: rgba(243, 139, 168, 0.16);
     color: #f38ba8;
     border: 1px solid #f38ba8;
-    border-radius: 4px;
-    min-height: 24px;
+    border-radius: 6px;
+    min-height: 26px;
     padding: 2px 10px;
 }
 
 window#okay-quick-settings switch {
-    background-color: #313244;
+    background-color: __BTN_BG__;
     border-radius: 10px;
     min-height: 20px;
 }
@@ -741,7 +743,7 @@ window#okay-quick-settings scale highlight {
 }
 
 window#okay-quick-settings scale trough {
-    background-color: #313244;
+    background-color: __BTN_BG__;
     border-radius: 3px;
     min-height: 5px;
 }
@@ -755,10 +757,10 @@ window#okay-quick-settings scale slider {
 
 window#okay-quick-settings entry {
     background-color: rgba(__SURFACE_RGB__, 0.96);
-    color: #cdd6f4;
-    border: 1px solid #313244;
-    border-radius: 4px;
-    padding: 4px 8px;
+    color: __TEXT_FG__;
+    border: 1px solid __BORDER_SUB__;
+    border-radius: 6px;
+    padding: 5px 8px;
 }
 
 .qs-list row {
@@ -768,7 +770,7 @@ window#okay-quick-settings entry {
 /* Podgląd zgrupowanych (stackowanych) okien jednej aplikacji */
 window#okay-window-preview {
     background-color: transparent;
-    color: #cdd6f4;
+    color: __TEXT_FG__;
 }
 
 .preview-card {
@@ -776,12 +778,12 @@ window#okay-window-preview {
     border: 1px solid rgba(__ACCENT_RGB__, 0.42);
     border-radius: 14px;
     padding: 10px 12px;
-    box-shadow: 0 8px 24px rgba(__ACCENT_RGB__, 0.22), 0 4px 14px rgba(17, 17, 27, 0.65);
+    box-shadow: 0 8px 24px rgba(__ACCENT_RGB__, 0.22), 0 4px 14px rgba(17, 17, 27, 0.50);
 }
 
 .preview-app-title {
-    color: #ffffff;
-    font-size: 12px;
+    color: __TEXT_FG__;
+    font-size: 13px;
     font-weight: bold;
 }
 
@@ -790,13 +792,13 @@ window#okay-window-preview {
     color: __ACCENT__;
     border-radius: 8px;
     padding: 1px 8px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: bold;
 }
 
 .preview-win-tile {
     background-color: __POP_BG__;
-    border: 1px solid #313244;
+    border: 1px solid __BORDER_SUB__;
     border-radius: 10px;
     padding: 6px;
     transition: all 140ms ease-out;
@@ -804,7 +806,7 @@ window#okay-window-preview {
 
 .preview-win-tile:hover {
     border-color: rgba(__ACCENT_RGB__, 0.70);
-    background-color: #242438;
+    background-color: __BTN_HOVER_BG__;
 }
 
 .preview-win-tile.preview-win-focused {
@@ -817,25 +819,25 @@ window#okay-window-preview {
 }
 
 .preview-win-chrome {
-    border-bottom: 1px solid rgba(49, 50, 68, 0.8);
+    border-bottom: 1px solid __BORDER_SUB__;
     padding-bottom: 4px;
 }
 
 .preview-win-dots {
-    color: #6c7086;
-    font-size: 8px;
+    color: __TEXT_SUB__;
+    font-size: 9px;
     letter-spacing: 1px;
 }
 
 .preview-state-active {
     color: __ACCENT__;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: bold;
 }
 
 .preview-state-idle {
-    color: #7f849c;
-    font-size: 9px;
+    color: __TEXT_SUB__;
+    font-size: 10px;
 }
 
 button.preview-close-btn {
@@ -844,8 +846,8 @@ button.preview-close-btn {
     padding: 0 4px;
     margin: 0;
     border-radius: 6px;
-    color: #a6adc8;
-    font-size: 10px;
+    color: __TEXT_SUB__;
+    font-size: 11px;
 }
 
 button.preview-close-btn:hover {
@@ -862,12 +864,12 @@ button.preview-win-body {
 }
 
 button.preview-win-body:hover {
-    background-color: rgba(49, 50, 68, 0.72);
+    background-color: __BTN_HOVER_BG__;
 }
 
 .preview-win-title {
-    color: #cdd6f4;
-    font-size: 10px;
+    color: __TEXT_FG__;
+    font-size: 11px;
 }
 
 .start-menu-card {
@@ -876,12 +878,12 @@ button.preview-win-body:hover {
 
 entry.start-search-entry {
     background-color: rgba(__SURFACE_RGB__, 0.96);
-    color: #cdd6f4;
+    color: __TEXT_FG__;
     border: 1px solid rgba(__ACCENT_RGB__, 0.35);
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 6px 10px;
-    min-height: 32px;
-    font-size: 12px;
+    min-height: 34px;
+    font-size: 13px;
 }
 
 entry.start-search-entry:focus {
@@ -889,33 +891,33 @@ entry.start-search-entry:focus {
 }
 
 button.start-pinned-btn {
-    background-color: rgba(49, 50, 68, 0.72);
-    color: #cdd6f4;
-    border: 1px solid rgba(__ACCENT_RGB__, 0.16);
-    border-radius: 6px;
-    padding: 5px 8px;
-    font-size: 11px;
+    background-color: __BTN_BG__;
+    color: __TEXT_FG__;
+    border: 1px solid rgba(__ACCENT_RGB__, 0.18);
+    border-radius: 8px;
+    padding: 6px 9px;
+    font-size: 12px;
     transition: all 140ms ease-out;
 }
 
 button.start-pinned-btn:hover {
-    background-color: #3b3d52;
+    background-color: __BTN_HOVER_BG__;
     border-color: rgba(__ACCENT_RGB__, 0.55);
 }
 
 button.start-cat-btn {
     background-color: transparent;
-    color: #a6adc8;
+    color: __TEXT_SUB__;
     border: 1px solid transparent;
     border-radius: 12px;
-    padding: 3px 9px;
-    font-size: 11px;
-    min-height: 22px;
+    padding: 4px 10px;
+    font-size: 12px;
+    min-height: 24px;
 }
 
 button.start-cat-btn:hover {
-    background-color: rgba(49, 50, 68, 0.75);
-    color: #cdd6f4;
+    background-color: __BTN_HOVER_BG__;
+    color: __TEXT_FG__;
 }
 
 button.start-cat-btn.start-cat-active {
@@ -928,17 +930,17 @@ button.start-cat-btn.start-cat-active {
 .start-app-list {
     background-color: rgba(__SURFACE_RGB__, 0.92);
     border: 1px solid rgba(__ACCENT_RGB__, 0.18);
-    border-radius: 6px;
+    border-radius: 8px;
 }
 
 .start-app-list row {
-    border-radius: 5px;
+    border-radius: 6px;
     margin: 2px 4px;
     transition: background-color 120ms ease-out;
 }
 
 .start-app-list row:hover {
-    background-color: rgba(49, 50, 68, 0.78);
+    background-color: __BTN_HOVER_BG__;
 }
 
 .start-app-list row:selected {
@@ -947,19 +949,19 @@ button.start-cat-btn.start-cat-active {
 }
 
 .start-app-name {
-    color: #cdd6f4;
+    color: __TEXT_FG__;
     font-weight: bold;
-    font-size: 12px;
+    font-size: 13px;
 }
 
 .start-app-desc {
-    color: #9399b2;
-    font-size: 10px;
+    color: __TEXT_SUB__;
+    font-size: 11px;
 }
 
 .start-user-label {
-    color: #bac2de;
-    font-size: 11px;
+    color: __TEXT_FG__;
+    font-size: 12px;
     font-weight: bold;
 }
 
@@ -970,21 +972,21 @@ button.start-power-btn:hover {
 
 /* Przełącznik obszarów roboczych (Workspaces) */
 button.ws-btn {
-    background-color: rgba(49, 50, 68, 0.45);
-    color: #a6adc8;
+    background-color: __BTN_BG__;
+    color: __TEXT_SUB__;
     border-radius: 7px;
     padding: 0 7px;
     margin: 5px 1px;
-    min-width: 22px;
+    min-width: 24px;
     min-height: 24px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: bold;
     transition: all 140ms ease-out;
 }
 
 button.ws-btn:hover {
     background-color: rgba(__ACCENT_RGB__, 0.22);
-    color: #ffffff;
+    color: __TEXT_FG__;
 }
 
 button.ws-btn.ws-active {
@@ -995,8 +997,8 @@ button.ws-btn.ws-active {
 
 /* Wskaźnik obciążenia CPU / RAM */
 .sysload-item {
-    font-size: 10px;
-    color: #bac2de;
+    font-size: 11px;
+    color: __TEXT_FG__;
     padding: 0 6px;
 }
 
@@ -1012,7 +1014,7 @@ window#okay-calendar-popover calendar {
     border: 1px solid rgba(__ACCENT_RGB__, 0.28);
     border-radius: 6px;
     padding: 6px;
-    font-size: 11px;
+    font-size: 12px;
 }
 
 window#okay-calendar-popover calendar:selected {
@@ -1020,38 +1022,6 @@ window#okay-calendar-popover calendar:selected {
     color: __ACCENT_CONTRAST__;
     font-weight: bold;
     border-radius: 4px;
-}
-
-/* Nadpisania dla jasnego motywu (Light Theme) */
-window#okay-panel.light-theme,
-window#okay-panel.light-theme button,
-window#okay-panel.light-theme .status-item,
-window#okay-panel.light-theme .tray-item,
-window#okay-panel.light-theme #clock-button,
-window#okay-panel.light-theme .sysload-item {
-    color: __TEXT_FG__;
-}
-
-window#okay-panel.light-theme .task-item {
-    color: __TEXT_FG__;
-}
-
-window#okay-panel.light-theme .task-item:hover,
-window#okay-panel.light-theme .status-item:hover,
-window#okay-panel.light-theme .tray-item:hover,
-window#okay-panel.light-theme #clock-button:hover {
-    background-color: rgba(__ACCENT_RGB__, 0.14);
-    color: __TEXT_FG__;
-}
-
-window#okay-panel.light-theme button.ws-btn {
-    background-color: rgba(__ACCENT_RGB__, 0.10);
-    color: __TEXT_FG__;
-}
-
-window#okay-panel.light-theme button.ws-btn.ws-active {
-    background-color: __ACCENT__;
-    color: __ACCENT_CONTRAST__;
 }
 
 .no-animations,
@@ -1082,13 +1052,21 @@ def generate_panel_css(accent_hex: str = DEFAULT_ACCENT_COLOR, theme_mode: str =
     contrast = compute_contrast_text(clean)
     is_light = (str(theme_mode).strip().lower() == "light")
     if is_light:
-        surface_tint = blend_hex_color("#eff1f5", clean, 0.06)
-        pop_tint = blend_hex_color("#e6e9ef", clean, 0.05)
-        text_fg = "#4c4f69"
+        surface_tint = blend_hex_color("#f2f4f8", clean, 0.05)
+        pop_tint = blend_hex_color("#ffffff", clean, 0.03)
+        text_fg = "#181825"
+        text_sub = "#4c4f69"
+        btn_bg = "rgba(180, 188, 208, 0.45)"
+        btn_hover_bg = "rgba(160, 170, 196, 0.65)"
+        border_sub = "#cfd5e6"
     else:
         surface_tint = blend_hex_color("#181825", clean, 0.07)
         pop_tint = blend_hex_color("#1e1e2e", clean, 0.06)
-        text_fg = "#cdd6f4"
+        text_fg = "#f2f2f7"
+        text_sub = "#b4befe"
+        btn_bg = "rgba(49, 50, 68, 0.55)"
+        btn_hover_bg = "rgba(69, 71, 90, 0.80)"
+        border_sub = "#313244"
     sr, sg, sb = parse_hex_rgb(surface_tint)
     return (
         PANEL_CSS_TEMPLATE
@@ -1099,6 +1077,10 @@ def generate_panel_css(accent_hex: str = DEFAULT_ACCENT_COLOR, theme_mode: str =
         .replace("__SURFACE_RGB__", f"{sr}, {sg}, {sb}")
         .replace("__POP_BG__", pop_tint)
         .replace("__TEXT_FG__", text_fg)
+        .replace("__TEXT_SUB__", text_sub)
+        .replace("__BTN_BG__", btn_bg)
+        .replace("__BTN_HOVER_BG__", btn_hover_bg)
+        .replace("__BORDER_SUB__", border_sub)
     )
 
 
