@@ -1,0 +1,14 @@
+# Rust / Cargo build artifacts
+/target/
+Cargo.lock
+
+# Editor & IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs & runtime sockets
+*.log
+wayland-*

@@ -1,2 +1,0 @@
-# OKay DE - Uprawnienia sudo dla grupy wheel bez monitów o hasło
-%wheel ALL=(ALL:ALL) NOPASSWD: ALL
