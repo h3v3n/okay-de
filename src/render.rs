@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::sync::{Mutex, OnceLock};
 
 use smithay::{
@@ -11,8 +12,11 @@ use smithay::{
                 surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
                 AsRenderElements, Kind,
             },
-            gles::{GlesError, GlesRenderer, GlesTarget},
-            Color32F, ImportAll, ImportMem, Renderer,
+            gles::{
+                element::PixelShaderElement, GlesError, GlesPixelProgram, GlesRenderer, GlesTarget,
+                Uniform, UniformName, UniformType,
+            },
+            Color32F,
         },
     },
     desktop::{layer_map_for_output, utils::send_frames_surface_tree},
@@ -27,10 +31,11 @@ use smithay::{
 use crate::state::OkayState;
 
 render_elements! {
-    pub OkayRenderElements<R> where R: Renderer + ImportAll + ImportMem;
-    Surface=WaylandSurfaceRenderElement<R>,
+    pub OkayRenderElements<=GlesRenderer>;
+    Surface=WaylandSurfaceRenderElement<GlesRenderer>,
     Solid=SolidColorRenderElement,
-    Memory=MemoryRenderBufferRenderElement<R>,
+    Memory=MemoryRenderBufferRenderElement<GlesRenderer>,
+    Shader=PixelShaderElement,
 }
 
 /// Collects all render elements for a given `Output` in front-to-back order
@@ -43,8 +48,8 @@ pub fn collect_output_elements(
     renderer: &mut GlesRenderer,
     output: &Output,
     scale: Scale<f64>,
-) -> Vec<OkayRenderElements<GlesRenderer>> {
-    let mut elements: Vec<OkayRenderElements<GlesRenderer>> = Vec::new();
+) -> Vec<OkayRenderElements> {
+    let mut elements: Vec<OkayRenderElements> = Vec::new();
     let Some(output_geo) = state.space.output_geometry(output) else {
         return elements;
     };
@@ -80,7 +85,7 @@ pub fn collect_output_elements(
         for layer in layer_map.layers_on(layer_type).rev() {
             if let Some(geo) = layer_map.layer_geometry(layer) {
                 let loc = geo.loc.to_physical_precise_round(scale);
-                let surface_elems: Vec<OkayRenderElements<GlesRenderer>> =
+                let surface_elems: Vec<OkayRenderElements> =
                     render_elements_from_surface_tree(
                         renderer,
                         layer.wl_surface(),
@@ -159,7 +164,7 @@ pub fn collect_output_elements(
         let phys_loc: Point<i32, Physical> = local_loc.to_physical_precise_round(scale);
 
         // Window surfaces (toplevel + subsurfaces + popups)
-        let win_elements: Vec<OkayRenderElements<GlesRenderer>> =
+        let win_elements: Vec<OkayRenderElements> =
             window.render_elements(renderer, phys_loc, scale, alpha);
         elements.extend(win_elements);
 
@@ -182,33 +187,46 @@ pub fn collect_output_elements(
                 elements.push(tb_elem);
             }
 
-            let border_color = if is_focused {
-                [1.0f32, 1.0, 1.0, 0.18]
+            let win_geo = window.geometry();
+            let tb_h = crate::state::TITLEBAR_HEIGHT;
+            let pad = 14;
+            let shader_area = Rectangle::new(
+                local_loc + win_geo.loc - Point::from((pad, pad + tb_h)),
+                (
+                    win_geo.size.w.max(120) + pad * 2,
+                    win_geo.size.h + tb_h + pad * 2,
+                )
+                    .into(),
+            );
+            let border_alpha = if is_focused { 0.16f32 } else { 0.08f32 };
+            if let Some(sdf_elem) =
+                sdf_rounded_window_element(renderer, shader_area, 12.0, pad as f32, border_alpha, alpha)
+            {
+                elements.push(sdf_elem);
             } else {
-                state.theme.inactive_border_color
-            };
-            let bw = state.theme.border_width.min(1);
-            if bw > 0 {
-                let win_geo = window.geometry();
-                let tb_h = crate::state::TITLEBAR_HEIGHT;
-                let border_geo = Rectangle::new(
-                    local_loc
-                        + win_geo.loc
-                        - Point::from((bw, bw + tb_h)),
-                    (
-                        win_geo.size.w.max(120) + bw * 2,
-                        win_geo.size.h + tb_h + bw * 2,
-                    )
-                        .into(),
-                );
-
-                let border_elems = build_border_elements(
-                    border_geo,
-                    bw,
-                    Color32F::from(border_color),
-                    scale,
-                );
-                elements.extend(border_elems);
+                let border_color = if is_focused {
+                    [1.0f32, 1.0, 1.0, 0.18]
+                } else {
+                    state.theme.inactive_border_color
+                };
+                let bw = state.theme.border_width.min(1);
+                if bw > 0 {
+                    let border_geo = Rectangle::new(
+                        local_loc + win_geo.loc - Point::from((bw, bw + tb_h)),
+                        (
+                            win_geo.size.w.max(120) + bw * 2,
+                            win_geo.size.h + tb_h + bw * 2,
+                        )
+                            .into(),
+                    );
+                    let border_elems = build_border_elements(
+                        border_geo,
+                        bw,
+                        Color32F::from(border_color),
+                        scale,
+                    );
+                    elements.extend(border_elems);
+                }
             }
         }
     }
@@ -218,7 +236,7 @@ pub fn collect_output_elements(
         for layer in layer_map.layers_on(layer_type).rev() {
             if let Some(geo) = layer_map.layer_geometry(layer) {
                 let loc = geo.loc.to_physical_precise_round(scale);
-                let surface_elems: Vec<OkayRenderElements<GlesRenderer>> =
+                let surface_elems: Vec<OkayRenderElements> =
                     render_elements_from_surface_tree(
                         renderer,
                         layer.wl_surface(),
@@ -251,7 +269,7 @@ fn collect_cursor_elements(
     local_cursor: Point<f64, Logical>,
     renderer: &mut GlesRenderer,
     scale: Scale<f64>,
-) -> Vec<OkayRenderElements<GlesRenderer>> {
+) -> Vec<OkayRenderElements> {
     match cursor_status {
         CursorImageStatus::Hidden => Vec::new(),
         CursorImageStatus::Surface(surface) if surface.alive() => {
@@ -363,13 +381,89 @@ fn default_cursor_buffer() -> &'static MemoryRenderBuffer {
     })
 }
 
+/// Compiles (once) and instantiates an OpenGL ES SDF rounded-corner shadow + 1px hairline border shader.
+fn sdf_rounded_window_element(
+    renderer: &mut GlesRenderer,
+    area: Rectangle<i32, Logical>,
+    radius: f32,
+    pad: f32,
+    border_alpha: f32,
+    alpha: f32,
+) -> Option<OkayRenderElements> {
+    const SDF_FRAG: &str = r#"
+precision mediump float;
+varying vec2 v_coords;
+uniform vec2 size;
+uniform float alpha;
+uniform float u_radius;
+uniform float u_pad;
+uniform float u_border_alpha;
+
+float sdRoundedBox(vec2 p, vec2 b, float r) {
+    vec2 q = abs(p) - b + vec2(r);
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+}
+
+void main() {
+    vec2 px = v_coords * size;
+    vec2 half_size = size * 0.5;
+    vec2 box_half = max(half_size - vec2(u_pad), vec2(1.0));
+    vec2 p = px - half_size;
+    float d = sdRoundedBox(p, box_half, u_radius);
+
+    float shadow = 0.0;
+    if (d > 0.0) {
+        shadow = exp(-d * 0.28) * 0.38;
+    }
+
+    float border = (1.0 - smoothstep(0.0, 1.1, abs(d + 0.5))) * u_border_alpha;
+    float a = clamp(shadow + border, 0.0, 1.0) * alpha;
+    gl_FragColor = vec4(vec3(border * alpha), a);
+}
+"#;
+
+    thread_local! {
+        static SDF_SHADER: RefCell<Option<GlesPixelProgram>> = const { RefCell::new(None) };
+    }
+
+    let program = SDF_SHADER.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if borrow.is_none() {
+            if let Ok(prog) = renderer.compile_custom_pixel_shader(
+                SDF_FRAG,
+                &[
+                    UniformName::new("u_radius", UniformType::_1f),
+                    UniformName::new("u_pad", UniformType::_1f),
+                    UniformName::new("u_border_alpha", UniformType::_1f),
+                ],
+            ) {
+                *borrow = Some(prog);
+            }
+        }
+        borrow.clone()
+    })?;
+
+    Some(OkayRenderElements::Shader(PixelShaderElement::new(
+        program,
+        area,
+        None,
+        alpha,
+        vec![
+            Uniform::new("u_radius", radius),
+            Uniform::new("u_pad", pad),
+            Uniform::new("u_border_alpha", border_alpha),
+        ],
+        Kind::Unspecified,
+    )))
+}
+
 /// Builds 4 crisp solid-color border strips (top, bottom, left, right) around `rect`.
 fn build_border_elements(
     rect: Rectangle<i32, Logical>,
     thickness: i32,
     color: Color32F,
     scale: Scale<f64>,
-) -> Vec<OkayRenderElements<GlesRenderer>> {
+) -> Vec<OkayRenderElements> {
     if thickness <= 0 || rect.size.w <= 0 || rect.size.h <= 0 {
         return Vec::new();
     }

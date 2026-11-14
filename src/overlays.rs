@@ -39,9 +39,9 @@ pub struct NotificationToast {
 #[derive(Debug, Clone)]
 pub struct DesktopIcon {
     pub label: String,
-    pub badge: String,
-    pub top_rgb: [u8; 3],
-    pub bot_rgb: [u8; 3],
+    pub icon_name: Option<String>,
+    pub kind: crate::icons::VectorIconKind,
+    pub exec_cmd: Option<String>,
     pub grid_col: i32,
     pub grid_row: i32,
     pub action: DesktopIconAction,
@@ -69,8 +69,13 @@ pub struct OverlaysState {
     pub locked: bool,
     pub lock_input: String,
     pub context_menu_pos: Option<Point<i32, Logical>>,
+    pub icon_context_menu: Option<(Point<i32, Logical>, usize)>,
     pub show_desktop_icons: bool,
     pub desktop_icons: Vec<DesktopIcon>,
+    pub selected_icons: Vec<usize>,
+    pub last_icon_click: Option<(usize, Instant)>,
+    pub rubberband_start: Option<Point<f64, Logical>>,
+    pub rubberband_current: Option<Point<f64, Logical>>,
     pub dragging_icon: Option<usize>,
     hit_regions: Vec<(Rectangle<i32, Logical>, OverlayClick)>,
 }
@@ -89,6 +94,10 @@ enum OverlayClick {
     ControlSetVolume(i32),
     ControlOpenSettings,
     DesktopIconClick(usize),
+    IconCtxOpen(usize),
+    IconCtxPin(usize),
+    IconCtxProperties(usize),
+    IconCtxDelete(usize),
     ContextNewFolder,
     ContextOpenTerminal,
     ContextReloadWallpaper,
@@ -114,8 +123,13 @@ impl Default for OverlaysState {
             locked: false,
             lock_input: String::new(),
             context_menu_pos: None,
+            icon_context_menu: None,
             show_desktop_icons: true,
             desktop_icons: Vec::new(),
+            selected_icons: Vec::new(),
+            last_icon_click: None,
+            rubberband_start: None,
+            rubberband_current: None,
             dragging_icon: None,
             hit_regions: Vec::new(),
         };
@@ -152,36 +166,36 @@ impl OverlaysState {
         let mut icons = vec![
             DesktopIcon {
                 label: "Home".to_string(),
-                badge: "HM".to_string(),
-                top_rgb: [64, 168, 250],
-                bot_rgb: [30, 108, 216],
+                icon_name: Some("user-home".to_string()),
+                kind: crate::icons::VectorIconKind::Home,
+                exec_cmd: None,
                 grid_col: 0,
                 grid_row: 0,
                 action: DesktopIconAction::OpenHome,
             },
             DesktopIcon {
                 label: "Terminal".to_string(),
-                badge: ">_".to_string(),
-                top_rgb: [52, 58, 76],
-                bot_rgb: [24, 28, 38],
+                icon_name: Some("utilities-terminal".to_string()),
+                kind: crate::icons::VectorIconKind::Terminal,
+                exec_cmd: Some("foot".to_string()),
                 grid_col: 0,
                 grid_row: 1,
                 action: DesktopIconAction::OpenTerminal,
             },
             DesktopIcon {
                 label: "Settings".to_string(),
-                badge: "OS".to_string(),
-                top_rgb: [134, 140, 158],
-                bot_rgb: [78, 84, 100],
+                icon_name: Some("preferences-system".to_string()),
+                kind: crate::icons::VectorIconKind::Settings,
+                exec_cmd: None,
                 grid_col: 0,
                 grid_row: 2,
                 action: DesktopIconAction::OpenSettings,
             },
             DesktopIcon {
                 label: "Screenshot".to_string(),
-                badge: "SC".to_string(),
-                top_rgb: [148, 114, 244],
-                bot_rgb: [94, 62, 198],
+                icon_name: Some("applets-screenshooter".to_string()),
+                kind: crate::icons::VectorIconKind::Screenshot,
+                exec_cmd: None,
                 grid_col: 0,
                 grid_row: 3,
                 action: DesktopIconAction::TakeScreenshot,
@@ -193,53 +207,79 @@ impl OverlaysState {
             if let Ok(entries) = fs::read_dir(desktop_dir) {
                 let mut row = 0;
                 let mut col = 1;
-                for entry in entries.flatten().take(10) {
+                for entry in entries.flatten().take(12) {
                     let raw_name = entry.file_name().to_string_lossy().to_string();
                     if raw_name.starts_with('.') {
                         continue;
                     }
                     let path = entry.path();
-                    let (label, badge, top_rgb, bot_rgb) = if path
+                    let is_desktop = path
                         .extension()
                         .and_then(|e| e.to_str())
                         .map(|e| e.eq_ignore_ascii_case("desktop"))
-                        .unwrap_or(false)
-                    {
-                        // Parse actual `Name=` from `.desktop` file and hide `.desktop` extension
-                        let parsed = fs::read_to_string(&path).ok().and_then(|txt| {
-                            txt.lines().find_map(|l| {
-                                l.strip_prefix("Name=").map(|v| v.trim().to_string())
-                            })
-                        });
-                        let clean = parsed.unwrap_or_else(|| {
+                        .unwrap_or(false);
+
+                    let (label, icon_name, exec_cmd, kind) = if is_desktop {
+                        let txt = fs::read_to_string(&path).unwrap_or_default();
+                        let mut parsed_name = None;
+                        let mut parsed_icon = None;
+                        let mut parsed_exec = None;
+                        for line in txt.lines() {
+                            let l = line.trim();
+                            if l.starts_with('[') && l != "[Desktop Entry]" {
+                                break;
+                            }
+                            if parsed_name.is_none() {
+                                if let Some(v) = l.strip_prefix("Name=") {
+                                    parsed_name = Some(v.trim().to_string());
+                                }
+                            }
+                            if parsed_icon.is_none() {
+                                if let Some(v) = l.strip_prefix("Icon=") {
+                                    parsed_icon = Some(v.trim().to_string());
+                                }
+                            }
+                            if parsed_exec.is_none() {
+                                if let Some(v) = l.strip_prefix("Exec=") {
+                                    let cleaned: Vec<&str> = v
+                                        .split_whitespace()
+                                        .filter(|tok| !tok.starts_with('%'))
+                                        .collect();
+                                    if !cleaned.is_empty() {
+                                        parsed_exec = Some(cleaned.join(" "));
+                                    }
+                                }
+                            }
+                        }
+                        let clean = parsed_name.unwrap_or_else(|| {
                             raw_name
                                 .strip_suffix(".desktop")
                                 .unwrap_or(&raw_name)
                                 .to_string()
                         });
-                        let b: String = clean
-                            .split_whitespace()
-                            .take(2)
-                            .filter_map(|w| w.chars().next())
-                            .collect::<String>()
-                            .to_uppercase();
-                        (
-                            clean,
-                            if b.is_empty() { "AP".to_string() } else { b },
-                            [92, 146, 245],
-                            [52, 92, 198],
-                        )
+                        let k = crate::icons::VectorIconKind::from_hint(
+                            &clean,
+                            parsed_exec.as_deref().unwrap_or(""),
+                            false,
+                        );
+                        (clean, parsed_icon, parsed_exec, k)
                     } else if path.is_dir() {
-                        (raw_name, "FD".to_string(), [86, 178, 248], [40, 124, 218])
+                        (
+                            raw_name,
+                            Some("folder".to_string()),
+                            None,
+                            crate::icons::VectorIconKind::Folder,
+                        )
                     } else {
-                        (raw_name, "FL".to_string(), [108, 122, 152], [64, 74, 98])
+                        let k = crate::icons::VectorIconKind::from_hint(&raw_name, "", false);
+                        (raw_name, None, None, k)
                     };
 
                     icons.push(DesktopIcon {
                         label,
-                        badge,
-                        top_rgb,
-                        bot_rgb,
+                        icon_name,
+                        kind,
+                        exec_cmd,
                         grid_col: col,
                         grid_row: row,
                         action: DesktopIconAction::OpenPath(path),
@@ -360,7 +400,7 @@ pub fn take_screenshot(state: &mut OkayState) {
     );
 }
 
-/// Handles right-click on the desktop background to open the desktop context menu.
+/// Handles right-click on the desktop background or on a desktop icon.
 pub fn handle_desktop_right_click(state: &mut OkayState, pos: Point<f64, Logical>) -> bool {
     if state.overlays.locked {
         return true;
@@ -368,18 +408,74 @@ pub fn handle_desktop_right_click(state: &mut OkayState, pos: Point<f64, Logical
     if state.surface_under(pos).is_some() || state.window_under(pos).is_some() {
         return false;
     }
-    state.overlays.context_menu_pos = Some(Point::from((pos.x.round() as i32, pos.y.round() as i32)));
+    let px = pos.x.round() as i32;
+    let py = pos.y.round() as i32;
+
+    // Check if right-click landed on a desktop icon
+    for (rect, action) in state.overlays.hit_regions.iter().rev() {
+        if let OverlayClick::DesktopIconClick(idx) = action {
+            if rect_contains(*rect, px, py) {
+                state.overlays.context_menu_pos = None;
+                state.overlays.selected_icons.clear();
+                state.overlays.selected_icons.push(*idx);
+                state.overlays.icon_context_menu = Some((Point::from((px, py)), *idx));
+                return true;
+            }
+        }
+    }
+
+    state.overlays.icon_context_menu = None;
+    state.overlays.context_menu_pos = Some(Point::from((px, py)));
     true
 }
 
-/// Handles dragging a desktop icon across the desktop grid.
+/// Starts a desktop rubber-band drag selection on empty desktop space.
+pub fn start_desktop_rubberband(state: &mut OkayState, pos: Point<f64, Logical>) {
+    state.overlays.context_menu_pos = None;
+    state.overlays.icon_context_menu = None;
+    state.overlays.selected_icons.clear();
+    state.overlays.rubberband_start = Some(pos);
+    state.overlays.rubberband_current = Some(pos);
+}
+
+/// Handles dragging a desktop icon across the desktop grid or dragging the rubber-band box.
 pub fn handle_overlays_motion(state: &mut OkayState, pos: Point<f64, Logical>) -> bool {
     if let Some(idx) = state.overlays.dragging_icon {
-        let col = ((pos.x.round() as i32 - 20).max(0) / 96).clamp(0, 14);
-        let row = ((pos.y.round() as i32 - 24).max(0) / 96).clamp(0, 8);
+        let col = ((pos.x.round() as i32 - 20).max(0) / 98).clamp(0, 14);
+        let row = ((pos.y.round() as i32 - 48).max(0) / 94).clamp(0, 8);
         if let Some(icon) = state.overlays.desktop_icons.get_mut(idx) {
             icon.grid_col = col;
             icon.grid_row = row;
+        }
+        return true;
+    }
+    if let Some(start) = state.overlays.rubberband_start {
+        state.overlays.rubberband_current = Some(pos);
+        let sx = start.x.round() as i32;
+        let sy = start.y.round() as i32;
+        let cx = pos.x.round() as i32;
+        let cy = pos.y.round() as i32;
+        let rx = sx.min(cx);
+        let ry = sy.min(cy);
+        let rw = (sx - cx).abs();
+        let rh = (sy - cy).abs();
+        let sel_rect: Rectangle<i32, Logical> = Rectangle::new((rx, ry).into(), (rw, rh).into());
+
+        state.overlays.selected_icons.clear();
+        for (rect, action) in &state.overlays.hit_regions {
+            if let OverlayClick::DesktopIconClick(idx) = action {
+                let ix = rect.loc.x;
+                let iy = rect.loc.y;
+                let iw = rect.size.w;
+                let ih = rect.size.h;
+                let overlaps = ix < sel_rect.loc.x + sel_rect.size.w
+                    && ix + iw > sel_rect.loc.x
+                    && iy < sel_rect.loc.y + sel_rect.size.h
+                    && iy + ih > sel_rect.loc.y;
+                if overlaps && !state.overlays.selected_icons.contains(idx) {
+                    state.overlays.selected_icons.push(*idx);
+                }
+            }
         }
         return true;
     }
@@ -390,7 +486,46 @@ pub fn handle_overlays_release(state: &mut OkayState) -> bool {
     if state.overlays.dragging_icon.take().is_some() {
         return true;
     }
+    if state.overlays.rubberband_start.take().is_some() {
+        state.overlays.rubberband_current = None;
+        return true;
+    }
     false
+}
+
+fn launch_desktop_icon(state: &mut OkayState, icon: &DesktopIcon) {
+    match &icon.action {
+        DesktopIconAction::OpenHome => {
+            let _ = Command::new("xdg-open")
+                .arg(std::env::var("HOME").unwrap_or_else(|_| "/".to_string()))
+                .env("WAYLAND_DISPLAY", &state.socket_name)
+                .spawn();
+        }
+        DesktopIconAction::OpenTerminal => {
+            crate::panel::spawn_terminal(&state.socket_name);
+        }
+        DesktopIconAction::OpenSettings => {
+            state.settings.open = true;
+            state.settings.refresh_system_info();
+        }
+        DesktopIconAction::TakeScreenshot => {
+            take_screenshot(state);
+        }
+        DesktopIconAction::OpenPath(p) => {
+            if let Some(cmd) = &icon.exec_cmd {
+                let _ = Command::new("sh")
+                    .arg("-c")
+                    .arg(cmd)
+                    .env("WAYLAND_DISPLAY", &state.socket_name)
+                    .spawn();
+            } else {
+                let _ = Command::new("xdg-open")
+                    .arg(p)
+                    .env("WAYLAND_DISPLAY", &state.socket_name)
+                    .spawn();
+            }
+        }
+    }
 }
 
 /// Handles left-click on any active overlay (context menu, notifications, calendar, clipboard, desktop icons).
@@ -474,30 +609,107 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
                 if state.window_under(pos).is_some() {
                     return false;
                 }
+                state.overlays.context_menu_pos = None;
+                state.overlays.icon_context_menu = None;
+                state.overlays.selected_icons.clear();
+                state.overlays.selected_icons.push(idx);
                 state.overlays.dragging_icon = Some(idx);
+
+                let now = std::time::Instant::now();
+                let is_double_click = state
+                    .overlays
+                    .last_icon_click
+                    .map(|(last_idx, last_t)| {
+                        last_idx == idx && now.duration_since(last_t).as_millis() <= 420
+                    })
+                    .unwrap_or(false);
+
+                if is_double_click {
+                    state.overlays.last_icon_click = None;
+                    if let Some(icon) = state.overlays.desktop_icons.get(idx).cloned() {
+                        launch_desktop_icon(state, &icon);
+                    }
+                } else {
+                    state.overlays.last_icon_click = Some((idx, now));
+                }
+            }
+            OverlayClick::IconCtxOpen(idx) => {
+                state.overlays.icon_context_menu = None;
                 if let Some(icon) = state.overlays.desktop_icons.get(idx).cloned() {
-                    match icon.action {
-                        DesktopIconAction::OpenHome => {
-                            let _ = Command::new("xdg-open")
-                                .arg(std::env::var("HOME").unwrap_or_else(|_| "/".to_string()))
-                                .env("WAYLAND_DISPLAY", &state.socket_name)
-                                .spawn();
-                        }
-                        DesktopIconAction::OpenTerminal => {
-                            crate::panel::spawn_terminal(&state.socket_name);
-                        }
-                        DesktopIconAction::OpenSettings => {
-                            state.settings.open = true;
-                            state.settings.refresh_system_info();
-                        }
-                        DesktopIconAction::TakeScreenshot => {
-                            take_screenshot(state);
-                        }
+                    launch_desktop_icon(state, &icon);
+                }
+            }
+            OverlayClick::IconCtxPin(idx) => {
+                state.overlays.icon_context_menu = None;
+                if let Some(icon) = state.overlays.desktop_icons.get(idx).cloned() {
+                    let exec = match &icon.action {
+                        DesktopIconAction::OpenHome => "xdg-open ~".to_string(),
+                        DesktopIconAction::OpenTerminal => "foot".to_string(),
+                        DesktopIconAction::OpenSettings => "okay-settings".to_string(),
+                        DesktopIconAction::TakeScreenshot => "grim".to_string(),
+                        DesktopIconAction::OpenPath(p) => icon
+                            .exec_cmd
+                            .clone()
+                            .unwrap_or_else(|| format!("xdg-open '{}'", p.display())),
+                    };
+                    if !state.panel.custom_pinned.iter().any(|p| p.name == icon.label) {
+                        state.panel.custom_pinned.push(crate::panel::DesktopAppEntry {
+                            name: icon.label.clone(),
+                            exec,
+                            icon_name: icon.icon_name.clone(),
+                            category: "Pinned".to_string(),
+                        });
+                        state.panel.save_full_config(
+                            state.pointer_sensitivity,
+                            state.natural_scroll,
+                            state.animations.enabled,
+                            state.animations.speed,
+                            state.animations.minimize_effect,
+                            &state.settings.xkb_layout,
+                        );
+                    }
+                    state.overlays.push_notification(
+                        "Pinned to Dock",
+                        format!("Added '{}' to your Dock", icon.label),
+                    );
+                }
+            }
+            OverlayClick::IconCtxProperties(idx) => {
+                state.overlays.icon_context_menu = None;
+                if let Some(icon) = state.overlays.desktop_icons.get(idx).cloned() {
+                    let info = match &icon.action {
+                        DesktopIconAction::OpenPath(p) => p.to_string_lossy().into_owned(),
+                        _ => "Built-in Desktop Shortcut".to_string(),
+                    };
+                    state
+                        .overlays
+                        .push_notification(format!("Properties: {}", icon.label), info);
+                }
+            }
+            OverlayClick::IconCtxDelete(idx) => {
+                state.overlays.icon_context_menu = None;
+                if let Some(icon) = state.overlays.desktop_icons.get(idx).cloned() {
+                    match &icon.action {
                         DesktopIconAction::OpenPath(p) => {
-                            let _ = Command::new("xdg-open")
-                                .arg(p)
-                                .env("WAYLAND_DISPLAY", &state.socket_name)
-                                .spawn();
+                            let src = PathBuf::from(p);
+                            if let Ok(home) = std::env::var("HOME") {
+                                let trash_dir = PathBuf::from(home).join(".local/share/Trash/files");
+                                let _ = fs::create_dir_all(&trash_dir);
+                                if let Some(fname) = src.file_name() {
+                                    let _ = fs::rename(&src, trash_dir.join(fname));
+                                }
+                            }
+                            state.overlays.selected_icons.clear();
+                            state.overlays.refresh_desktop_icons();
+                            state
+                                .overlays
+                                .push_notification("Moved to Trash", format!("Removed '{}'", icon.label));
+                        }
+                        _ => {
+                            state.overlays.push_notification(
+                                "System Shortcut",
+                                "Built-in desktop shortcuts cannot be deleted",
+                            );
                         }
                     }
                 }
@@ -544,8 +756,9 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
         return true;
     }
 
-    if state.overlays.context_menu_pos.is_some() {
+    if state.overlays.context_menu_pos.is_some() || state.overlays.icon_context_menu.is_some() {
         state.overlays.context_menu_pos = None;
+        state.overlays.icon_context_menu = None;
         return true;
     }
     if state.overlays.calendar_open {
@@ -571,7 +784,7 @@ pub fn render_top_overlays(
     renderer: &mut GlesRenderer,
     output: &Output,
     scale: Scale<f64>,
-) -> Vec<OkayRenderElements<GlesRenderer>> {
+) -> Vec<OkayRenderElements> {
     let is_primary = state
         .space
         .outputs()
@@ -634,27 +847,28 @@ pub fn render_top_overlays(
         return elements;
     }
 
-    // 2. Right-Click Desktop Context Menu
+    // 2. Right-Click Desktop Context Menu (Polished Dark Glass)
     if let Some(menu_pos) = state.overlays.context_menu_pos {
-        let mw = 232;
-        let mh = 216;
+        let mw = 264;
+        let mh = 232;
         let mx = (menu_pos.x - output_geo.loc.x).clamp(8, (output_geo.size.w - mw - 8).max(8));
         let my = (menu_pos.y - output_geo.loc.y).clamp(8, (output_geo.size.h - mh - 8).max(8));
 
         let mut canvas = Canvas::new(mw, mh);
-        canvas.fill_glass_panel(0, 0, mw, mh, 12);
+        canvas.fill_glass_panel(0, 0, mw, mh, 10);
 
-        let items: [(&str, OverlayClick); 6] = [
-            ("New Folder on Desktop", OverlayClick::ContextNewFolder),
-            ("Open Terminal Here", OverlayClick::ContextOpenTerminal),
-            ("Reload Wallpaper", OverlayClick::ContextReloadWallpaper),
-            ("Toggle Desktop Icons", OverlayClick::ContextToggleIcons),
-            ("Display Settings", OverlayClick::ContextDisplaySettings),
-            ("OKay Settings (Super+I)", OverlayClick::ContextOkaySettings),
+        // Label, optional shortcut hint, action, draw_separator_after
+        let items: [(&str, &str, OverlayClick, bool); 6] = [
+            ("New Folder on Desktop", "", OverlayClick::ContextNewFolder, false),
+            ("Open Terminal Here", "Super+Ret", OverlayClick::ContextOpenTerminal, true),
+            ("Reload Wallpaper", "", OverlayClick::ContextReloadWallpaper, false),
+            ("Toggle Desktop Icons", "", OverlayClick::ContextToggleIcons, true),
+            ("Display Settings", "", OverlayClick::ContextDisplaySettings, false),
+            ("OKay Settings", "Super+I", OverlayClick::ContextOkaySettings, false),
         ];
 
-        for (i, (label, act)) in items.into_iter().enumerate() {
-            let iy = 8 + i as i32 * 34;
+        let mut iy = 10;
+        for (label, hint, act, sep_after) in items {
             let row_rect = Rectangle::new(
                 (output_geo.loc.x + mx + 8, output_geo.loc.y + my + iy).into(),
                 (mw - 16, 30).into(),
@@ -664,23 +878,127 @@ pub fn render_top_overlays(
                 state.pointer_location.x.round() as i32,
                 state.pointer_location.y.round() as i32,
             );
-            let bg = if hovered {
-                [accent[0], accent[1], accent[2], 225]
-            } else {
-                [255, 255, 255, 14]
-            };
+            if hovered {
+                canvas.fill_rounded_rect_aa(8, iy, mw - 16, 30, 6, [accent[0], accent[1], accent[2], 225]);
+            }
             let fg = if hovered {
                 contrast_fg(accent)
             } else {
                 [238, 240, 252, 255]
             };
-            canvas.fill_rounded_rect_aa(8, iy, mw - 16, 30, 7, bg);
+            let hint_fg = if hovered {
+                contrast_fg(accent)
+            } else {
+                [150, 158, 185, 220]
+            };
             canvas.draw_text_px(18, iy + 7, label, 12.5, fg);
+            if !hint.is_empty() {
+                let hw = canvas.measure_text_px(hint, 11.0);
+                canvas.draw_text_px(mw - 18 - hw, iy + 8, hint, 11.0, hint_fg);
+            }
             state.overlays.hit_regions.push((row_rect, act));
+            iy += 32;
+            if sep_after {
+                canvas.fill_rect(14, iy + 3, mw - 28, 1, [255, 255, 255, 24]);
+                iy += 8;
+            }
         }
 
         if let Some(elem) = upload_canvas(&canvas, (mx, my), renderer, scale) {
             elements.push(elem);
+        }
+    }
+
+    // 2b. Dedicated Desktop Icon Right-Click Context Menu
+    if let Some((menu_pos, icon_idx)) = state.overlays.icon_context_menu {
+        let mw = 236;
+        let mh = 160;
+        let mx = (menu_pos.x - output_geo.loc.x).clamp(8, (output_geo.size.w - mw - 8).max(8));
+        let my = (menu_pos.y - output_geo.loc.y).clamp(8, (output_geo.size.h - mh - 8).max(8));
+
+        let mut canvas = Canvas::new(mw, mh);
+        canvas.fill_glass_panel(0, 0, mw, mh, 10);
+
+        let items: [(&str, &str, OverlayClick, bool, bool); 4] = [
+            ("Open", "DblClick", OverlayClick::IconCtxOpen(icon_idx), false, false),
+            ("Pin to Dock", "", OverlayClick::IconCtxPin(icon_idx), false, true),
+            ("Properties", "", OverlayClick::IconCtxProperties(icon_idx), false, true),
+            ("Move to Trash", "Del", OverlayClick::IconCtxDelete(icon_idx), true, false),
+        ];
+
+        let mut iy = 10;
+        for (label, hint, act, is_danger, sep_after) in items {
+            let row_rect = Rectangle::new(
+                (output_geo.loc.x + mx + 8, output_geo.loc.y + my + iy).into(),
+                (mw - 16, 30).into(),
+            );
+            let hovered = rect_contains(
+                row_rect,
+                state.pointer_location.x.round() as i32,
+                state.pointer_location.y.round() as i32,
+            );
+            if hovered {
+                let hcol = if is_danger {
+                    [215, 72, 82, 230]
+                } else {
+                    [accent[0], accent[1], accent[2], 225]
+                };
+                canvas.fill_rounded_rect_aa(8, iy, mw - 16, 30, 6, hcol);
+            }
+            let fg = if hovered {
+                if is_danger {
+                    [255, 255, 255, 255]
+                } else {
+                    contrast_fg(accent)
+                }
+            } else if is_danger {
+                [248, 128, 138, 255]
+            } else {
+                [238, 240, 252, 255]
+            };
+            let hint_fg = if hovered {
+                fg
+            } else {
+                [150, 158, 185, 220]
+            };
+            canvas.draw_text_px(18, iy + 7, label, 12.5, fg);
+            if !hint.is_empty() {
+                let hw = canvas.measure_text_px(hint, 11.0);
+                canvas.draw_text_px(mw - 18 - hw, iy + 8, hint, 11.0, hint_fg);
+            }
+            state.overlays.hit_regions.push((row_rect, act));
+            iy += 32;
+            if sep_after {
+                canvas.fill_rect(14, iy + 3, mw - 28, 1, [255, 255, 255, 24]);
+                iy += 8;
+            }
+        }
+
+        if let Some(elem) = upload_canvas(&canvas, (mx, my), renderer, scale) {
+            elements.push(elem);
+        }
+    }
+
+    // 2c. Desktop Rubber-Band Selection Box
+    if let (Some(start), Some(cur)) = (
+        state.overlays.rubberband_start,
+        state.overlays.rubberband_current,
+    ) {
+        let sx = start.x.round() as i32;
+        let sy = start.y.round() as i32;
+        let cx = cur.x.round() as i32;
+        let cy = cur.y.round() as i32;
+        let rx = (sx.min(cx) - output_geo.loc.x).max(0);
+        let ry = (sy.min(cy) - output_geo.loc.y).max(0);
+        let rw = (sx - cx).abs().max(2);
+        let rh = (sy - cy).abs().max(2);
+        if rw >= 4 && rh >= 4 {
+            let mut canvas = Canvas::new(rw, rh);
+            canvas.fill_rounded_rect_aa(0, 0, rw, rh, 6, [100, 160, 255, 56]);
+            canvas.stroke_rect(0, 0, rw, rh, [120, 180, 255, 210]);
+            if let Some(elem) = upload_canvas(&canvas, (rx, ry), renderer, scale) {
+                elements.push(elem);
+            }
         }
     }
 
@@ -1013,7 +1331,7 @@ pub fn render_desktop_icons(
     renderer: &mut GlesRenderer,
     output: &Output,
     scale: Scale<f64>,
-) -> Vec<OkayRenderElements<GlesRenderer>> {
+) -> Vec<OkayRenderElements> {
     if !state.overlays.show_desktop_icons {
         return Vec::new();
     }
@@ -1040,25 +1358,35 @@ pub fn render_desktop_icons(
     for (idx, icon) in state.overlays.desktop_icons.iter().enumerate() {
         let ix = 20 + icon.grid_col * 98;
         let iy = top_margin + icon.grid_row * 94;
-        let iw = 88;
-        let ih = 82;
+        let iw = 90;
+        let ih = 86;
 
         let mut canvas = Canvas::new(iw, ih);
-        // Soft drop shadow behind squircle
-        canvas.fill_rounded_rect_aa(19, 6, 50, 50, 12, [0, 0, 0, 72]);
-        // Crisp macOS squircle icon
-        canvas.fill_squircle_gradient(20, 4, 48, icon.top_rgb, icon.bot_rgb);
-        let bw = canvas.measure_text_px(&icon.badge, 15.0);
-        let badge_col = if icon.badge == ">_" {
-            [140, 245, 185, 255]
-        } else {
-            [250, 252, 255, 255]
-        };
-        canvas.draw_text_shadowed(20 + (48 - bw) / 2, 18, &icon.badge, 15.0, badge_col);
+        let is_selected = state.overlays.selected_icons.contains(&idx);
+        if is_selected {
+            canvas.fill_rounded_rect_aa(2, 0, iw - 4, ih - 2, 10, [100, 160, 255, 68]);
+            canvas.stroke_rect(2, 0, iw - 4, ih - 2, [130, 185, 255, 195]);
+        }
+
+        // Soft drop shadow behind icon
+        canvas.fill_rounded_rect_aa(20, 7, 50, 50, 12, [0, 0, 0, 72]);
+        crate::icons::draw_app_icon(
+            &mut canvas,
+            21,
+            5,
+            48,
+            icon.icon_name.as_deref(),
+            icon.kind,
+        );
 
         let short: String = icon.label.chars().take(11).collect();
         let lw = canvas.measure_text_px(&short, 11.5);
-        canvas.draw_text_shadowed(((iw - lw) / 2).max(2), 58, &short, 11.5, [246, 248, 255, 255]);
+        if is_selected {
+            let pill_w = (lw + 12).min(iw - 6);
+            let pill_x = ((iw - pill_w) / 2).max(3);
+            canvas.fill_rounded_rect_aa(pill_x, 58, pill_w, 19, 6, [52, 120, 246, 225]);
+        }
+        canvas.draw_text_shadowed(((iw - lw) / 2).max(4), 60, &short, 11.5, [246, 248, 255, 255]);
 
         state.overlays.hit_regions.push((
             Rectangle::new(
@@ -1081,7 +1409,7 @@ fn upload_canvas(
     local_pos: (i32, i32),
     renderer: &mut GlesRenderer,
     scale: Scale<f64>,
-) -> Option<OkayRenderElements<GlesRenderer>> {
+) -> Option<OkayRenderElements> {
     let buf = MemoryRenderBuffer::from_slice(
         &canvas.pixels,
         Fourcc::Abgr8888,

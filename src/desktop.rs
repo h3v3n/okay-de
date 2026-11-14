@@ -85,7 +85,7 @@ impl DesktopState {
         renderer: &mut GlesRenderer,
         output: &Output,
         scale: Scale<f64>,
-    ) -> Option<OkayRenderElements<GlesRenderer>> {
+    ) -> Option<OkayRenderElements> {
         self.ensure_wallpaper_loaded();
 
         let mode = output.current_mode()?;

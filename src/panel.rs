@@ -52,7 +52,7 @@ pub struct DesktopAppEntry {
     pub name: String,
     pub exec: String,
     pub category: String,
-    pub badge: String,
+    pub icon_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +146,7 @@ pub struct PanelState {
     pub window_gaps: i32,
     pub search_query: String,
     pub desktop_apps: Vec<DesktopAppEntry>,
+    pub custom_pinned: Vec<DesktopAppEntry>,
     pub default_terminal: String,
     pub default_browser: String,
     pub default_file_manager: String,
@@ -166,6 +167,7 @@ impl Default for PanelState {
             window_gaps: 10,
             search_query: String::new(),
             desktop_apps: scan_desktop_applications(),
+            custom_pinned: Vec::new(),
             default_terminal: "foot".to_string(),
             default_browser: "firefox".to_string(),
             default_file_manager: "thunar".to_string(),
@@ -273,6 +275,20 @@ impl PanelState {
                             cfg.xkb_layout = val.to_string();
                         }
                     }
+                    "pinned_app" => {
+                        let parts: Vec<&str> = val.split('|').collect();
+                        if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+                            let icon_name = parts.get(2).filter(|s| !s.is_empty()).map(|s| (*s).to_string());
+                            if !self.custom_pinned.iter().any(|p| p.exec == parts[1]) {
+                                self.custom_pinned.push(DesktopAppEntry {
+                                    name: parts[0].to_string(),
+                                    exec: parts[1].to_string(),
+                                    category: "Pinned".to_string(),
+                                    icon_name,
+                                });
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -296,7 +312,7 @@ impl PanelState {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let body = format!(
+        let mut body = format!(
             "# OKay DE Configuration\ndock_mode = {}\npanel_top = {}\nshow_workspaces = {}\naccent_preset = {}\nwindow_gaps = {}\npointer_speed = {:.2}\nnatural_scroll = {}\nanimations_enabled = {}\nanimation_speed = {:.2}\nminimize_effect = \"{}\"\ndefault_terminal = \"{}\"\ndefault_browser = \"{}\"\ndefault_file_manager = \"{}\"\nxkb_layout = \"{}\"\n",
             self.dock_mode,
             self.panel_top,
@@ -313,6 +329,14 @@ impl PanelState {
             self.default_file_manager,
             xkb_layout,
         );
+        for p in &self.custom_pinned {
+            body.push_str(&format!(
+                "pinned_app = \"{}|{}|{}\"\n",
+                p.name,
+                p.exec,
+                p.icon_name.as_deref().unwrap_or("")
+            ));
+        }
         let _ = fs::write(path, body);
     }
 
@@ -378,6 +402,7 @@ pub fn scan_desktop_applications() -> Vec<DesktopAppEntry> {
             };
             let mut name = None;
             let mut exec = None;
+            let mut icon_name = None;
             let mut categories = String::new();
             let mut no_display = false;
 
@@ -390,6 +415,8 @@ pub fn scan_desktop_applications() -> Vec<DesktopAppEntry> {
                     no_display = true;
                 } else if name.is_none() && line.starts_with("Name=") {
                     name = line.strip_prefix("Name=").map(|s| s.trim().to_string());
+                } else if icon_name.is_none() && line.starts_with("Icon=") {
+                    icon_name = line.strip_prefix("Icon=").map(|s| s.trim().to_string());
                 } else if exec.is_none() && line.starts_with("Exec=") {
                     if let Some(raw_exec) = line.strip_prefix("Exec=") {
                         // Strip `%u`, `%F`, etc. field codes
@@ -413,12 +440,6 @@ pub fn scan_desktop_applications() -> Vec<DesktopAppEntry> {
                 if apps.iter().any(|a: &DesktopAppEntry| a.name == n) {
                     continue;
                 }
-                let badge: String = n
-                    .chars()
-                    .filter(|c| c.is_alphanumeric())
-                    .take(2)
-                    .collect::<String>()
-                    .to_uppercase();
                 let category = if categories.contains("Development") {
                     "Dev".to_string()
                 } else if categories.contains("Network") {
@@ -434,7 +455,7 @@ pub fn scan_desktop_applications() -> Vec<DesktopAppEntry> {
                     name: n,
                     exec: e,
                     category,
-                    badge: if badge.is_empty() { "AP".to_string() } else { badge },
+                    icon_name,
                 });
             }
         }
@@ -695,7 +716,7 @@ pub fn render_panel_elements(
     renderer: &mut GlesRenderer,
     output: &Output,
     scale: Scale<f64>,
-) -> Vec<OkayRenderElements<GlesRenderer>> {
+) -> Vec<OkayRenderElements> {
     let Some(output_geo) = state.space.output_geometry(output) else {
         return Vec::new();
     };
@@ -962,19 +983,20 @@ pub fn render_panel_elements(
         // ====================================================================
         // B. Bottom Floating Dock (Centered 18px Glass Pill + Squircle Icons + Zoom)
         // ====================================================================
-        let pinned_apps: [(LauncherItem, &str, [u8; 3], [u8; 3]); 5] = [
-            (LauncherItem::FileManager, "FM", [62, 168, 252], [28, 108, 218]),
-            (LauncherItem::Terminal, ">_", [48, 54, 70], [22, 26, 36]),
-            (LauncherItem::Browser, "WB", [52, 184, 246], [42, 110, 235]),
-            (LauncherItem::OkaySettings, "OS", [132, 138, 156], [76, 82, 98]),
-            (LauncherItem::SystemMonitor, "SM", [138, 108, 240], [84, 58, 192]),
+        let pinned_apps: [(LauncherItem, &str, crate::icons::VectorIconKind); 5] = [
+            (LauncherItem::FileManager, "FM", crate::icons::VectorIconKind::Files),
+            (LauncherItem::Terminal, ">_", crate::icons::VectorIconKind::Terminal),
+            (LauncherItem::Browser, "WB", crate::icons::VectorIconKind::Browser),
+            (LauncherItem::OkaySettings, "OS", crate::icons::VectorIconKind::Settings),
+            (LauncherItem::SystemMonitor, "SM", crate::icons::VectorIconKind::SystemMonitor),
         ];
 
+        let custom_pinned = state.panel.custom_pinned.clone();
         let base_icon = 42;
         let icon_gap = 10;
         let divider_w = if ws_windows.is_empty() { 0 } else { 18 };
         let dock_pad_x = 16;
-        let total_icons = pinned_apps.len() + ws_windows.len();
+        let total_icons = pinned_apps.len() + custom_pinned.len() + ws_windows.len();
         let dock_pill_w = (dock_pad_x * 2
             + total_icons as i32 * base_icon
             + (total_icons as i32 - 1).max(0) * icon_gap
@@ -1008,7 +1030,7 @@ pub fn render_panel_elements(
 
         let mut dx = dock_pill_x_in_canvas + dock_pad_x;
 
-        for (item, glyph, top_rgb, bot_rgb) in pinned_apps {
+        for (item, glyph, kind) in pinned_apps {
             let center_global_x = output_geo.loc.x + dock_canvas_x_local + dx + base_icon / 2;
             let zoom = if pointer_near_dock {
                 let dist = ((pointer_x - center_global_x) as f32).abs();
@@ -1027,21 +1049,13 @@ pub fn render_panel_elements(
             let draw_x = dx - (sz - base_icon) / 2;
             let draw_y = dock_pill_y_in_canvas + 8 - (sz - base_icon) - bounce_y;
 
-            dock.fill_squircle_gradient(draw_x, draw_y, sz, top_rgb, bot_rgb);
-            let text_px = (14.0 * zoom).round();
-            let gw = dock.measure_text_px(glyph, text_px);
-            let g_col = if glyph == ">_" {
-                [140, 245, 185, 255]
-            } else {
-                [250, 252, 255, 255]
+            let sys_icon_hint = match item {
+                LauncherItem::FileManager => Some(state.panel.default_file_manager.as_str()),
+                LauncherItem::Terminal => Some(state.panel.default_terminal.as_str()),
+                LauncherItem::Browser => Some(state.panel.default_browser.as_str()),
+                _ => None,
             };
-            dock.draw_text_shadowed(
-                draw_x + (sz - gw) / 2,
-                draw_y + (sz - text_px as i32) / 2 - 1,
-                glyph,
-                text_px,
-                g_col,
-            );
+            crate::icons::draw_app_icon(&mut dock, draw_x, draw_y, sz, sys_icon_hint, kind);
 
             // Active indicator dot underneath Settings if open
             if item == LauncherItem::OkaySettings && state.settings.open {
@@ -1066,6 +1080,41 @@ pub fn render_panel_elements(
                 .hit_regions
                 .push((hit_global, ClickTarget::PinnedApp(item)));
 
+            dx += base_icon + icon_gap;
+        }
+
+        // User-pinned custom apps from Desktop Icon Context Menu
+        for app in &custom_pinned {
+            let center_global_x = output_geo.loc.x + dock_canvas_x_local + dx + base_icon / 2;
+            let zoom = if pointer_near_dock {
+                let dist = ((pointer_x - center_global_x) as f32).abs();
+                if dist < 96.0 {
+                    let norm = 1.0 - dist / 96.0;
+                    1.0 + 0.36 * norm * norm * (3.0 - 2.0 * norm)
+                } else {
+                    1.0
+                }
+            } else {
+                1.0
+            };
+            let sz = (base_icon as f32 * zoom).round() as i32;
+            let draw_x = dx - (sz - base_icon) / 2;
+            let draw_y = dock_pill_y_in_canvas + 8 - (sz - base_icon);
+            let kind = crate::icons::VectorIconKind::from_hint(&app.name, &app.exec, false);
+            crate::icons::draw_app_icon(&mut dock, draw_x, draw_y, sz, app.icon_name.as_deref(), kind);
+
+            let hit_global = Rectangle::new(
+                (
+                    output_geo.loc.x + dock_canvas_x_local + draw_x,
+                    output_geo.loc.y + dock_canvas_y_local + draw_y,
+                )
+                    .into(),
+                (sz, sz + 10).into(),
+            );
+            state
+                .panel
+                .hit_regions
+                .push((hit_global, ClickTarget::LaunchDesktopApp(app.exec.clone())));
             dx += base_icon + icon_gap;
         }
 
@@ -1115,39 +1164,11 @@ pub fn render_panel_elements(
                         .insert(id.clone(), win_global);
                 }
 
-                let (top_rgb, bot_rgb) = if *is_focused {
-                    (accent, [
-                        (accent[0] as u16 * 68 / 100) as u8,
-                        (accent[1] as u16 * 68 / 100) as u8,
-                        (accent[2] as u16 * 68 / 100) as u8,
-                    ])
-                } else if *is_min {
-                    ([52, 56, 72], [32, 34, 46])
-                } else {
-                    ([74, 80, 102], [44, 48, 66])
-                };
-
-                dock.fill_squircle_gradient(draw_x, draw_y, sz, top_rgb, bot_rgb);
-                let initials: String = title
-                    .split_whitespace()
-                    .take(2)
-                    .filter_map(|w| w.chars().next())
-                    .collect::<String>()
-                    .to_uppercase();
-                let badge = if initials.is_empty() {
-                    "WN".to_string()
-                } else {
-                    initials
-                };
-                let text_px = (13.0 * zoom).round();
-                let bw = dock.measure_text_px(&badge, text_px);
-                dock.draw_text_shadowed(
-                    draw_x + (sz - bw) / 2,
-                    draw_y + (sz - text_px as i32) / 2 - 1,
-                    &badge,
-                    text_px,
-                    [248, 250, 255, 255],
-                );
+                let kind = crate::icons::VectorIconKind::from_hint(title, title, false);
+                crate::icons::draw_app_icon(&mut dock, draw_x, draw_y, sz, Some(title), kind);
+                if *is_focused {
+                    dock.fill_rounded_rect_aa(draw_x, draw_y, sz, 3, 2, [accent[0], accent[1], accent[2], 220]);
+                }
 
                 // Glowing active indicator dot beneath every open window in the Dock
                 let dot_col = if *is_focused {
@@ -1410,7 +1431,7 @@ pub fn render_panel_elements(
                 [30, 30, 46, 235]
             };
 
-            menu_canvas.fill_rounded_rect(
+            menu_canvas.fill_rounded_rect_aa(
                 MENU_PADDING,
                 iy + 2,
                 MENU_WIDTH - MENU_PADDING * 2,
@@ -1418,30 +1439,32 @@ pub fn render_panel_elements(
                 6,
                 item_bg,
             );
-            menu_canvas.fill_rounded_rect(
-                MENU_PADDING + 6,
-                iy + 5,
-                26,
-                MENU_ITEM_HEIGHT - 10,
-                5,
-                [44, 44, 68, 255],
+            let item_kind = match item {
+                LauncherItem::Terminal => crate::icons::VectorIconKind::Terminal,
+                LauncherItem::FileManager => crate::icons::VectorIconKind::Files,
+                LauncherItem::Browser => crate::icons::VectorIconKind::Browser,
+                LauncherItem::SystemMonitor => crate::icons::VectorIconKind::SystemMonitor,
+                LauncherItem::Screenshot => crate::icons::VectorIconKind::Screenshot,
+                LauncherItem::OkaySettings | LauncherItem::ReloadConfig => crate::icons::VectorIconKind::Settings,
+            };
+            crate::icons::draw_app_icon(
+                &mut menu_canvas,
+                MENU_PADDING + 8,
+                iy + 6,
+                22,
+                None,
+                item_kind,
             );
             menu_canvas.draw_text_px(
-                MENU_PADDING + 10,
-                iy + 8,
-                item.badge(),
-                11.5,
-                [accent[0], accent[1], accent[2], 255],
-            );
-            menu_canvas.draw_text_px(
-                MENU_PADDING + 40,
+                MENU_PADDING + 38,
                 iy + 8,
                 item.label(),
                 13.5,
                 [238, 240, 252, 255],
             );
+            let hint_w = menu_canvas.measure_text_px(item.hint(), 11.5);
             menu_canvas.draw_text_px(
-                MENU_WIDTH - MENU_PADDING - 72,
+                MENU_WIDTH - MENU_PADDING - hint_w - 10,
                 iy + 9,
                 item.hint(),
                 11.5,
@@ -1473,7 +1496,7 @@ pub fn render_panel_elements(
                 [28, 28, 42, 235]
             };
 
-            menu_canvas.fill_rounded_rect(
+            menu_canvas.fill_rounded_rect_aa(
                 MENU_PADDING,
                 iy + 2,
                 MENU_WIDTH - MENU_PADDING * 2,
@@ -1481,31 +1504,26 @@ pub fn render_panel_elements(
                 6,
                 item_bg,
             );
-            menu_canvas.fill_rounded_rect(
-                MENU_PADDING + 6,
-                iy + 5,
-                26,
-                MENU_ITEM_HEIGHT - 10,
-                5,
-                [40, 44, 66, 255],
-            );
-            menu_canvas.draw_text_px(
-                MENU_PADDING + 10,
-                iy + 8,
-                &app.badge,
-                11.5,
-                [accent[0], accent[1], accent[2], 255],
+            let kind = crate::icons::VectorIconKind::from_hint(&app.name, &app.exec, false);
+            crate::icons::draw_app_icon(
+                &mut menu_canvas,
+                MENU_PADDING + 8,
+                iy + 6,
+                22,
+                app.icon_name.as_deref(),
+                kind,
             );
             let short_name: String = app.name.chars().take(24).collect();
             menu_canvas.draw_text_px(
-                MENU_PADDING + 40,
+                MENU_PADDING + 38,
                 iy + 8,
                 &short_name,
                 13.5,
                 [235, 238, 250, 255],
             );
+            let cat_w = menu_canvas.measure_text_px(&app.category, 11.5);
             menu_canvas.draw_text_px(
-                MENU_WIDTH - MENU_PADDING - 52,
+                MENU_WIDTH - MENU_PADDING - cat_w - 10,
                 iy + 9,
                 &app.category,
                 11.5,
@@ -1580,7 +1598,7 @@ pub fn render_titlebar_element(
     _accent: [u8; 3],
     renderer: &mut GlesRenderer,
     scale: Scale<f64>,
-) -> Option<OkayRenderElements<GlesRenderer>> {
+) -> Option<OkayRenderElements> {
     let win_geo = window.geometry();
     let tb_w = win_geo.size.w.max(120);
     let tb_h = crate::state::TITLEBAR_HEIGHT;
@@ -2076,8 +2094,8 @@ impl Canvas {
         // Soft drop shadow
         self.fill_rounded_rect_aa(x - 2, y + 3, w + 4, h + 4, radius + 2, [0, 0, 0, 56]);
         self.fill_rounded_rect_aa(x - 1, y + 1, w + 2, h + 2, radius + 1, [0, 0, 0, 72]);
-        // Translucent dark glass body: rgba(24, 26, 36, 0.86) -> alpha 219
-        self.fill_rounded_rect_aa(x, y, w, h, radius, [24, 26, 36, 219]);
+        // Translucent dark glass body: rgba(24, 26, 36, 0.90) -> alpha 230
+        self.fill_rounded_rect_aa(x, y, w, h, radius, [24, 26, 36, 230]);
         // Subtle 1px inner top highlight: rgba(255, 255, 255, 0.14) -> alpha 36
         let inset = (radius / 2).max(4);
         if w > inset * 2 {

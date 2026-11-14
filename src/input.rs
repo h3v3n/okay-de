@@ -498,6 +498,8 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
             } else if let Some(keyboard) = state.seat.get_keyboard() {
                 keyboard.set_focus(state, Some(surface), serial);
             }
+        } else if button == 0x110 && state.window_under(pos).is_none() {
+            crate::overlays::start_desktop_rubberband(state, pos);
         }
     } else if btn_state == ButtonState::Released {
         if crate::settings::handle_settings_release(state) {

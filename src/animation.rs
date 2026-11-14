@@ -9,7 +9,6 @@ use smithay::{
             solid::{SolidColorBuffer, SolidColorRenderElement},
             Kind,
         },
-        gles::GlesRenderer,
         Color32F,
     },
     reexports::wayland_server::backend::ObjectId,
@@ -354,7 +353,7 @@ impl AnimationManager {
         &self,
         id: &ObjectId,
         scale: Scale<f64>,
-    ) -> Vec<OkayRenderElements<GlesRenderer>> {
+    ) -> Vec<OkayRenderElements> {
         let Some(anim) = self.windows.get(id) else {
             return Vec::new();
         };

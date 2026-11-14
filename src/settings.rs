@@ -591,7 +591,7 @@ pub fn render_settings_elements(
     renderer: &mut GlesRenderer,
     output: &Output,
     scale: Scale<f64>,
-) -> Vec<OkayRenderElements<GlesRenderer>> {
+) -> Vec<OkayRenderElements> {
     if !state.settings.open {
         return Vec::new();
     }
