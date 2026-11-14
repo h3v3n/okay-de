@@ -165,8 +165,9 @@ def _parse_wlr_randr_text(raw: str) -> list:
 class DisplayTab(Gtk.Box):
     """Zakładka konfiguracji monitorów, skalowania ułamkowego i układu wyjść Wayfire."""
 
-    def __init__(self, _parent_window=None, defer_load: bool = False):
+    def __init__(self, parent_window=None, defer_load: bool = False, **_kwargs):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.parent_window = parent_window
         self._outputs = []
         self._selected_output = None
         self._res_map = {}

@@ -87,8 +87,9 @@ def _parse_wpctl_get_volume(raw: str) -> tuple:
 class SoundTab(Gtk.Box):
     """Widok ustawień dźwięku (głośność główna, wyciszanie, urządzenia wyjścia i wejścia)."""
 
-    def __init__(self, _parent_window=None, defer_load: bool = False):
+    def __init__(self, parent_window=None, defer_load: bool = False, **_kwargs):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.parent_window = parent_window
         self._updating_ui = False
         self._loaded = False
         self._vol_debounce_id = 0

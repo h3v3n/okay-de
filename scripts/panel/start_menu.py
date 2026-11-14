@@ -715,7 +715,10 @@ class StartMenuPopover(Gtk.Window):
         if self._on_toggle_pin is not None:
             pins = self._get_pinned_apps() or []
             app_norm = app["app_id"].lower()
-            is_pinned = any(str(p.get("app_id", "")).lower() == app_norm for p in pins)
+            is_pinned = any(
+                (str(p.get("app_id", "")).lower() if isinstance(p, dict) else str(p).lower().removesuffix(".desktop")) == app_norm
+                for p in pins
+            )
             mi_pin = Gtk.MenuItem(label="Odepnij z paska zadań" if is_pinned else "Przypnij do paska zadań")
             mi_pin.connect("activate", lambda _m: self._toggle_pin(app))
             menu.append(mi_pin)

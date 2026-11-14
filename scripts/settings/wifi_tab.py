@@ -102,7 +102,7 @@ def _query_bluetooth_state(scan: bool = False) -> dict:
 class WifiTab(Gtk.Box):
     """Widok zarządzania Wi-Fi, połączeniami sieciowymi (nmcli) oraz Bluetooth (bluetoothctl)."""
 
-    def __init__(self, parent_window=None, defer_load: bool = False):
+    def __init__(self, parent_window=None, defer_load: bool = False, **_kwargs):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.parent_window = parent_window
         self._updating_ui = False

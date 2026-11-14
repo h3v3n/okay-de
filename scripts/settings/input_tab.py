@@ -44,8 +44,9 @@ SHORTCUT_DEFINITIONS = [
 class InputTab(Gtk.Box):
     """Widok konfiguracji myszy, touchpada, klawiatury i skrótów klawiszowych Wayfire."""
 
-    def __init__(self, _parent_window=None, defer_load: bool = False):
+    def __init__(self, parent_window=None, defer_load: bool = False, **_kwargs):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.parent_window = parent_window
         self._loaded = False
         self._shortcut_entries = {}
 

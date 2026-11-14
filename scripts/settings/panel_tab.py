@@ -42,9 +42,10 @@ from .helpers import (
 class PanelTab(Gtk.Box):
     """Widok personalizacji wyglądu, dekoracji okien, silnika animacji Wayfire oraz paska OKay Panel."""
 
-    def __init__(self, parent_window=None):
+    def __init__(self, parent_window=None, defer_load: bool = False, **_kwargs):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.parent_window = parent_window
+        self._loaded = not defer_load
         self._updating_ui = False
         self._preset_buttons = {}
         self._anim_debounce_id = 0
@@ -429,7 +430,13 @@ class PanelTab(Gtk.Box):
 
         self.content.pack_start(card_wp, False, False, 0)
 
-        self.load_config()
+        if not defer_load:
+            self.load_config()
+
+    def ensure_loaded(self):
+        if not self._loaded:
+            self._loaded = True
+            self.load_config()
 
     def _sync_color_controls(self, hex_color: str):
         clean = sanitize_hex_color(hex_color)

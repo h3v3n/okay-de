@@ -26,8 +26,10 @@ from .helpers import (
 class SystemTab(Gtk.Box):
     """Widok prywatności, informacji o systemie oraz aktualizatora OKay DE."""
 
-    def __init__(self, _parent_window=None):
+    def __init__(self, parent_window=None, defer_load: bool = False, **_kwargs):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.parent_window = parent_window
+        self._loaded = True
         self._remote_info = None
         self._state = get_state_manager()
         self._updating_ui = False
@@ -157,6 +159,9 @@ class SystemTab(Gtk.Box):
 
         box_up.pack_start(btn_box, False, False, 4)
         self.content.pack_start(card_up, False, False, 0)
+
+    def ensure_loaded(self):
+        return
 
     def _on_idle_changed(self, combo):
         if self._updating_ui:

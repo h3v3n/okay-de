@@ -8,16 +8,60 @@ Obsługuje reaktywne odświeżanie motywu Ciemny/Jasny, koloru akcentu oraz siln
 
 import os
 import sys
+import glob
+import signal
 import argparse
+
+os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+os.environ.setdefault("NO_AT_BRIDGE", "1")
+os.environ.setdefault("GDK_BACKEND", "wayland,x11")
+
+# Automatyczne wykrycie gniazda Wayland w /run/user/$UID, jeśli uruchomiono spoza środowiska sesji
+if not os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("BROADWAY_DISPLAY"):
+    _rt = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    if os.path.isdir(_rt):
+        _wl_socks = sorted(glob.glob(os.path.join(_rt, "wayland-[0-9]*")))
+        _wl_socks = [s for s in _wl_socks if not s.endswith(".lock")]
+        if _wl_socks:
+            os.environ.setdefault("XDG_RUNTIME_DIR", _rt)
+            os.environ["WAYLAND_DISPLAY"] = os.path.basename(_wl_socks[0])
+
+try:
+    import ctypes
+    ctypes.CDLL(None).prctl(15, b"okay-settings", 0, 0, 0)
+except Exception:
+    pass
+
+# Rozwiązanie ścieżki modułów `settings` i `panel`: priorytet repo -> ~/.local -> /usr/local -> /usr
+_SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+_XDG_DATA = os.environ.get("XDG_DATA_HOME", "").strip()
+_USER_SHARE_DIR = os.path.join(
+    os.path.expanduser(_XDG_DATA) if _XDG_DATA else os.path.expanduser("~/.local/share"),
+    "okay-de",
+)
+_parent_dir = os.path.dirname(_SCRIPT_DIR)
+_candidates_raw = [
+    _SCRIPT_DIR,
+    os.path.join(_parent_dir, "scripts"),
+    _USER_SHARE_DIR,
+    os.path.join(_USER_SHARE_DIR, "repo", "scripts"),
+    "/usr/local/share/okay-de",
+    "/usr/share/okay-de",
+]
+_candidates = []
+for _c in _candidates_raw:
+    if _c and (os.path.isdir(os.path.join(_c, "settings")) or os.path.isdir(os.path.join(_c, "panel"))) and _c not in _candidates:
+        _candidates.append(_c)
+
+for _cand in reversed(_candidates):
+    if _cand in sys.path:
+        sys.path.remove(_cand)
+    sys.path.insert(0, _cand)
 
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk
-
-SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
 
 from settings.helpers import (
     apply_settings_css,
