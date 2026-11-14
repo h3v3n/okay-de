@@ -1,39 +1,45 @@
+use std::sync::{Mutex, OnceLock};
+
 use smithay::{
-    backend::renderer::{
-        damage::{OutputDamageTracker, RenderOutputResult},
-        element::{
-            surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
-            solid::{SolidColorBuffer, SolidColorRenderElement},
-            AsRenderElements, Kind,
+    backend::{
+        allocator::Fourcc,
+        renderer::{
+            damage::{OutputDamageTracker, RenderOutputResult},
+            element::{
+                memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
+                solid::{SolidColorBuffer, SolidColorRenderElement},
+                surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
+                AsRenderElements, Kind,
+            },
+            gles::{GlesError, GlesRenderer, GlesTarget},
+            Color32F, ImportAll, ImportMem, Renderer,
         },
-        gles::{GlesError, GlesRenderer, GlesTarget},
-        Color32F, ImportAll, Renderer,
     },
-    desktop::{
-        layer_map_for_output, utils::send_frames_surface_tree,
-    },
+    desktop::{layer_map_for_output, utils::send_frames_surface_tree},
+    input::pointer::{CursorImageAttributes, CursorImageStatus},
     output::Output,
     reexports::wayland_server::Resource,
     render_elements,
-    utils::{Logical, Physical, Point, Rectangle, Scale},
-    wayland::shell::wlr_layer::Layer,
+    utils::{IsAlive, Logical, Physical, Point, Rectangle, Scale, Transform},
+    wayland::{compositor::with_states, shell::wlr_layer::Layer},
 };
 
 use crate::state::OkayState;
 
 render_elements! {
-    pub OkayRenderElements<R> where R: Renderer + ImportAll;
+    pub OkayRenderElements<R> where R: Renderer + ImportAll + ImportMem;
     Surface=WaylandSurfaceRenderElement<R>,
     Solid=SolidColorRenderElement,
+    Memory=MemoryRenderBufferRenderElement<R>,
 }
 
 /// Collects all render elements for a given `Output` in front-to-back order
-/// (Overlay -> Top Layer -> Focused/Visible Windows & Borders -> Bottom/Background Layer).
+/// (Cursor -> Overlay/Top Layer -> Native Panel -> Visible Windows & Borders -> Bottom/Background Layer -> Desktop Wallpaper).
 ///
 /// Designed to be easily extended with custom GLSL post-processing shaders,
 /// window animations, and native compositor UI widgets.
 pub fn collect_output_elements(
-    state: &OkayState,
+    state: &mut OkayState,
     renderer: &mut GlesRenderer,
     output: &Output,
     scale: Scale<f64>,
@@ -42,6 +48,17 @@ pub fn collect_output_elements(
     let Some(output_geo) = state.space.output_geometry(output) else {
         return elements;
     };
+
+    // 0. Pointer cursor (topmost element on whichever output contains the pointer)
+    if output_geo.to_f64().contains(state.pointer_location) {
+        let local_cursor = state.pointer_location - output_geo.loc.to_f64();
+        elements.extend(collect_cursor_elements(
+            &state.cursor_status,
+            local_cursor,
+            renderer,
+            scale,
+        ));
+    }
 
     let layer_map = layer_map_for_output(output);
 
@@ -64,7 +81,12 @@ pub fn collect_output_elements(
         }
     }
 
-    // 2. Visible XDG windows on the active workspace (top-to-bottom)
+    // 2. Native OKay DE taskbar & launcher popup
+    elements.extend(crate::panel::render_panel_elements(
+        state, renderer, output, scale,
+    ));
+
+    // 3. Visible XDG windows on the active workspace (top-to-bottom)
     let focused_id = state
         .seat
         .get_keyboard()
@@ -120,7 +142,7 @@ pub fn collect_output_elements(
         elements.extend(border_elems);
     }
 
-    // 3. Bottom and Background layer-shell surfaces (wallpapers, desktop widgets)
+    // 4. Bottom and Background layer-shell surfaces (external wallpapers, desktop widgets)
     for layer_type in [Layer::Bottom, Layer::Background] {
         for layer in layer_map.layers_on(layer_type).rev() {
             if let Some(geo) = layer_map.layer_geometry(layer) {
@@ -139,7 +161,130 @@ pub fn collect_output_elements(
         }
     }
 
+    // 5. Native OKay DE desktop wallpaper / gradient (bottommost)
+    if let Some(bg) = state.desktop.background_element(renderer, output, scale) {
+        elements.push(bg);
+    }
+
     elements
+}
+
+/// Renders either the client-provided cursor surface or a crisp software pointer arrow.
+fn collect_cursor_elements(
+    cursor_status: &CursorImageStatus,
+    local_cursor: Point<f64, Logical>,
+    renderer: &mut GlesRenderer,
+    scale: Scale<f64>,
+) -> Vec<OkayRenderElements<GlesRenderer>> {
+    match cursor_status {
+        CursorImageStatus::Hidden => Vec::new(),
+        CursorImageStatus::Surface(surface) if surface.alive() => {
+            let hotspot = with_states(surface, |states| {
+                states
+                    .data_map
+                    .get::<Mutex<CursorImageAttributes>>()
+                    .map(|attrs| attrs.lock().unwrap().hotspot)
+                    .unwrap_or_default()
+            });
+            let pos = (local_cursor - hotspot.to_f64()).to_physical_precise_round(scale);
+            render_elements_from_surface_tree(renderer, surface, pos, scale, 1.0, Kind::Cursor)
+        }
+        _ => {
+            let buf = default_cursor_buffer();
+            let phys_loc: Point<f64, Physical> = local_cursor.to_physical_precise_round::<f64, i32>(scale).to_f64();
+            match MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                phys_loc,
+                buf,
+                None,
+                None,
+                Some((16, 22).into()),
+                Kind::Cursor,
+            ) {
+                Ok(elem) => vec![OkayRenderElements::Memory(elem)],
+                Err(err) => {
+                    tracing::warn!(?err, "Failed to create software cursor render element");
+                    Vec::new()
+                }
+            }
+        }
+    }
+}
+
+/// Cached 16x22 high-contrast RGBA pointer arrow (white fill with dark outline).
+fn default_cursor_buffer() -> &'static MemoryRenderBuffer {
+    static CURSOR_BUF: OnceLock<MemoryRenderBuffer> = OnceLock::new();
+    CURSOR_BUF.get_or_init(|| {
+        const W: usize = 16;
+        const H: usize = 22;
+        #[rustfmt::skip]
+        const SHAPE: [&[u8; W]; H] = [
+            b"#...............",
+            b"##..............",
+            b"#.#.............",
+            b"#..#............",
+            b"#...#...........",
+            b"#....#..........",
+            b"#.....#.........",
+            b"#......#........",
+            b"#.......#.......",
+            b"#........#......",
+            b"#.........#.....",
+            b"#..........#....",
+            b"#......######...",
+            b"#...#..#........",
+            b"#..#.#..#.......",
+            b"#.#..#..#.......",
+            b"##....#..#......",
+            b"#.....#..#......",
+            b".......#..#.....",
+            b".......#..#.....",
+            b"........##......",
+            b"................",
+        ];
+
+        let mut pixels = vec![0u8; W * H * 4];
+        for (y, row) in SHAPE.iter().enumerate() {
+            let mut inside = false;
+            let mut last_hash = None;
+            for x in (0..W).rev() {
+                if row[x] == b'#' {
+                    last_hash = Some(x);
+                    break;
+                }
+            }
+            for x in 0..W {
+                let idx = (y * W + x) * 4;
+                if row[x] == b'#' {
+                    // Crisp dark outline
+                    pixels[idx] = 16;
+                    pixels[idx + 1] = 18;
+                    pixels[idx + 2] = 28;
+                    pixels[idx + 3] = 255;
+                    if Some(x) != last_hash {
+                        inside = true;
+                    } else {
+                        inside = false;
+                    }
+                } else if inside {
+                    // Bright white pointer fill
+                    pixels[idx] = 250;
+                    pixels[idx + 1] = 252;
+                    pixels[idx + 2] = 255;
+                    pixels[idx + 3] = 255;
+                }
+            }
+        }
+
+        MemoryRenderBuffer::from_slice(
+            &pixels,
+            Fourcc::Abgr8888,
+            (W as i32, H as i32),
+            1,
+            Transform::Normal,
+            None,
+        )
+    })
 }
 
 /// Builds 4 crisp solid-color border strips (top, bottom, left, right) around `rect`.
@@ -192,7 +337,7 @@ fn build_border_elements(
 
 /// Renders a single frame for `output` using `OutputDamageTracker`.
 pub fn render_output<'a, 'd>(
-    state: &OkayState,
+    state: &mut OkayState,
     renderer: &mut GlesRenderer,
     framebuffer: &mut GlesTarget<'a>,
     damage_tracker: &'d mut OutputDamageTracker,

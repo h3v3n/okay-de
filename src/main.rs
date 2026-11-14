@@ -1,10 +1,12 @@
+mod desktop;
 mod input;
+mod panel;
 mod render;
 mod shell;
 mod state;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::Path,
     sync::Arc,
     time::Duration,
@@ -238,6 +240,8 @@ struct DrmBackendData {
     session: LibSeatSession,
     devices: HashMap<DrmNode, DrmDeviceData>,
     primary_gpu: Option<DrmNode>,
+    used_crtcs: HashSet<(DrmNode, crtc::Handle)>,
+    next_output_x: i32,
 }
 
 struct DrmDeviceData {
@@ -276,6 +280,8 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
             .ok()
             .flatten()
             .and_then(|p| DrmNode::from_path(p).ok()),
+        used_crtcs: HashSet::new(),
+        next_output_x: 0,
     };
 
     for (dev_id, path) in udev_backend.device_list() {
@@ -327,7 +333,7 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
             for out_state in dev.outputs.values_mut() {
                 let scale = Scale::from(out_state.output.current_scale().fractional_scale());
                 let elements = crate::render::collect_output_elements(
-                    &state,
+                    &mut state,
                     &mut dev.renderer,
                     &out_state.output,
                     scale,
@@ -410,12 +416,20 @@ fn on_drm_device_added(
             continue;
         };
         let encoder = drm_device.get_encoder(encoder_handle)?;
-        let Some(crtc_handle) = encoder
+        let crtc_handle = encoder
             .crtc()
-            .or_else(|| res_handles.filter_crtcs(encoder.possible_crtcs()).first().copied())
-        else {
+            .filter(|c| !drm_data.used_crtcs.contains(&(node, *c)))
+            .or_else(|| {
+                res_handles
+                    .filter_crtcs(encoder.possible_crtcs())
+                    .into_iter()
+                    .find(|c| !drm_data.used_crtcs.contains(&(node, *c)))
+            });
+        let Some(crtc_handle) = crtc_handle else {
+            tracing::warn!(connector = ?conn.interface(), "No free CRTC available for connected output");
             continue;
         };
+        drm_data.used_crtcs.insert((node, crtc_handle));
 
         let surface = drm_device.create_surface(crtc_handle, mode, &[conn.handle()])?;
         let allocator = GbmAllocator::new(
@@ -427,7 +441,7 @@ fn on_drm_device_added(
         let phys_size = conn.size().unwrap_or((0, 0));
         let output_name = format!("{:?}-{}", conn.interface(), conn.interface_id());
         let output = Output::new(
-            output_name,
+            output_name.clone(),
             PhysicalProperties {
                 size: (phys_size.0 as i32, phys_size.1 as i32).into(),
                 subpixel: Subpixel::Unknown,
@@ -436,15 +450,17 @@ fn on_drm_device_added(
             },
         );
         let wl_mode = OutputMode::from(mode);
+        let output_loc = (drm_data.next_output_x, 0);
         output.create_global::<OkayState>(&state.display_handle);
         output.change_current_state(
             Some(wl_mode),
             Some(Transform::Normal),
             None,
-            Some((0, 0).into()),
+            Some(output_loc.into()),
         );
         output.set_preferred(wl_mode);
-        state.space.map_output(&output, (0, 0));
+        state.space.map_output(&output, output_loc);
+        drm_data.next_output_x += wl_mode.size.w;
 
         let renderer_formats = renderer
             .egl_context()
@@ -465,7 +481,14 @@ fn on_drm_device_added(
         )?;
 
         outputs.insert(crtc_handle, DrmOutputState { output, compositor });
-        tracing::info!(?crtc_handle, "Initialized DRM/KMS output");
+        tracing::info!(
+            output = %output_name,
+            ?crtc_handle,
+            x = output_loc.0,
+            w = wl_mode.size.w,
+            h = wl_mode.size.h,
+            "Initialized DRM/KMS output"
+        );
     }
 
     event_loop

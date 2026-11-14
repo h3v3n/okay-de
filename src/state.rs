@@ -145,6 +145,10 @@ pub struct OkayState {
 
     // Visual theme & future shader/animation hooks
     pub theme: CompositorTheme,
+
+    // Native desktop wallpaper & taskbar/launcher panel
+    pub desktop: crate::desktop::DesktopState,
+    pub panel: crate::panel::PanelState,
 }
 
 impl OkayState {
@@ -193,6 +197,8 @@ impl OkayState {
             focus_stack: Vec::new(),
             next_spawn_offset: 0,
             theme: CompositorTheme::default(),
+            desktop: crate::desktop::DesktopState::new(),
+            panel: crate::panel::PanelState::new(),
         }
     }
 
@@ -370,24 +376,40 @@ impl OkayState {
         None
     }
 
-    /// Computes a clean initial placement inside the primary output for a new window.
+    /// Returns the output currently containing the pointer, falling back to the primary output.
+    pub fn output_under_pointer(&self) -> Option<smithay::output::Output> {
+        let pos = self.pointer_location;
+        self.space
+            .outputs()
+            .find(|o| {
+                self.space
+                    .output_geometry(o)
+                    .map(|g| g.to_f64().contains(pos))
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .or_else(|| self.space.outputs().next().cloned())
+    }
+
+    /// Computes a clean initial placement inside the active output for a new window,
+    /// avoiding the native bottom taskbar.
     pub fn next_window_position(&mut self, win_size: smithay::utils::Size<i32, Logical>) -> Point<i32, Logical> {
         let output_geo = self
-            .space
-            .outputs()
-            .next()
-            .and_then(|o| self.space.output_geometry(o))
+            .output_under_pointer()
+            .and_then(|o| self.space.output_geometry(&o))
             .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
 
+        let usable_h = (output_geo.size.h - crate::panel::PANEL_HEIGHT).max(200);
         let offset = self.next_spawn_offset;
         self.next_spawn_offset = (self.next_spawn_offset + 32) % 192;
 
         let x = output_geo.loc.x + ((output_geo.size.w - win_size.w) / 2).max(24) + offset - 64;
-        let y = output_geo.loc.y + ((output_geo.size.h - win_size.h) / 2).max(40) + offset - 64;
+        let y = output_geo.loc.y + ((usable_h - win_size.h) / 2).max(24) + offset - 64;
+        let max_y = output_geo.loc.y + (usable_h - win_size.h - 8).max(16);
 
         Point::from((
             x.max(output_geo.loc.x + 16),
-            y.max(output_geo.loc.y + 16),
+            y.clamp(output_geo.loc.y + 16, max_y),
         ))
     }
 }

@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 calloop = { version = "0.14", features = ["executor"] }
+libc = "0.2"
+png = "0.17"
 smithay = { version = "0.7.0", default-features = false, features = [
     "backend_drm",
     "backend_gbm",

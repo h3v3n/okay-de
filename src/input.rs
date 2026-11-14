@@ -1,5 +1,3 @@
-use std::process::Command;
-
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend,
@@ -134,17 +132,7 @@ fn execute_key_action(state: &mut OkayState, action: KeyAction) {
 }
 
 fn spawn_terminal(socket_name: &std::ffi::OsStr) {
-    let candidates = ["foot", "kitty", "alacritty", "wezterm", "xterm"];
-    for bin in candidates {
-        match Command::new(bin).env("WAYLAND_DISPLAY", socket_name).spawn() {
-            Ok(_child) => {
-                tracing::info!(terminal = bin, "Spawned terminal");
-                return;
-            }
-            Err(_) => continue,
-        }
-    }
-    tracing::warn!("No supported terminal emulator found (tried foot, kitty, alacritty, wezterm, xterm)");
+    crate::panel::spawn_terminal(socket_name);
 }
 
 fn handle_pointer_motion<I: InputBackend>(state: &mut OkayState, event: I::PointerMotionEvent) {
@@ -192,21 +180,34 @@ fn clamp_pointer_to_outputs(
     state: &OkayState,
     pos: Point<f64, Logical>,
 ) -> Point<f64, Logical> {
-    if let Some(geo) = state
-        .space
-        .outputs()
-        .next()
-        .and_then(|o| state.space.output_geometry(o))
-    {
-        let max_x = (geo.loc.x + geo.size.w - 1).max(0) as f64;
-        let max_y = (geo.loc.y + geo.size.h - 1).max(0) as f64;
-        Point::from((
+    let mut best_clamped: Option<(f64, Point<f64, Logical>)> = None;
+
+    for output in state.space.outputs() {
+        let Some(geo) = state.space.output_geometry(output) else {
+            continue;
+        };
+        if geo.to_f64().contains(pos) {
+            return pos;
+        }
+
+        let max_x = (geo.loc.x + geo.size.w - 1).max(geo.loc.x) as f64;
+        let max_y = (geo.loc.y + geo.size.h - 1).max(geo.loc.y) as f64;
+        let clamped = Point::from((
             pos.x.clamp(geo.loc.x as f64, max_x),
             pos.y.clamp(geo.loc.y as f64, max_y),
-        ))
-    } else {
-        Point::from((pos.x.max(0.0), pos.y.max(0.0)))
+        ));
+        let dx = pos.x - clamped.x;
+        let dy = pos.y - clamped.y;
+        let dist_sq = dx * dx + dy * dy;
+
+        if best_clamped.map(|(d, _)| dist_sq < d).unwrap_or(true) {
+            best_clamped = Some((dist_sq, clamped));
+        }
     }
+
+    best_clamped
+        .map(|(_, p)| p)
+        .unwrap_or_else(|| Point::from((pos.x.max(0.0), pos.y.max(0.0))))
 }
 
 fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::PointerButtonEvent) {
@@ -216,6 +217,10 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
 
     if btn_state == ButtonState::Pressed {
         let pos = state.pointer_location;
+        // BTN_LEFT (0x110 = 272): check native taskbar & launcher popup first
+        if button == 0x110 && crate::panel::handle_panel_click(state, pos) {
+            return;
+        }
         if let Some((surface, _)) = state.surface_under(pos) {
             let matching_window = state
                 .space
