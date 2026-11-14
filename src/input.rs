@@ -8,17 +8,23 @@ use smithay::{
         keyboard::{keysyms, FilterResult},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
-    reexports::wayland_server::Resource,
-    utils::{Logical, Point, SERIAL_COUNTER},
+    reexports::{
+        wayland_protocols::xdg::shell::server::xdg_toplevel,
+        wayland_server::Resource,
+    },
+    utils::{Logical, Point, Size, SERIAL_COUNTER},
 };
 
-use crate::state::OkayState;
+use crate::state::{OkayState, PointerGrabMode};
 
 /// Actions triggered by global compositor keybindings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeyAction {
     SpawnTerminal,
+    ToggleLauncher,
     CloseFocused,
+    ToggleFullscreen,
+    ToggleTiling,
     SwitchWorkspace(usize),
     MoveToWorkspace(usize),
     CycleFocus,
@@ -53,7 +59,8 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
         key_state,
         serial,
         time,
-        |_state, modifiers, keysym| {
+        |state, modifiers, keysym| {
+            state.super_pressed = modifiers.logo;
             if key_state != KeyState::Pressed {
                 return FilterResult::Forward;
             }
@@ -71,9 +78,24 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
                 return FilterResult::Intercept(KeyAction::SpawnTerminal);
             }
 
+            // Super + D -> Toggle native app launcher menu
+            if modifiers.logo && (raw_u32 == keysyms::KEY_d || raw_u32 == keysyms::KEY_D) {
+                return FilterResult::Intercept(KeyAction::ToggleLauncher);
+            }
+
             // Super + Q -> Close focused window
             if modifiers.logo && (raw_u32 == keysyms::KEY_q || raw_u32 == keysyms::KEY_Q) {
                 return FilterResult::Intercept(KeyAction::CloseFocused);
+            }
+
+            // Super + F -> Toggle fullscreen on focused window
+            if modifiers.logo && (raw_u32 == keysyms::KEY_f || raw_u32 == keysyms::KEY_F) {
+                return FilterResult::Intercept(KeyAction::ToggleFullscreen);
+            }
+
+            // Super + T -> Toggle automatic tiling / floating layout
+            if modifiers.logo && (raw_u32 == keysyms::KEY_t || raw_u32 == keysyms::KEY_T) {
+                return FilterResult::Intercept(KeyAction::ToggleTiling);
             }
 
             // Super + Tab or Alt + Tab -> Cycle focus
@@ -119,7 +141,12 @@ fn keysym_to_workspace(sym: u32) -> Option<usize> {
 fn execute_key_action(state: &mut OkayState, action: KeyAction) {
     match action {
         KeyAction::SpawnTerminal => spawn_terminal(&state.socket_name),
+        KeyAction::ToggleLauncher => {
+            state.panel.launcher_open = !state.panel.launcher_open;
+        }
         KeyAction::CloseFocused => state.close_focused_window(),
+        KeyAction::ToggleFullscreen => state.toggle_fullscreen_focused(),
+        KeyAction::ToggleTiling => state.toggle_tiling(),
         KeyAction::SwitchWorkspace(ws) => state.switch_workspace(ws),
         KeyAction::MoveToWorkspace(ws) => state.move_focused_to_workspace(ws),
         KeyAction::CycleFocus => state.cycle_focus(),
@@ -160,6 +187,42 @@ fn handle_pointer_motion_absolute<I: InputBackend>(
 
 fn move_pointer_to(state: &mut OkayState, pos: Point<f64, Logical>, time_msec: u32) {
     state.pointer_location = pos;
+
+    // Handle active window drag-to-move / drag-to-resize grab
+    if let Some(grab) = state.pointer_grab.clone() {
+        match grab {
+            PointerGrabMode::Move {
+                window,
+                initial_pointer,
+                initial_window_loc,
+            } => {
+                let dx = (pos.x - initial_pointer.x).round() as i32;
+                let dy = (pos.y - initial_pointer.y).round() as i32;
+                let new_loc = Point::from((initial_window_loc.x + dx, initial_window_loc.y + dy));
+                state.space.map_element(window, new_loc, false);
+                return;
+            }
+            PointerGrabMode::Resize {
+                window,
+                initial_pointer,
+                initial_size,
+            } => {
+                let dx = (pos.x - initial_pointer.x).round() as i32;
+                let dy = (pos.y - initial_pointer.y).round() as i32;
+                let new_w = (initial_size.w + dx).max(160);
+                let new_h = (initial_size.h + dy).max(100);
+                if let Some(toplevel) = window.toplevel() {
+                    toplevel.with_pending_state(|s| {
+                        s.states.set(xdg_toplevel::State::Resizing);
+                        s.size = Some(Size::from((new_w, new_h)));
+                    });
+                    toplevel.send_configure();
+                }
+                return;
+            }
+        }
+    }
+
     let under = state.surface_under(pos);
 
     if let Some(pointer) = state.seat.get_pointer() {
@@ -221,6 +284,38 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
         if button == 0x110 && crate::panel::handle_panel_click(state, pos) {
             return;
         }
+
+        // Super + Left Click (0x110) -> Drag-to-move window
+        // Super + Right Click (0x111) -> Drag-to-resize window
+        if state.super_pressed && (button == 0x110 || button == 0x111) {
+            if let Some(win) = state.window_under(pos) {
+                state.focus_window(&win);
+                if button == 0x110 {
+                    if let Some(win_loc) = state.space.element_location(&win) {
+                        state.pointer_grab = Some(PointerGrabMode::Move {
+                            window: win,
+                            initial_pointer: pos,
+                            initial_window_loc: win_loc,
+                        });
+                        return;
+                    }
+                } else {
+                    let initial_size = win.geometry().size;
+                    state.pointer_grab = Some(PointerGrabMode::Resize {
+                        window: win,
+                        initial_pointer: pos,
+                        initial_size,
+                    });
+                    return;
+                }
+            }
+        }
+
+        // Server-side titlebar click (buttons [-] [+] [X] or drag-to-move)
+        if button == 0x110 && state.handle_titlebar_click(pos) {
+            return;
+        }
+
         if let Some((surface, _)) = state.surface_under(pos) {
             let matching_window = state
                 .space
@@ -238,6 +333,18 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
             } else if let Some(keyboard) = state.seat.get_keyboard() {
                 keyboard.set_focus(state, Some(surface), serial);
             }
+        }
+    } else if btn_state == ButtonState::Released {
+        if let Some(grab) = state.pointer_grab.take() {
+            if let PointerGrabMode::Resize { window, .. } = grab {
+                if let Some(toplevel) = window.toplevel() {
+                    toplevel.with_pending_state(|s| {
+                        s.states.unset(xdg_toplevel::State::Resizing);
+                    });
+                    toplevel.send_configure();
+                }
+            }
+            return;
         }
     }
 

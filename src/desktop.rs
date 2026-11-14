@@ -71,6 +71,14 @@ impl DesktopState {
         }
     }
 
+    /// Reloads `~/.config/okay-de/wallpaper.png` and invalidates cached per-output buffers.
+    pub fn reload(&mut self) {
+        self.attempted_load = false;
+        self.wallpaper = None;
+        self.cached_buffers.clear();
+        tracing::info!("Reloaded desktop wallpaper configuration");
+    }
+
     /// Returns a cached `MemoryRenderBufferRenderElement` covering the given `output`.
     pub fn background_element(
         &mut self,

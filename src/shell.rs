@@ -122,8 +122,10 @@ impl XdgShellHandler for OkayState {
 
         surface.with_pending_state(|state| {
             state.states.set(xdg_toplevel::State::Activated);
+            state.decoration_mode = Some(zxdg_toplevel_decoration_v1::Mode::ServerSide);
         });
         surface.send_configure();
+        self.retile_workspace();
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
@@ -163,6 +165,7 @@ impl XdgShellHandler for OkayState {
             self.space.unmap_elem(&window);
         }
 
+        self.retile_workspace();
         self.refocus_topmost_visible();
     }
 
@@ -263,10 +266,10 @@ impl XdgDecorationHandler for OkayState {
     fn request_mode(
         &mut self,
         toplevel: ToplevelSurface,
-        mode: zxdg_toplevel_decoration_v1::Mode,
+        _mode: zxdg_toplevel_decoration_v1::Mode,
     ) {
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(mode);
+            state.decoration_mode = Some(zxdg_toplevel_decoration_v1::Mode::ServerSide);
         });
         toplevel.send_configure();
     }

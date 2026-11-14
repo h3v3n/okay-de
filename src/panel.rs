@@ -30,7 +30,7 @@ pub enum LauncherItem {
     Terminal,
     FileManager,
     Browser,
-    Settings,
+    ReloadConfig,
     ExitSession,
 }
 
@@ -39,7 +39,7 @@ impl LauncherItem {
         Self::Terminal,
         Self::FileManager,
         Self::Browser,
-        Self::Settings,
+        Self::ReloadConfig,
         Self::ExitSession,
     ];
 
@@ -48,7 +48,7 @@ impl LauncherItem {
             Self::Terminal => "Terminal",
             Self::FileManager => "File Manager",
             Self::Browser => "Browser",
-            Self::Settings => "Settings",
+            Self::ReloadConfig => "Reload Config",
             Self::ExitSession => "Exit Session",
         }
     }
@@ -57,6 +57,7 @@ impl LauncherItem {
 #[derive(Debug, Clone)]
 enum ClickTarget {
     ToggleLauncher,
+    ToggleTiling,
     Workspace(usize),
     FocusWindow(usize),
     LaunchItem(LauncherItem),
@@ -115,8 +116,9 @@ fn execute_launcher_item(state: &mut OkayState, item: LauncherItem) {
             &state.socket_name,
             "browser",
         ),
-        LauncherItem::Settings => {
-            tracing::info!("Settings launcher clicked (native settings UI coming soon)");
+        LauncherItem::ReloadConfig => {
+            state.desktop.reload();
+            state.retile_workspace();
         }
         LauncherItem::ExitSession => {
             tracing::info!("Exit Session selected from taskbar menu");
@@ -150,20 +152,30 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
             ClickTarget::ToggleLauncher => {
                 state.panel.launcher_open = !state.panel.launcher_open;
             }
+            ClickTarget::ToggleTiling => {
+                state.panel.launcher_open = false;
+                state.toggle_tiling();
+            }
             ClickTarget::Workspace(ws) => {
                 state.panel.launcher_open = false;
                 state.switch_workspace(ws);
             }
             ClickTarget::FocusWindow(win_idx) => {
                 state.panel.launcher_open = false;
-                let visible: Vec<Window> = state
+                let ws_windows: Vec<Window> = state
                     .space
                     .elements()
-                    .filter(|w| state.workspaces.is_visible(w))
+                    .filter(|w| state.workspaces.is_on_active_workspace(w))
                     .cloned()
                     .collect();
-                if let Some(win) = visible.get(win_idx) {
-                    state.focus_window(win);
+                if let Some(win) = ws_windows.get(win_idx) {
+                    let is_focused = state.focused_window().as_ref() == Some(win);
+                    let is_min = state.workspaces.is_minimized(win);
+                    if is_min || is_focused {
+                        state.toggle_minimize_window(win);
+                    } else {
+                        state.focus_window(win);
+                    }
                 }
             }
             ClickTarget::LaunchItem(item) => {
@@ -219,17 +231,18 @@ pub fn render_panel_elements(
         .and_then(|k| k.current_focus())
         .map(|s| s.id());
 
-    let visible_windows: Vec<(String, bool)> = state
+    let ws_windows: Vec<(String, bool, bool)> = state
         .space
         .elements()
-        .filter(|w| state.workspaces.is_visible(w))
+        .filter(|w| state.workspaces.is_on_active_workspace(w))
         .map(|w| {
-            let is_focused = w
-                .toplevel()
-                .map(|t| Some(t.wl_surface().id()) == focused_id)
-                .unwrap_or(false);
+            let is_min = state.workspaces.is_minimized(w);
+            let is_focused = !is_min
+                && w.toplevel()
+                    .map(|t| Some(t.wl_surface().id()) == focused_id)
+                    .unwrap_or(false);
             let title = window_title(w);
-            (title, is_focused)
+            (title, is_focused, is_min)
         })
         .collect();
 
@@ -310,27 +323,58 @@ pub fn render_panel_elements(
 
     cursor_x += 8;
 
-    // Live system clock on the right
+    // System status indicator (layout mode + window count) & live system clock on the right
     let clock_str = current_hh_mm();
     let clock_w = 72;
     let clock_x = (bar_w - clock_w - 8).max(cursor_x);
     canvas.fill_rect(clock_x, 6, clock_w, bar_h - 12, [34, 34, 50, 230]);
     canvas.draw_text(clock_x + 11, 13, &clock_str, 2, [230, 232, 245, 255]);
 
-    // Open window task buttons
-    let avail_w = (clock_x - cursor_x - 8).max(0);
-    if !visible_windows.is_empty() && avail_w > 40 {
+    let mode_label = if state.workspaces.tiling_enabled {
+        "TILE"
+    } else {
+        "FLT"
+    };
+    let status_w = 58;
+    let status_x = (clock_x - status_w - 6).max(cursor_x);
+    if status_x + status_w <= clock_x - 4 {
+        let status_bg = if state.workspaces.tiling_enabled {
+            [56, 46, 78, 240]
+        } else {
+            [34, 34, 50, 230]
+        };
+        canvas.fill_rect(status_x, 6, status_w, bar_h - 12, status_bg);
+        canvas.draw_text(status_x + 8, 13, mode_label, 2, [201, 160, 220, 255]);
+        state.panel.hit_regions.push((
+            Rectangle::new(
+                (output_geo.loc.x + status_x, output_geo.loc.y + bar_y_local + 6).into(),
+                (status_w, bar_h - 12).into(),
+            ),
+            ClickTarget::ToggleTiling,
+        ));
+    }
+
+    // Open window task buttons (click to focus/minimize/raise)
+    let avail_w = (status_x - cursor_x - 8).max(0);
+    if !ws_windows.is_empty() && avail_w > 40 {
         let max_btn_w = 170;
-        let btn_w = ((avail_w / visible_windows.len() as i32) - 6).clamp(48, max_btn_w);
-        for (idx, (title, is_focused)) in visible_windows.iter().enumerate() {
+        let btn_w = ((avail_w / ws_windows.len() as i32) - 6).clamp(48, max_btn_w);
+        for (idx, (title, is_focused, is_min)) in ws_windows.iter().enumerate() {
             let bx = cursor_x + idx as i32 * (btn_w + 6);
-            if bx + btn_w > clock_x - 4 {
+            if bx + btn_w > status_x - 4 {
                 break;
             }
             let bg = if *is_focused {
                 [56, 50, 78, 255]
+            } else if *is_min {
+                [24, 24, 34, 200]
             } else {
                 [32, 32, 46, 230]
+            };
+            let fg = if *is_min {
+                [140, 142, 165, 255]
+            } else {
+                [235, 235, 248, 255]
             };
             canvas.fill_rect(bx, 6, btn_w, bar_h - 12, bg);
             if *is_focused {
@@ -338,7 +382,7 @@ pub fn render_panel_elements(
             }
             let max_chars = ((btn_w - 16) / 12).max(1) as usize;
             let short: String = title.chars().take(max_chars).collect();
-            canvas.draw_text(bx + 8, 13, &short, 2, [235, 235, 248, 255]);
+            canvas.draw_text(bx + 8, 13, &short, 2, fg);
 
             state.panel.hit_regions.push((
                 Rectangle::new(
@@ -446,6 +490,84 @@ pub fn render_panel_elements(
     }
 
     elements
+}
+
+/// Renders a server-side titlebar (with title text and `[-]`, `[+]`, `[X]` buttons)
+/// directly above `window` at output-local coordinates.
+pub fn render_titlebar_element(
+    window: &Window,
+    local_win_loc: Point<i32, Logical>,
+    is_focused: bool,
+    renderer: &mut GlesRenderer,
+    scale: Scale<f64>,
+) -> Option<OkayRenderElements<GlesRenderer>> {
+    let win_geo = window.geometry();
+    let tb_w = win_geo.size.w.max(120);
+    let tb_h = crate::state::TITLEBAR_HEIGHT;
+    let tb_x = local_win_loc.x + win_geo.loc.x;
+    let tb_y = local_win_loc.y + win_geo.loc.y - tb_h;
+
+    let mut canvas = Canvas::new(tb_w, tb_h);
+    let bg = if is_focused {
+        [34, 30, 50, 250]
+    } else {
+        [24, 24, 36, 240]
+    };
+    let top_accent = if is_focused {
+        [201, 160, 220, 255]
+    } else {
+        [60, 60, 82, 255]
+    };
+    canvas.fill_rect(0, 0, tb_w, tb_h, bg);
+    canvas.fill_rect(0, 0, tb_w, 2, top_accent);
+
+    let title = window_title(window);
+    let max_chars = ((tb_w - 96) / 6).max(1) as usize;
+    let short_title: String = title.chars().take(max_chars).collect();
+    let title_fg = if is_focused {
+        [238, 238, 250, 255]
+    } else {
+        [165, 168, 190, 255]
+    };
+    canvas.draw_text(10, 9, &short_title, 1, title_fg);
+
+    // Minimize button [-]: [tb_w - 80 .. tb_w - 58]
+    if tb_w >= 120 {
+        canvas.fill_rect(tb_w - 80, 4, 22, tb_h - 8, [48, 48, 68, 255]);
+        canvas.draw_text(tb_w - 71, 9, "-", 1, [225, 228, 245, 255]);
+
+        // Maximize button [+]: [tb_w - 54 .. tb_w - 32]
+        canvas.fill_rect(tb_w - 54, 4, 22, tb_h - 8, [48, 48, 68, 255]);
+        canvas.draw_text(tb_w - 45, 9, "+", 1, [225, 228, 245, 255]);
+
+        // Close button [X]: [tb_w - 28 .. tb_w - 6]
+        canvas.fill_rect(tb_w - 28, 4, 22, tb_h - 8, [185, 65, 90, 255]);
+        canvas.draw_text(tb_w - 19, 9, "X", 1, [255, 245, 248, 255]);
+    }
+
+    let buf = MemoryRenderBuffer::from_slice(
+        &canvas.pixels,
+        Fourcc::Abgr8888,
+        (tb_w, tb_h),
+        1,
+        Transform::Normal,
+        None,
+    );
+    let phys_loc: Point<f64, Physical> = Point::<i32, Logical>::from((tb_x, tb_y))
+        .to_f64()
+        .to_physical(scale);
+
+    MemoryRenderBufferRenderElement::from_buffer(
+        renderer,
+        phys_loc,
+        &buf,
+        None,
+        None,
+        Some((tb_w, tb_h).into()),
+        Kind::Unspecified,
+    )
+    .ok()
+    .map(OkayRenderElements::Memory)
 }
 
 fn window_title(window: &Window) -> String {
@@ -605,6 +727,7 @@ fn glyph_5x7(ch: char) -> [u8; 7] {
         '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
         '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110],
         ':' => [0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000],
+        '+' => [0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000],
         '-' => [0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000],
         '_' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b11111],
         '.' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100],

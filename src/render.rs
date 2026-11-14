@@ -110,36 +110,53 @@ pub fn collect_output_elements(
             window.render_elements(renderer, phys_loc, scale, 1.0);
         elements.extend(win_elements);
 
-        // Server-side border decoration around the window geometry
-        let is_focused = window
-            .toplevel()
-            .map(|t| Some(t.wl_surface().id()) == focused_id)
-            .unwrap_or(false);
+        // Server-side titlebar & border decoration around non-fullscreen windows
+        if !state.workspaces.is_fullscreen(window) {
+            let is_focused = window
+                .toplevel()
+                .map(|t| Some(t.wl_surface().id()) == focused_id)
+                .unwrap_or(false);
 
-        let border_color = if is_focused {
-            state.theme.active_border_color
-        } else {
-            state.theme.inactive_border_color
-        };
+            if let Some(tb_elem) = crate::panel::render_titlebar_element(
+                window,
+                local_loc,
+                is_focused,
+                renderer,
+                scale,
+            ) {
+                elements.push(tb_elem);
+            }
 
-        let win_geo = window.geometry();
-        let border_geo = Rectangle::new(
-            local_loc + win_geo.loc - Point::from((state.theme.border_width, state.theme.border_width)),
-            win_geo.size
-                + (
-                    state.theme.border_width * 2,
-                    state.theme.border_width * 2,
+            let border_color = if is_focused {
+                state.theme.active_border_color
+            } else {
+                state.theme.inactive_border_color
+            };
+
+            let win_geo = window.geometry();
+            let tb_h = crate::state::TITLEBAR_HEIGHT;
+            let border_geo = Rectangle::new(
+                local_loc
+                    + win_geo.loc
+                    - Point::from((
+                        state.theme.border_width,
+                        state.theme.border_width + tb_h,
+                    )),
+                (
+                    win_geo.size.w.max(120) + state.theme.border_width * 2,
+                    win_geo.size.h + tb_h + state.theme.border_width * 2,
                 )
                     .into(),
-        );
+            );
 
-        let border_elems = build_border_elements(
-            border_geo,
-            state.theme.border_width,
-            Color32F::from(border_color),
-            scale,
-        );
-        elements.extend(border_elems);
+            let border_elems = build_border_elements(
+                border_geo,
+                state.theme.border_width,
+                Color32F::from(border_color),
+                scale,
+            );
+            elements.extend(border_elems);
+        }
     }
 
     // 4. Bottom and Background layer-shell surfaces (external wallpapers, desktop widgets)

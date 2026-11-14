@@ -108,7 +108,6 @@ fn init_wayland_loop() -> Result<
 
     let socket = ListeningSocketSource::new_auto()?;
     let socket_name = socket.socket_name().to_os_string();
-    std::env::set_var("WAYLAND_DISPLAY", &socket_name);
     tracing::info!(?socket_name, "Listening on Wayland socket");
 
     event_loop
@@ -132,9 +131,11 @@ fn init_wayland_loop() -> Result<
 // ============================================================================
 
 fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
-    let (mut event_loop, mut display, mut state) = init_wayland_loop()?;
-
+    // Initialize Winit BEFORE overriding WAYLAND_DISPLAY so it connects to the host compositor.
     let (mut backend, winit_evt_loop) = winit::init::<GlesRenderer>()?;
+
+    let (mut event_loop, mut display, mut state) = init_wayland_loop()?;
+    std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
     let size = backend.window_size();
     let mode = OutputMode {
@@ -162,6 +163,24 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
     state.space.map_output(&output, (0, 0));
 
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
+
+    // Render and submit the initial frame immediately so the nested Wayland window maps.
+    {
+        let age = backend.buffer_age().unwrap_or(0);
+        let (renderer, mut framebuffer) = backend.bind()?;
+        let _ = render_output(
+            &mut state,
+            renderer,
+            &mut framebuffer,
+            &mut damage_tracker,
+            &output,
+            age,
+        );
+    }
+    if let Err(err) = backend.submit(None) {
+        tracing::warn!(?err, "Initial Winit submit failed");
+    }
+    backend.window().request_redraw();
 
     event_loop
         .handle()
@@ -234,6 +253,8 @@ type OkayDrmCompositor = DrmCompositor<
 struct DrmOutputState {
     output: Output,
     compositor: OkayDrmCompositor,
+    #[allow(dead_code)]
+    damage_tracker: OutputDamageTracker,
 }
 
 struct DrmBackendData {
@@ -255,6 +276,7 @@ struct DrmDeviceData {
 
 fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
     let (mut event_loop, mut display, mut state) = init_wayland_loop()?;
+    std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
     let (session, notifier) = LibSeatSession::new()?;
     let seat_name = session.seat();
@@ -480,7 +502,15 @@ fn on_drm_device_added(
             Some(gbm.clone()),
         )?;
 
-        outputs.insert(crtc_handle, DrmOutputState { output, compositor });
+        let damage_tracker = OutputDamageTracker::from_output(&output);
+        outputs.insert(
+            crtc_handle,
+            DrmOutputState {
+                output,
+                compositor,
+                damage_tracker,
+            },
+        );
         tracing::info!(
             output = %output_name,
             ?crtc_handle,
