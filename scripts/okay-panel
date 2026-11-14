@@ -224,6 +224,7 @@ StartMenuPopover = None
 
 try:
     from panel.animations import (
+        configure_animations,
         apply_animation_class,
         prepare_fade_in,
         start_fade_in,
@@ -243,7 +244,9 @@ except Exception:
             fade_widget,
             stop_fade,
         )
+        def configure_animations(reduce_motion=False, speed_multiplier=1.0): pass
     except Exception:
+        def configure_animations(reduce_motion=False, speed_multiplier=1.0): pass
         def apply_animation_class(widget, enabled=True): pass
         def prepare_fade_in(window, enabled=True): pass
         def start_fade_in(window, enabled=True, duration_ms=144, interval_ms=16): pass
@@ -965,6 +968,92 @@ button.start-power-btn:hover {
     color: #f38ba8;
 }
 
+/* Przełącznik obszarów roboczych (Workspaces) */
+button.ws-btn {
+    background-color: rgba(49, 50, 68, 0.45);
+    color: #a6adc8;
+    border-radius: 7px;
+    padding: 0 7px;
+    margin: 5px 1px;
+    min-width: 22px;
+    min-height: 24px;
+    font-size: 10px;
+    font-weight: bold;
+    transition: all 140ms ease-out;
+}
+
+button.ws-btn:hover {
+    background-color: rgba(__ACCENT_RGB__, 0.22);
+    color: #ffffff;
+}
+
+button.ws-btn.ws-active {
+    background-color: __ACCENT__;
+    color: __ACCENT_CONTRAST__;
+    box-shadow: 0 0 8px rgba(__ACCENT_RGB__, 0.45);
+}
+
+/* Wskaźnik obciążenia CPU / RAM */
+.sysload-item {
+    font-size: 10px;
+    color: #bac2de;
+    padding: 0 6px;
+}
+
+/* Kalendarz Popover */
+window#okay-calendar-popover {
+    background-color: __POP_BG__;
+    color: __TEXT_FG__;
+}
+
+window#okay-calendar-popover calendar {
+    background-color: rgba(__SURFACE_RGB__, 0.96);
+    color: __TEXT_FG__;
+    border: 1px solid rgba(__ACCENT_RGB__, 0.28);
+    border-radius: 6px;
+    padding: 6px;
+    font-size: 11px;
+}
+
+window#okay-calendar-popover calendar:selected {
+    background-color: __ACCENT__;
+    color: __ACCENT_CONTRAST__;
+    font-weight: bold;
+    border-radius: 4px;
+}
+
+/* Nadpisania dla jasnego motywu (Light Theme) */
+window#okay-panel.light-theme,
+window#okay-panel.light-theme button,
+window#okay-panel.light-theme .status-item,
+window#okay-panel.light-theme .tray-item,
+window#okay-panel.light-theme #clock-button,
+window#okay-panel.light-theme .sysload-item {
+    color: __TEXT_FG__;
+}
+
+window#okay-panel.light-theme .task-item {
+    color: __TEXT_FG__;
+}
+
+window#okay-panel.light-theme .task-item:hover,
+window#okay-panel.light-theme .status-item:hover,
+window#okay-panel.light-theme .tray-item:hover,
+window#okay-panel.light-theme #clock-button:hover {
+    background-color: rgba(__ACCENT_RGB__, 0.14);
+    color: __TEXT_FG__;
+}
+
+window#okay-panel.light-theme button.ws-btn {
+    background-color: rgba(__ACCENT_RGB__, 0.10);
+    color: __TEXT_FG__;
+}
+
+window#okay-panel.light-theme button.ws-btn.ws-active {
+    background-color: __ACCENT__;
+    color: __ACCENT_CONTRAST__;
+}
+
 .no-animations,
 .no-animations *,
 window.no-animations button,
@@ -974,6 +1063,7 @@ window.no-animations .tray-item,
 window.no-animations #start-button,
 window.no-animations #clock-button,
 window.no-animations #desktop-button,
+window.no-animations button.ws-btn,
 window.no-animations .qs-list row,
 window.no-animations .start-app-list row,
 window.no-animations button.start-pinned-btn,
@@ -985,14 +1075,21 @@ menu.no-animations menuitem {
 """
 
 
-def generate_panel_css(accent_hex: str = DEFAULT_ACCENT_COLOR) -> str:
+def generate_panel_css(accent_hex: str = DEFAULT_ACCENT_COLOR, theme_mode: str = "dark") -> str:
     clean = sanitize_hex_color(accent_hex)
     r, g, b = parse_hex_rgb(clean)
     hover = compute_hover_hex(clean)
     contrast = compute_contrast_text(clean)
-    surface_tint = blend_hex_color("#181825", clean, 0.07)
+    is_light = (str(theme_mode).strip().lower() == "light")
+    if is_light:
+        surface_tint = blend_hex_color("#eff1f5", clean, 0.06)
+        pop_tint = blend_hex_color("#e6e9ef", clean, 0.05)
+        text_fg = "#4c4f69"
+    else:
+        surface_tint = blend_hex_color("#181825", clean, 0.07)
+        pop_tint = blend_hex_color("#1e1e2e", clean, 0.06)
+        text_fg = "#cdd6f4"
     sr, sg, sb = parse_hex_rgb(surface_tint)
-    pop_tint = blend_hex_color("#1e1e2e", clean, 0.06)
     return (
         PANEL_CSS_TEMPLATE
         .replace("__ACCENT__", clean)
@@ -1001,6 +1098,7 @@ def generate_panel_css(accent_hex: str = DEFAULT_ACCENT_COLOR) -> str:
         .replace("__ACCENT_CONTRAST__", contrast)
         .replace("__SURFACE_RGB__", f"{sr}, {sg}, {sb}")
         .replace("__POP_BG__", pop_tint)
+        .replace("__TEXT_FG__", text_fg)
     )
 
 
@@ -1032,14 +1130,28 @@ class PanelConfigManager:
     )
 
     DEFAULT_CONFIG = {
+        "schema_version": 2,
         "icon_only": True,
         "show_labels": False,
         "position": "bottom",
         "mode": "panel",
+        "theme_mode": "dark",
         "animations": True,
+        "reduce_motion": False,
+        "animation_speed": 1.0,
+        "open_effect": "zoom",
+        "minimize_effect": "zoom",
+        "blur_enabled": True,
+        "wobbly_enabled": False,
+        "window_opacity": 1.0,
+        "focus_mode": False,
+        "idle_timeout": 300,
+        "workspace_count": 4,
+        "show_sysload": True,
+        "show_workspaces": True,
         "accent_color": DEFAULT_ACCENT_COLOR,
         "window_buttons_style": "rectangles",
-        "window_corner_radius": 0,
+        "window_corner_radius": 10,
         "pinned_apps": [
             {
                 "app_id": "foot",
@@ -1063,10 +1175,95 @@ class PanelConfigManager:
     }
 
     @classmethod
+    def _normalize_pins(cls, raw_pins) -> list:
+        if not isinstance(raw_pins, list):
+            return copy.deepcopy(cls.DEFAULT_CONFIG["pinned_apps"])
+        normalized = []
+        for entry in raw_pins:
+            if isinstance(entry, dict):
+                app_id = str(entry.get("app_id", "")).strip()
+                if not app_id:
+                    continue
+                normalized.append({
+                    "app_id": app_id,
+                    "name": str(entry.get("name", app_id)),
+                    "cmd": str(entry.get("cmd", app_id)),
+                    "icon": str(entry.get("icon", "application-x-executable")),
+                })
+            elif isinstance(entry, str) and entry.strip():
+                base = entry.strip()
+                if base.endswith(".desktop"):
+                    base = base[:-8]
+                meta = AppHelper.get_app_metadata(base)
+                normalized.append({
+                    "app_id": base,
+                    "name": meta.get("name", base),
+                    "cmd": meta.get("cmd", base),
+                    "icon": AppHelper.get_icon_name(base, meta.get("icon", "")),
+                })
+        return normalized if normalized else copy.deepcopy(cls.DEFAULT_CONFIG["pinned_apps"])
+
+    @classmethod
+    def _normalize_dict(cls, data: dict) -> dict:
+        if not isinstance(data, dict):
+            return copy.deepcopy(cls.DEFAULT_CONFIG)
+        out = copy.deepcopy(cls.DEFAULT_CONFIG)
+        out.update(data)
+
+        if "show_labels" in data:
+            show_labels = bool(data["show_labels"])
+        elif "icon_only" in data:
+            show_labels = not bool(data["icon_only"])
+        else:
+            show_labels = False
+        out["show_labels"] = show_labels
+        out["icon_only"] = not show_labels
+
+        pos = str(out.get("position", "bottom")).lower()
+        out["position"] = "top" if pos == "top" else "bottom"
+        mode = str(out.get("mode", "panel")).lower()
+        out["mode"] = "dock" if mode == "dock" else "panel"
+        tmode = str(out.get("theme_mode", "dark")).lower()
+        out["theme_mode"] = "light" if tmode == "light" else "dark"
+
+        reduce_motion = bool(out.get("reduce_motion", False))
+        animations = bool(out.get("animations", True))
+        if reduce_motion:
+            animations = False
+        elif not animations and "reduce_motion" not in data:
+            reduce_motion = True
+        out["reduce_motion"] = reduce_motion
+        out["animations"] = animations
+
+        try:
+            speed = float(out.get("animation_speed", 1.0))
+            out["animation_speed"] = round(max(0.5, min(2.0, speed)), 2)
+        except Exception:
+            out["animation_speed"] = 1.0
+
+        raw_accent = str(out.get("accent_color", DEFAULT_ACCENT_COLOR)).strip()
+        out["accent_color"] = sanitize_hex_color(raw_accent, DEFAULT_ACCENT_COLOR)
+        btn_style = str(out.get("window_buttons_style", "rectangles")).lower()
+        out["window_buttons_style"] = btn_style if btn_style in ("rectangles", "circles_left", "circles_right", "windows") else "rectangles"
+        try:
+            radius = int(out.get("window_corner_radius", 10))
+            out["window_corner_radius"] = radius if 0 <= radius <= 32 else 10
+        except Exception:
+            out["window_corner_radius"] = 10
+        try:
+            ws_cnt = int(out.get("workspace_count", 4))
+            out["workspace_count"] = max(1, min(9, ws_cnt))
+        except Exception:
+            out["workspace_count"] = 4
+        out["show_sysload"] = bool(out.get("show_sysload", True))
+        out["show_workspaces"] = bool(out.get("show_workspaces", True))
+        out["pinned_apps"] = cls._normalize_pins(out.get("pinned_apps"))
+        return out
+
+    @classmethod
     def load(cls) -> dict:
         os.makedirs(cls.CONFIG_DIR, exist_ok=True)
         if not os.path.exists(cls.CONFIG_FILE):
-            # Skopiuj domyślną konfigurację z szablonu systemowego (read-only) lub migruj starszy plik
             initial = copy.deepcopy(cls.DEFAULT_CONFIG)
             sys_tmpl = next((p for p in cls.SYSTEM_CONFIG_FILES if p and os.path.isfile(p)), "")
             if sys_tmpl:
@@ -1095,68 +1292,26 @@ class PanelConfigManager:
                         initial["pinned_apps"] = migrated
                 except Exception:
                     pass
+            initial = cls._normalize_dict(initial)
             cls.save(initial)
             return initial
 
         try:
             with open(cls.CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if not isinstance(data, dict):
-                return copy.deepcopy(cls.DEFAULT_CONFIG)
-            # Synchronizacja obu flag: show_labels vs icon_only
-            if "show_labels" in data:
-                show_labels = bool(data["show_labels"])
-            elif "icon_only" in data:
-                show_labels = not bool(data["icon_only"])
-            else:
-                show_labels = False
-
-            data["show_labels"] = show_labels
-            data["icon_only"] = not show_labels
-            pos = str(data.get("position", "bottom")).lower()
-            data["position"] = "top" if pos == "top" else "bottom"
-            mode = str(data.get("mode", "panel")).lower()
-            data["mode"] = "dock" if mode == "dock" else "panel"
-            data["animations"] = bool(data.get("animations", True))
-            raw_accent = str(data.get("accent_color", DEFAULT_ACCENT_COLOR)).strip()
-            data["accent_color"] = sanitize_hex_color(raw_accent, DEFAULT_ACCENT_COLOR)
-            btn_style = str(data.get("window_buttons_style", "rectangles")).lower()
-            data["window_buttons_style"] = btn_style if btn_style in ("rectangles", "circles_left", "circles_right", "windows") else "rectangles"
-            try:
-                radius = int(data.get("window_corner_radius", 0))
-                data["window_corner_radius"] = radius if 0 <= radius <= 32 else 0
-            except Exception:
-                data["window_corner_radius"] = 0
-            if "pinned_apps" not in data or not isinstance(data["pinned_apps"], list):
-                data["pinned_apps"] = copy.deepcopy(cls.DEFAULT_CONFIG["pinned_apps"])
-            return data
+            return cls._normalize_dict(data)
         except Exception:
             return copy.deepcopy(cls.DEFAULT_CONFIG)
 
     @classmethod
     def save(cls, data: dict):
         os.makedirs(cls.CONFIG_DIR, exist_ok=True)
-        show_labels = bool(data.get("show_labels", not data.get("icon_only", True)))
-        data["show_labels"] = show_labels
-        data["icon_only"] = not show_labels
-        pos = str(data.get("position", "bottom")).lower()
-        data["position"] = "top" if pos == "top" else "bottom"
-        mode = str(data.get("mode", "panel")).lower()
-        data["mode"] = "dock" if mode == "dock" else "panel"
-        data["animations"] = bool(data.get("animations", True))
-        raw_accent = str(data.get("accent_color", DEFAULT_ACCENT_COLOR)).strip()
-        data["accent_color"] = sanitize_hex_color(raw_accent, DEFAULT_ACCENT_COLOR)
-        btn_style = str(data.get("window_buttons_style", "rectangles")).lower()
-        data["window_buttons_style"] = btn_style if btn_style in ("rectangles", "circles_left", "circles_right", "windows") else "rectangles"
-        try:
-            radius = int(data.get("window_corner_radius", 0))
-            data["window_corner_radius"] = radius if 0 <= radius <= 32 else 0
-        except Exception:
-            data["window_corner_radius"] = 0
+        norm = cls._normalize_dict(data)
+        data.update(norm)
         fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", dir=cls.CONFIG_DIR)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+                json.dump(norm, f, indent=2, ensure_ascii=False)
                 f.write("\n")
                 f.flush()
                 try:
@@ -2335,6 +2490,132 @@ class WindowManager:
 
 
 # ============================================================================
+# Popover Kalendarza i Daty (Layer-Shell)
+# ============================================================================
+
+class CalendarPopover(Gtk.Window):
+    def __init__(self, get_panel_pos_cb, on_open_notifications_cb=None, animations_enabled_cb=None):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.get_panel_pos_cb = get_panel_pos_cb
+        self.on_open_notifications_cb = on_open_notifications_cb
+        self.animations_enabled_cb = animations_enabled_cb
+
+        self.set_name("okay-calendar-popover")
+        self.set_title("okay-calendar-popover")
+        self.set_decorated(False)
+        self.set_resizable(False)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_default_size(310, -1)
+
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.TOP)
+        GtkLayerShell.set_namespace(self, "okay-calendar")
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.ON_DEMAND)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.RIGHT, True)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.RIGHT, 10)
+
+        self.connect("key-press-event", self._on_key_press)
+        self.connect("focus-out-event", self._on_focus_out)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        card.get_style_context().add_class("popover-card")
+        self.add(card)
+
+        hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.lbl_date = Gtk.Label(label="")
+        self.lbl_date.get_style_context().add_class("popover-title")
+        self.lbl_date.set_xalign(0)
+        hdr.pack_start(self.lbl_date, True, True, 0)
+
+        btn_today = Gtk.Button(label="Dziś")
+        btn_today.get_style_context().add_class("qs-mini-btn")
+        btn_today.connect("clicked", self._on_today_clicked)
+        hdr.pack_end(btn_today, False, False, 0)
+        card.pack_start(hdr, False, False, 0)
+
+        self.calendar = Gtk.Calendar()
+        card.pack_start(self.calendar, False, False, 0)
+
+        btn_qs = Gtk.Button(label="Szybkie ustawienia i Powiadomienia")
+        btn_qs.get_style_context().add_class("qs-accent-btn")
+        btn_qs.connect("clicked", self._on_open_qs)
+        card.pack_start(btn_qs, False, False, 2)
+
+    def _is_anim_enabled(self) -> bool:
+        if callable(self.animations_enabled_cb):
+            try:
+                return bool(self.animations_enabled_cb())
+            except Exception:
+                pass
+        return True
+
+    def _sync_today(self):
+        now = datetime.now()
+        self.lbl_date.set_text(now.strftime("%A, %d.%m.%Y"))
+        self.calendar.select_month(now.month - 1, now.year)
+        self.calendar.select_day(now.day)
+
+    def _on_today_clicked(self, _btn):
+        self._sync_today()
+
+    def _on_open_qs(self, _btn):
+        self.hide_popover()
+        if callable(self.on_open_notifications_cb):
+            GLib.idle_add(lambda: (self.on_open_notifications_cb(), False)[1])
+
+    def _update_position(self):
+        pos = "bottom"
+        if callable(self.get_panel_pos_cb):
+            try:
+                pos = self.get_panel_pos_cb()
+            except Exception:
+                pos = "bottom"
+        is_top = (pos == "top")
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.TOP, is_top)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, not is_top)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.TOP, 48 if is_top else 0)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.BOTTOM, 48 if not is_top else 0)
+
+    def toggle(self):
+        if self.get_visible():
+            self.hide_popover()
+        else:
+            self.show_popover()
+
+    def show_popover(self):
+        stop_fade(self, reset_opacity=False)
+        anim = self._is_anim_enabled()
+        apply_animation_class(self, anim)
+        self._update_position()
+        self._sync_today()
+        prepare_fade_in(self, anim)
+        self.show_all()
+        self.present()
+        start_fade_in(self, anim)
+
+    def hide_popover(self):
+        if not self.get_visible():
+            return
+        fade_out_and_hide(self, self._is_anim_enabled())
+
+    def _on_key_press(self, _widget, event):
+        if event.keyval == Gdk.KEY_Escape:
+            self.hide_popover()
+            return True
+        return False
+
+    def _on_focus_out(self, *_args):
+        GLib.timeout_add(120, self._check_focus_close)
+        return False
+
+    def _check_focus_close(self):
+        if self.get_visible() and not self.is_active():
+            self.hide_popover()
+        return False
+
+
+# ============================================================================
 # Główne okno paska zadań OKay Panel
 # ============================================================================
 
@@ -2375,11 +2656,16 @@ class OkayPanel(Gtk.Window):
         self.main_box.get_style_context().add_class("panel-surface")
         self.add(self.main_box)
 
-        # Lewa strona: Przycisk Start ("OK") + zunifikowana sekcja zadań ze stackowaniem
+        # Lewa strona: Przycisk Start ("OK") + Przełącznik obszarów roboczych + Sekcja zadań
         self.left_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.main_box.pack_start(self.left_box, False, False, 0)
 
         self._build_start_button()
+
+        self.ws_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=1)
+        self.ws_box.add_events(Gdk.EventMask.SCROLL_MASK)
+        self.ws_box.connect("scroll-event", self._on_workspace_scroll)
+        self.left_box.pack_start(self.ws_box, False, False, 2)
 
         self.tasks_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self.left_box.pack_start(self.tasks_box, False, False, 0)
@@ -2394,7 +2680,7 @@ class OkayPanel(Gtk.Window):
         self.dock_sep.set_no_show_all(True)
         self.main_box.pack_start(self.dock_sep, False, False, 0)
 
-        # Prawa strona: Tray (SNI), Sieć, Bateria, Głośność, Zegar, Pokaż pulpit
+        # Prawa strona: Tray (SNI), CPU/RAM, Sieć, Bateria, Głośność, Zegar, Pokaż pulpit
         self.right_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self.main_box.pack_end(self.right_box, False, False, 0)
 
@@ -2406,19 +2692,26 @@ class OkayPanel(Gtk.Window):
         self._last_struct_key = None
         self._last_state_key = None
         self._task_buttons = []
+        self._ws_buttons = []
+        self._active_ws = 1
+        self._last_ws_config = (0, False)
         self._last_clock_str = ""
         self._last_bat_state = ("init",)
         self._last_bat_check = 0.0
+        self._cpu_prev_total = 0
+        self._cpu_prev_idle = 0
         self._last_vol_data = None
         self._vol_wake = threading.Event()
         self._quick_settings = None
+        self._calendar_popover = None
         self._start_menu = None
         self._preview_popup = None
-        self._last_applied_accent = None
+        self._last_applied_theme_key = None
         self._wl_surface_ptr = 0
         self._rect_sync_queued = False
 
         self._build_right_section()
+        self._rebuild_workspaces()
         self._apply_theme_colors()
         self._apply_layout_mode()
         self._apply_animations()
@@ -2534,18 +2827,102 @@ class OkayPanel(Gtk.Window):
         return "dock" if str(self.panel_config.get("mode", "panel")).lower() == "dock" else "panel"
 
     def _animations_enabled(self) -> bool:
+        if bool(self.panel_config.get("reduce_motion", False)):
+            return False
         return bool(self.panel_config.get("animations", True))
 
     def _apply_theme_colors(self):
         accent = sanitize_hex_color(self.panel_config.get("accent_color", DEFAULT_ACCENT_COLOR))
-        if accent == self._last_applied_accent:
+        theme_mode = "light" if str(self.panel_config.get("theme_mode", "dark")).lower() == "light" else "dark"
+        theme_key = (accent, theme_mode)
+        if theme_key == self._last_applied_theme_key:
             return
-        self._last_applied_accent = accent
-        css = generate_panel_css(accent)
+        self._last_applied_theme_key = theme_key
+        ctx = self.get_style_context()
+        if theme_mode == "light":
+            ctx.add_class("light-theme")
+        else:
+            ctx.remove_class("light-theme")
+        css = generate_panel_css(accent, theme_mode)
         try:
             self.css_provider.load_from_data(css.encode("utf-8"))
         except Exception as exc:
             print(f"[okay-panel] Błąd ładowania CSS motywu: {exc}", file=sys.stderr)
+
+    def _rebuild_workspaces(self):
+        show_ws = bool(self.panel_config.get("show_workspaces", True))
+        try:
+            ws_count = max(1, min(9, int(self.panel_config.get("workspace_count", 4))))
+        except Exception:
+            ws_count = 4
+        cfg_tuple = (ws_count, show_ws)
+        if cfg_tuple == self._last_ws_config and len(self._ws_buttons) == (ws_count if show_ws else 0):
+            return
+        self._last_ws_config = cfg_tuple
+        self._ws_buttons = []
+        for child in self.ws_box.get_children():
+            self.ws_box.remove(child)
+            child.destroy()
+
+        if not show_ws:
+            self.ws_box.hide()
+            return
+
+        if self._active_ws > ws_count:
+            self._active_ws = 1
+
+        for idx in range(1, ws_count + 1):
+            btn = Gtk.Button(label=str(idx))
+            btn.get_style_context().add_class("ws-btn")
+            if idx == self._active_ws:
+                btn.get_style_context().add_class("ws-active")
+            btn.set_tooltip_text(f"Obszar roboczy {idx} (LPM: Przełącz, ŚPM: Expo)")
+            btn.add_events(Gdk.EventMask.SCROLL_MASK)
+            btn.connect("button-press-event", self._on_workspace_btn_press, idx)
+            btn.connect("scroll-event", self._on_workspace_scroll)
+            self.ws_box.pack_start(btn, False, False, 0)
+            self._ws_buttons.append((idx, btn))
+        self.ws_box.show_all()
+
+    def _set_active_ws_ui(self, ws_idx: int):
+        self._active_ws = ws_idx
+        for idx, btn in self._ws_buttons:
+            ctx = btn.get_style_context()
+            if idx == ws_idx:
+                ctx.add_class("ws-active")
+            else:
+                ctx.remove_class("ws-active")
+
+    def _switch_workspace(self, target_idx: int):
+        try:
+            ws_count = max(1, min(9, int(self.panel_config.get("workspace_count", 4))))
+        except Exception:
+            ws_count = 4
+        target_idx = max(1, min(ws_count, int(target_idx)))
+        self._set_active_ws_ui(target_idx)
+        if shutil.which("wtype"):
+            _spawn_reap(["wtype", "-M", "logo", "-k", str(target_idx), "-m", "logo"], silence_output=True)
+
+    def _on_workspace_btn_press(self, _widget, event, ws_idx: int):
+        if event.button == 1:
+            self._switch_workspace(ws_idx)
+        elif event.button in (2, 3):
+            if shutil.which("wtype"):
+                _spawn_reap(["wtype", "-M", "logo", "-k", "Tab", "-m", "logo"], silence_output=True)
+        return True
+
+    def _on_workspace_scroll(self, _widget, event):
+        try:
+            ws_count = max(1, min(9, int(self.panel_config.get("workspace_count", 4))))
+        except Exception:
+            ws_count = 4
+        if event.direction == Gdk.ScrollDirection.UP:
+            nxt = self._active_ws - 1 if self._active_ws > 1 else ws_count
+            self._switch_workspace(nxt)
+        elif event.direction == Gdk.ScrollDirection.DOWN:
+            nxt = self._active_ws + 1 if self._active_ws < ws_count else 1
+            self._switch_workspace(nxt)
+        return True
 
     def _hide_preview(self):
         if self._preview_popup is not None:
@@ -2562,10 +2939,18 @@ class OkayPanel(Gtk.Window):
         return self._preview_popup
 
     def _apply_animations(self):
+        reduce_motion = bool(self.panel_config.get("reduce_motion", not self.panel_config.get("animations", True)))
+        try:
+            speed = float(self.panel_config.get("animation_speed", 1.0))
+        except Exception:
+            speed = 1.0
+        configure_animations(reduce_motion=reduce_motion, speed_multiplier=speed)
         enabled = self._animations_enabled()
         apply_animation_class(self, enabled)
         if self._quick_settings is not None:
             apply_animation_class(self._quick_settings, enabled)
+        if self._calendar_popover is not None:
+            apply_animation_class(self._calendar_popover, enabled)
         if self._start_menu is not None:
             apply_animation_class(self._start_menu, enabled)
         if self._preview_popup is not None:
@@ -2594,6 +2979,8 @@ class OkayPanel(Gtk.Window):
         self._hide_preview()
         if self._quick_settings is not None and self._quick_settings.get_visible():
             self._quick_settings.hide_popover()
+        if self._calendar_popover is not None and self._calendar_popover.get_visible():
+            self._calendar_popover.hide_popover()
         if StartMenuPopover is None:
             self._launch_cmd("okay-settings")
             return
@@ -2616,6 +3003,8 @@ class OkayPanel(Gtk.Window):
         self._hide_preview()
         if self._start_menu is not None and self._start_menu.get_visible():
             self._start_menu.hide_menu()
+        if self._calendar_popover is not None and self._calendar_popover.get_visible():
+            self._calendar_popover.hide_popover()
         if QuickSettingsPopover is None:
             self._launch_cmd("okay-settings")
             return
@@ -2632,6 +3021,25 @@ class OkayPanel(Gtk.Window):
                 return
         self._quick_settings.toggle()
 
+    def _toggle_calendar(self, *_args):
+        self._hide_preview()
+        if self._start_menu is not None and self._start_menu.get_visible():
+            self._start_menu.hide_menu()
+        if self._quick_settings is not None and self._quick_settings.get_visible():
+            self._quick_settings.hide_popover()
+        if self._calendar_popover is None:
+            try:
+                self._calendar_popover = CalendarPopover(
+                    self._get_panel_pos,
+                    on_open_notifications_cb=self._toggle_quick_settings,
+                    animations_enabled_cb=self._animations_enabled,
+                )
+            except Exception as _cal_err:
+                print(f"[okay-panel] Błąd tworzenia CalendarPopover: {_cal_err}", file=sys.stderr)
+                self._toggle_quick_settings()
+                return
+        self._calendar_popover.toggle()
+
     def _build_right_section(self):
         # 1. Pokaż pulpit (skrajnie po prawej)
         btn_desktop = Gtk.Button()
@@ -2640,7 +3048,7 @@ class OkayPanel(Gtk.Window):
         btn_desktop.connect("clicked", self._on_desktop_clicked)
         self.right_box.pack_end(btn_desktop, False, False, 0)
 
-        # 2. Zegar dwuwierszowy (LPM otwiera/zamyka Quick Settings Popover)
+        # 2. Zegar dwuwierszowy (LPM: Kalendarz, PPM: Szybkie ustawienia i Powiadomienia)
         self.btn_clock = Gtk.Button()
         self.btn_clock.set_name("clock-button")
         self.lbl_clock = Gtk.Label()
@@ -2669,7 +3077,7 @@ class OkayPanel(Gtk.Window):
         self.btn_network.get_style_context().add_class("status-item")
         self.img_network = Gtk.Image.new_from_icon_name("network-wireless-symbolic", Gtk.IconSize.MENU)
         self.btn_network.add(self.img_network)
-        self.btn_network.set_tooltip_text("Sieć i Wi-Fi (LPM: Szybkie ustawienia, PPM: Ustawienia sieci)")
+        self.btn_network.set_tooltip_text("Sieć, Bluetooth i Powiadomienia (LPM: Szybkie ustawienia, PPM: Ustawienia sieci)")
         self.btn_network.connect("button-press-event", self._on_network_press)
         self.right_box.pack_end(self.btn_network, False, False, 0)
 
@@ -2685,7 +3093,18 @@ class OkayPanel(Gtk.Window):
         self.box_battery.pack_start(self.lbl_battery, False, False, 0)
         self.right_box.pack_end(self.box_battery, False, False, 0)
 
-        # 6. Tacka systemowa SNI (StatusNotifierWatcher + Host)
+        # 6. Wskaźnik obciążenia CPU / RAM
+        self.box_sysload = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.box_sysload.set_no_show_all(True)
+        self.box_sysload.get_style_context().add_class("status-item")
+        self.box_sysload.get_style_context().add_class("sysload-item")
+        self.lbl_sysload = Gtk.Label(label="CPU 0% | RAM 0%")
+        self.lbl_sysload.show()
+        self.box_sysload.pack_start(self.lbl_sysload, False, False, 0)
+        self.box_sysload.set_visible(bool(self.panel_config.get("show_sysload", True)))
+        self.right_box.pack_end(self.box_sysload, False, False, 0)
+
+        # 7. Tacka systemowa SNI (StatusNotifierWatcher + Host)
         if StatusNotifierTray is not None:
             try:
                 self.sni_tray = StatusNotifierTray(self._get_panel_pos, animations_enabled_cb=self._animations_enabled)
@@ -2738,6 +3157,8 @@ class OkayPanel(Gtk.Window):
 
     def _on_clock_press(self, widget, event):
         if event.button == 1:
+            self._toggle_calendar()
+        elif event.button == 3:
             self._toggle_quick_settings()
         return True
 
@@ -3042,6 +3463,8 @@ class OkayPanel(Gtk.Window):
             if mtime != self._config_mtime:
                 self._config_mtime = mtime
                 self.panel_config = PanelConfigManager.load()
+                self._rebuild_workspaces()
+                self.box_sysload.set_visible(bool(self.panel_config.get("show_sysload", True)))
                 self._apply_theme_colors()
                 self._apply_layout_mode()
                 self._apply_animations()
@@ -3363,13 +3786,66 @@ class OkayPanel(Gtk.Window):
                 GLib.idle_add(self._apply_volume_ui, vol_data)
             self._vol_wake.wait(timeout=5.0)
 
+    def _update_sysload_ui(self):
+        if not bool(self.panel_config.get("show_sysload", True)):
+            if self.box_sysload.get_visible():
+                self.box_sysload.set_visible(False)
+            return
+        if not self.box_sysload.get_visible():
+            self.box_sysload.set_visible(True)
+
+        cpu_pct = 0
+        try:
+            with open("/proc/stat", "r", encoding="utf-8") as f:
+                first = f.readline()
+            parts = [int(x) for x in first.split()[1:]]
+            if len(parts) >= 4:
+                idle = parts[3] + (parts[4] if len(parts) > 4 else 0)
+                total = sum(parts)
+                d_total = total - self._cpu_prev_total
+                d_idle = idle - self._cpu_prev_idle
+                self._cpu_prev_total = total
+                self._cpu_prev_idle = idle
+                if d_total > 0 and self._cpu_prev_total != total - d_total:
+                    cpu_pct = max(0, min(100, int(round((1.0 - (d_idle / d_total)) * 100))))
+                elif d_total > 0:
+                    cpu_pct = max(0, min(100, int(round((1.0 - (d_idle / d_total)) * 100))))
+        except Exception:
+            cpu_pct = 0
+
+        ram_pct = 0
+        try:
+            mem_total = 0
+            mem_avail = 0
+            with open("/proc/meminfo", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        mem_total = int(line.split()[1])
+                    elif line.startswith("MemAvailable:"):
+                        mem_avail = int(line.split()[1])
+                    if mem_total and mem_avail:
+                        break
+            if mem_total > 0:
+                ram_pct = max(0, min(100, int(round(((mem_total - mem_avail) / mem_total) * 100))))
+        except Exception:
+            ram_pct = 0
+
+        txt = f"CPU {cpu_pct}% | RAM {ram_pct}%"
+        if self.lbl_sysload.get_text() != txt:
+            self.lbl_sysload.set_text(txt)
+            self.box_sysload.set_tooltip_text(f"Obciążenie systemu: CPU {cpu_pct}%, RAM {ram_pct}%")
+
     def _update_clock_and_battery(self) -> bool:
         now = datetime.now()
         clock_str = now.strftime("%H:%M")
         if clock_str != self._last_clock_str:
             self._last_clock_str = clock_str
             self.lbl_clock.set_markup(f"<b>{clock_str}</b>\n<small>{now.strftime('%d.%m.%Y')}</small>")
-            self.btn_clock.set_tooltip_text(now.strftime("%A, %d %B %Y"))
+            self.btn_clock.set_tooltip_text(
+                f"{now.strftime('%A, %d %B %Y')}\nLPM: Kalendarz | PPM: Szybkie ustawienia i Powiadomienia"
+            )
+
+        self._update_sysload_ui()
 
         now_mono = time.monotonic()
         if now_mono - self._last_bat_check < 15.0:

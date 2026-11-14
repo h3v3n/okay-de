@@ -2,273 +2,209 @@
 # -*- coding: utf-8 -*-
 
 """
-OKay Settings (okay-settings)
-Natywne centrum sterowania środowiska graficznego OKay DE dla dystrybucji OKsavi Linux.
-Stos technologiczny: Python 3, GTK3 (PyGObject), Wayland.
+OKay Settings (GTK3) — Centrum sterowania dla OKay Desktop Environment (Wayfire / Wayland).
+Obsługuje reaktywne odświeżanie motywu Ciemny/Jasny, koloru akcentu oraz silnika animacji 60/120+ FPS.
 """
 
 import os
 import sys
-import json
-import signal
-import shutil
-import subprocess
+import argparse
 
-# Ograniczenie aren glibc, wyłączenie mostu AT-SPI oraz wymuszenie Wayland przed startem GTK3
-os.environ.setdefault("MALLOC_ARENA_MAX", "2")
-os.environ.setdefault("NO_AT_BRIDGE", "1")
-os.environ["GDK_BACKEND"] = "wayland"
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gtk, Gdk
 
-# Nazwa procesu w jądrze Linux dla pkill / menedżera zadań
-try:
-    import ctypes
-    ctypes.CDLL(None).prctl(15, b"okay-settings", 0, 0, 0)
-except Exception:
-    pass
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 
-# Rozwiązanie ścieżki modułu `settings`: priorytet repo -> ~/.local -> /usr/local -> /usr
-_SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-_XDG_DATA = os.environ.get("XDG_DATA_HOME", "").strip()
-_USER_SHARE_DIR = os.path.join(
-    os.path.expanduser(_XDG_DATA) if _XDG_DATA else os.path.expanduser("~/.local/share"),
-    "okay-de",
-)
-_parent_dir = os.path.dirname(_SCRIPT_DIR)
-_candidates_raw = [
-    _SCRIPT_DIR,
-    os.path.join(_parent_dir, "scripts"),
-    _USER_SHARE_DIR,
-    os.path.join(_USER_SHARE_DIR, "repo", "scripts"),
-    "/usr/local/share/okay-de",
-    "/usr/share/okay-de",
-]
-_candidates = []
-for _c in _candidates_raw:
-    if _c and os.path.isdir(os.path.join(_c, "settings")) and _c not in _candidates:
-        _candidates.append(_c)
-
-for _cand in reversed(_candidates):
-    if _cand in sys.path:
-        sys.path.remove(_cand)
-    sys.path.insert(0, _cand)
-
-try:
-    import gi
-    gi.require_version("Gtk", "3.0")
-    from gi.repository import Gtk, Gio, GLib
-except ImportError as err:
-    print(
-        f"Błąd krytyczny: Brak wymaganych bibliotek GTK3 / PyGObject: {err}\n"
-        "Zainstaluj pakiety: gtk3, python-gobject.",
-        file=sys.stderr
-    )
-    if shutil.which("notify-send"):
-        subprocess.run(
-            ["notify-send", "Błąd OKay Settings", "Wymagane pakiety: gtk3 python-gobject", "-u", "critical"],
-            check=False
-        )
-    sys.exit(1)
-
-from settings import (
+from settings.helpers import (
     apply_settings_css,
     ensure_user_configs,
-    WifiTab,
-    DisplayTab,
-    InputTab,
-    SoundTab,
-    PanelTab,
-    SystemTab,
+    get_state_manager,
 )
-from settings.helpers import okay_config_dir, okay_template_file
+from panel.animations import configure_animations, prepare_fade_in, start_fade_in
+from settings.wifi_tab import WifiTab
+from settings.sound_tab import SoundTab
+from settings.display_tab import DisplayTab
+from settings.input_tab import InputTab
+from settings.panel_tab import PanelTab
+from settings.system_tab import SystemTab
 
 
-class OkaySettingsWindow(Gtk.ApplicationWindow):
-    """Główne okno centrum sterowania OKay DE z panelem Gtk.StackSidebar + Gtk.Stack."""
+TAB_ALIASES = {
+    "wifi": "wifi",
+    "network": "wifi",
+    "bluetooth": "wifi",
+    "sound": "sound",
+    "audio": "sound",
+    "display": "display",
+    "monitors": "display",
+    "input": "input",
+    "mouse": "input",
+    "shortcuts": "input",
+    "panel": "panel",
+    "appearance": "panel",
+    "animations": "panel",
+    "system": "system",
+    "privacy": "system",
+}
 
-    def __init__(self, app, initial_tab: str = ""):
-        super().__init__(application=app, title="OKay Settings — Centrum sterowania")
+
+class OkaySettingsWindow(Gtk.Window):
+    """Główne okno centrum sterowania OKay DE."""
+
+    def __init__(self, initial_tab: str = None):
+        super().__init__(title="Ustawienia systemowe — OKay DE")
         self.set_name("okay-settings")
-        self.set_icon_name("preferences-system")
         self.set_default_size(940, 620)
-        self.set_size_request(760, 500)
         self.set_position(Gtk.WindowPosition.CENTER)
 
-        # Inicjalizacja ~/.config/okay-de i ~/.config/wayfire.ini z szablonów systemowych (read-only)
         ensure_user_configs()
-        apply_settings_css()
+        self._state = get_state_manager()
+        cfg = self._state.get_config()
 
-        root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self.add(root)
+        apply_settings_css(cfg.get("accent_color"), theme_mode=cfg.get("theme_mode", "dark"))
+        configure_animations(
+            reduce_motion=cfg.get("reduce_motion", False),
+            speed_multiplier=cfg.get("animation_speed", 1.0),
+        )
+        self._state.subscribe(self._on_state_changed)
 
-        # Lewa kolumna: Nagłówek marki + Gtk.StackSidebar
+        self._anim_enabled = not bool(cfg.get("reduce_motion", False))
+        if not self._anim_enabled:
+            self.get_style_context().add_class("no-animations")
+
+        prepare_fade_in(self)
+        self.connect("map-event", self._on_window_map_event)
+        self.connect("key-press-event", self._on_key_press_event)
+        self.connect("destroy", self._on_window_destroy)
+
+        root_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.add(root_hbox)
+
+        # Panel boczny
         left_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        left_col.set_size_request(230, -1)
+        left_col.set_size_request(240, -1)
 
         brand_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         brand_box.get_style_context().add_class("settings-brand")
-        lbl_brand = Gtk.Label(label="OKay Settings", xalign=0.0)
+        lbl_brand = Gtk.Label(label="OKay DE", xalign=0.0)
         lbl_brand.get_style_context().add_class("brand-title")
-        lbl_sub = Gtk.Label(label="OKsavi Linux • Wayland", xalign=0.0)
+        lbl_sub = Gtk.Label(label="Centrum sterowania Wayland", xalign=0.0)
         lbl_sub.get_style_context().add_class("brand-subtitle")
         brand_box.pack_start(lbl_brand, False, False, 0)
         brand_box.pack_start(lbl_sub, False, False, 0)
         left_col.pack_start(brand_box, False, False, 0)
 
+        self.nav_list = Gtk.ListBox()
+        self.nav_list.set_selection_mode(Gtk.SelectionMode.BROWSE)
+        self.nav_list.get_style_context().add_class("settings-sidebar")
+        self.nav_list.connect("row-selected", self._on_nav_row_selected)
+        left_col.pack_start(self.nav_list, True, True, 0)
+
+        root_hbox.pack_start(left_col, False, False, 0)
+
+        # Prawa strona (Stack z płynnymi przejściami)
         self.stack = Gtk.Stack()
-        self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-        self.stack.set_transition_duration(150)
-        self.stack.set_hexpand(True)
-        self.stack.set_vexpand(True)
+        self._update_stack_transition()
+        root_hbox.pack_start(self.stack, True, True, 0)
 
-        self.sidebar = Gtk.StackSidebar()
-        self.sidebar.set_stack(self.stack)
-        self.sidebar.get_style_context().add_class("settings-sidebar")
-        self.sidebar.set_vexpand(True)
-        left_col.pack_start(self.sidebar, True, True, 0)
-
-        root.pack_start(left_col, False, False, 0)
-        root.pack_start(self.stack, True, True, 0)
-
-        # Rejestracja modularnych zakładek (leniwe ładowanie ciężkich backendów po otwarciu danej karty)
-        self._panel_tab = PanelTab(
-            self,
-            defer_load=True,
-            on_animations_changed=self.apply_animations_setting,
-            on_accent_changed=self.apply_accent_setting,
-        )
-        tabs = [
-            ("wifi", "Wi-Fi i Sieć", WifiTab(self, defer_load=True)),
-            ("display", "Monitory", DisplayTab(self, defer_load=True)),
-            ("input", "Mysz i Touchpad", InputTab(self, defer_load=True)),
-            ("sound", "Dźwięk", SoundTab(self, defer_load=True)),
-            ("panel", "Pulpit i Panel", self._panel_tab),
-            ("system", "System i Aktualizacje", SystemTab(self)),
+        pages = [
+            ("panel", "applications-graphics-symbolic", "Wygląd i Animacje", PanelTab(parent_window=self)),
+            ("display", "video-display-symbolic", "Ekrany i Wyjścia", DisplayTab(parent_window=self, defer_load=True)),
+            ("sound", "audio-speakers-symbolic", "Dźwięk (PipeWire)", SoundTab(parent_window=self, defer_load=True)),
+            ("wifi", "network-wireless-signal-excellent-symbolic", "Sieć i Bluetooth", WifiTab(parent_window=self, defer_load=True)),
+            ("input", "input-mouse-symbolic", "Mysz i Skróty", InputTab(parent_window=self, defer_load=True)),
+            ("system", "computer-symbolic", "Prywatność i System", SystemTab(parent_window=self)),
         ]
-        for tab_id, title, widget in tabs:
-            self.stack.add_titled(widget, tab_id, title)
 
-        anim_on = self._read_animations_setting()
-        self.apply_animations_setting(anim_on)
+        self._rows_by_key = {}
+        self._pages_by_key = {}
+        for key, icon_name, title, widget in pages:
+            self.stack.add_named(widget, key)
+            self._pages_by_key[key] = widget
 
-        self.stack.connect("notify::visible-child", self._on_visible_tab_changed)
-        if anim_on:
-            self.set_opacity(0.0)
-        self.show_all()
-        if anim_on:
-            self._fade_in_window()
+            row = Gtk.ListBoxRow()
+            row._page_key = key
 
-        if initial_tab and self.stack.get_child_by_name(initial_tab):
-            self.stack.set_visible_child_name(initial_tab)
-        self._activate_current_tab()
+            row_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            icon = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.MENU)
+            lbl = Gtk.Label(label=title, xalign=0.0)
+            row_box.pack_start(icon, False, False, 0)
+            row_box.pack_start(lbl, True, True, 0)
 
-    @staticmethod
-    def _read_animations_setting() -> bool:
-        user_panel = os.path.join(okay_config_dir(), "panel.json")
-        candidates = (user_panel, okay_template_file("panel.json"))
-        for path in candidates:
-            if path and os.path.exists(path):
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    if isinstance(data, dict):
-                        return bool(data.get("animations", True))
-                except Exception:
-                    pass
-                if path == user_panel:
-                    continue
-                break
-        return True
+            row.add(row_box)
+            self.nav_list.add(row)
+            self._rows_by_key[key] = row
 
-    def refresh_after_update(self):
-        apply_settings_css()
-        self.apply_animations_setting(self._read_animations_setting())
-        if getattr(self._panel_tab, "_loaded", False):
-            self._panel_tab.load_config()
+        target_key = TAB_ALIASES.get((initial_tab or "").lower(), "panel")
+        first_row = self._rows_by_key.get(target_key) or self.nav_list.get_row_at_index(0)
+        if first_row is not None:
+            self.nav_list.select_row(first_row)
 
-    def apply_accent_setting(self, accent_hex: str):
-        apply_settings_css(accent_hex)
+    def _on_window_destroy(self, _widget):
+        self._state.unsubscribe(self._on_state_changed)
+        Gtk.main_quit()
 
-    def apply_animations_setting(self, enabled: bool):
-        enabled = bool(enabled)
-        if enabled:
+    def _on_state_changed(self, cfg: dict):
+        self._anim_enabled = not bool(cfg.get("reduce_motion", False))
+        ctx = self.get_style_context()
+        if self._anim_enabled:
+            ctx.remove_class("no-animations")
+        elif not ctx.has_class("no-animations"):
+            ctx.add_class("no-animations")
+        self._update_stack_transition()
+        apply_settings_css(cfg.get("accent_color"), theme_mode=cfg.get("theme_mode", "dark"))
+
+    def _update_stack_transition(self):
+        cfg = self._state.get_config()
+        if not cfg.get("reduce_motion", False):
+            speed = max(0.5, min(2.0, float(cfg.get("animation_speed", 1.0))))
             self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-            self.stack.set_transition_duration(150)
-            self.get_style_context().remove_class("no-animations")
+            self.stack.set_transition_duration(max(40, int(round(140.0 / speed))))
         else:
             self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
             self.stack.set_transition_duration(0)
-            self.get_style_context().add_class("no-animations")
-        try:
-            gtk_settings = Gtk.Settings.get_default()
-            if gtk_settings is not None:
-                gtk_settings.set_property("gtk-enable-animations", enabled)
-        except Exception:
-            pass
 
-    def _fade_in_window(self, duration_ms: int = 160):
-        steps = max(1, round(duration_ms / 16))
-        state = {"step": 0}
+    def _on_window_map_event(self, _widget, _event):
+        if self._anim_enabled:
+            start_fade_in(self, duration_ms=150)
+        else:
+            self.set_opacity(1.0)
+        return False
 
-        def _tick() -> bool:
-            state["step"] += 1
-            p = min(1.0, state["step"] / float(steps))
-            alpha = 1.0 - (1.0 - p) * (1.0 - p)
-            try:
-                self.set_opacity(alpha)
-            except Exception:
-                return False
-            return state["step"] < steps
+    def _on_key_press_event(self, _widget, event) -> bool:
+        if event.keyval == Gdk.KEY_Escape:
+            self.close()
+            return True
+        return False
 
-        GLib.timeout_add(16, _tick)
-
-    def _activate_current_tab(self):
-        child = self.stack.get_visible_child()
-        if child is not None and hasattr(child, "ensure_loaded"):
-            child.ensure_loaded()
-
-    def _on_visible_tab_changed(self, _stack, _pspec):
-        self._activate_current_tab()
-
-
-class OkaySettingsApp(Gtk.Application):
-    def __init__(self):
-        super().__init__(
-            application_id="org.oksavi.okay_settings",
-            flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE
-        )
-        self.initial_tab = ""
-        self._window = None
-
-    @staticmethod
-    def _parse_tab_arg(argv: list) -> str:
-        for i, arg in enumerate(argv[1:], start=1):
-            if arg in ("--tab", "-t") and i + 1 < len(argv):
-                return argv[i + 1].strip()
-            if arg.startswith("--tab="):
-                return arg.split("=", 1)[1].strip()
-        return ""
-
-    def do_command_line(self, command_line):
-        self.initial_tab = self._parse_tab_arg(command_line.get_arguments())
-        self.activate()
-        return 0
-
-    def do_activate(self):
-        if self._window is None:
-            self._window = OkaySettingsWindow(self, self.initial_tab)
-            self._window.connect("destroy", lambda _w: setattr(self, "_window", None))
-        elif self.initial_tab and self._window.stack.get_child_by_name(self.initial_tab):
-            self._window.stack.set_visible_child_name(self.initial_tab)
-            self._window._activate_current_tab()
-        self._window.present()
+    def _on_nav_row_selected(self, _listbox, row):
+        if row is None:
+            return
+        key = getattr(row, "_page_key", None)
+        if key:
+            page = self._pages_by_key.get(key)
+            if page is not None and hasattr(page, "ensure_loaded"):
+                page.ensure_loaded()
+            self.stack.set_visible_child_name(key)
 
 
 def main():
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
-    GLib.set_prgname("okay-settings")
-    app = OkaySettingsApp()
-    sys.exit(app.run(sys.argv))
+    parser = argparse.ArgumentParser(description="OKay Settings — Centrum sterowania OKay DE")
+    parser.add_argument(
+        "--tab",
+        default=None,
+        help="Otwórz bezpośrednio wskazaną zakładkę (panel, display, sound, wifi, input, system)",
+    )
+    args, unknown = parser.parse_known_args()
+    sys.argv = [sys.argv[0]] + unknown
+
+    win = OkaySettingsWindow(initial_tab=args.tab)
+    win.show_all()
+    Gtk.main()
 
 
 if __name__ == "__main__":

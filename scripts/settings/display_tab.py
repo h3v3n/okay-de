@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 
 """
-Zakładka „Monitory” (wlr-randr dla Wayland / Wayfire) w GTK3.
-Obsługuje zarówno wyjście JSON (`wlr-randr --json`), jak i standardowe wyjście tekstowe.
+Zakładka „Ekrany i Wyjścia” (wlr-randr + trwały zapis [output:<name>] w ~/.config/wayfire.ini) w GTK3.
+Obsługuje rozdzielczość, odświeżanie Hz, skalowanie ułamkowe (0.5x – 3.0x), orientację (obrót)
+oraz pozycjonowanie układu wielomonitorowego (X, Y) z natychmiastowym hot-reloadem w Wayfire.
 """
 
 import re
@@ -11,6 +12,7 @@ import shutil
 from gi.repository import Gtk
 
 from .helpers import (
+    apply_wayfire_outputs,
     clear_container,
     run_async,
     run_cmd,
@@ -35,6 +37,10 @@ def _parse_wlr_randr_json(raw: str) -> list:
         desc = item.get("description") or " ".join(
             p for p in (item.get("make", ""), item.get("model", "")) if p
         ).strip()
+        pos = item.get("position") or {}
+        pos_x = int(pos.get("x", 0) or 0)
+        pos_y = int(pos.get("y", 0) or 0)
+        transform = str(item.get("transform", "normal") or "normal").strip()
         modes = []
         current_mode = None
         for m in item.get("modes") or []:
@@ -62,6 +68,9 @@ def _parse_wlr_randr_json(raw: str) -> list:
             "description": desc or name,
             "enabled": bool(item.get("enabled", True)),
             "scale": float(item.get("scale", 1.0) or 1.0),
+            "x": pos_x,
+            "y": pos_y,
+            "transform": transform,
             "modes": modes,
             "current_mode": current_mode,
         })
@@ -75,14 +84,14 @@ def _parse_wlr_randr_text(raw: str) -> list:
 
     mode_re = re.compile(
         r"^\s*(\d+)x(\d+)\s+px,\s*([0-9.]+)\s+Hz(?:\s+\(([^)]+)\))?",
-        re.IGNORECASE
+        re.IGNORECASE,
     )
+    pos_re = re.compile(r"Position:\s*(-?\d+)\s*,\s*(-?\d+)", re.IGNORECASE)
 
     for line in raw.splitlines():
         if not line.strip():
             continue
         if not line[0].isspace():
-            # Przykład: eDP-1 "BOE 0x095F (eDP-1)"
             parts = line.split(None, 1)
             name = parts[0].strip()
             desc = parts[1].strip().strip('"') if len(parts) > 1 else name
@@ -91,6 +100,9 @@ def _parse_wlr_randr_text(raw: str) -> list:
                 "description": desc or name,
                 "enabled": True,
                 "scale": 1.0,
+                "x": 0,
+                "y": 0,
+                "transform": "normal",
                 "modes": [],
                 "current_mode": None,
             }
@@ -111,6 +123,15 @@ def _parse_wlr_randr_text(raw: str) -> list:
                 cur_out["scale"] = float(stripped.split(":", 1)[1].strip())
             except ValueError:
                 cur_out["scale"] = 1.0
+            in_modes = False
+        elif stripped.startswith("Position:"):
+            mp = pos_re.search(stripped)
+            if mp:
+                cur_out["x"] = int(mp.group(1))
+                cur_out["y"] = int(mp.group(2))
+            in_modes = False
+        elif stripped.startswith("Transform:"):
+            cur_out["transform"] = stripped.split(":", 1)[1].strip() or "normal"
             in_modes = False
         elif stripped == "Modes:":
             in_modes = True
@@ -142,14 +163,14 @@ def _parse_wlr_randr_text(raw: str) -> list:
 
 
 class DisplayTab(Gtk.Box):
-    """Zakładka konfiguracji monitorów i skalowania obrazu przez `wlr-randr`."""
+    """Zakładka konfiguracji monitorów, skalowania ułamkowego i układu wyjść Wayfire."""
 
     def __init__(self, _parent_window=None, defer_load: bool = False):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self._outputs = []
         self._selected_output = None
-        self._res_map = {}      # res_str -> list of modes
-        self._rate_items = []   # [(label, mode_dict)]
+        self._res_map = {}
+        self._rate_items = []
         self._updating_ui = False
         self._loaded = False
 
@@ -162,11 +183,13 @@ class DisplayTab(Gtk.Box):
 
         self.content.pack_start(
             make_page_header(
-                "Monitory",
-                "Zarządzanie podłączonymi ekranami, rozdzielczością, odświeżaniem i skalowaniem (wlr-randr).",
-                self.btn_refresh
+                "Ekrany i Wyjścia",
+                "Rozdzielczość, odświeżanie Hz, skalowanie ułamkowe oraz układ monitorów synchronizowany z [output:...] w wayfire.ini.",
+                self.btn_refresh,
             ),
-            False, False, 0
+            False,
+            False,
+            0,
         )
 
         # Lista podłączonych ekranów
@@ -188,9 +211,11 @@ class DisplayTab(Gtk.Box):
             make_setting_row(
                 "Wyjście aktywne",
                 "Włącza lub wyłącza sygnał na wybranym monitorze",
-                self.switch_enabled
+                self.switch_enabled,
             ),
-            False, False, 0
+            False,
+            False,
+            0,
         )
 
         self.combo_res = Gtk.ComboBoxText()
@@ -198,20 +223,24 @@ class DisplayTab(Gtk.Box):
         box_cfg.pack_start(
             make_setting_row(
                 "Rozdzielczość",
-                "Dostępne tryby pracy zgłoszone przez ekran",
-                self.combo_res
+                "Dostępne tryby pracy zgłoszone przez ekran (EDID / DRM)",
+                self.combo_res,
             ),
-            False, False, 0
+            False,
+            False,
+            0,
         )
 
         self.combo_rate = Gtk.ComboBoxText()
         box_cfg.pack_start(
             make_setting_row(
-                "Odświeżanie (Hz)",
-                "Częstotliwość odświeżania obrazu dla wybranej rozdzielczości",
-                self.combo_rate
+                "Częstotliwość odświeżania (Hz)",
+                "Częstotliwość odświeżania obrazu dla wybranej rozdzielczości (60 / 120 / 144+ Hz)",
+                self.combo_rate,
             ),
-            False, False, 0
+            False,
+            False,
+            0,
         )
 
         # Selektor skali: przyciski 1.0x / 1.25x / 1.5x / 2.0x + suwak precyzyjny
@@ -237,11 +266,56 @@ class DisplayTab(Gtk.Box):
 
         box_cfg.pack_start(
             make_setting_row(
-                "Skala wyświetlania",
+                "Skalowanie ułamkowe (Fractional Scaling)",
                 "Szybki wybór skali (1.0x, 1.25x, 1.5x, 2.0x) lub płynna regulacja suwakiem",
-                scale_box
+                scale_box,
             ),
-            False, False, 0
+            False,
+            False,
+            0,
+        )
+
+        # Układ monitorów (pozycja X, Y) oraz orientacja
+        pos_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        lbl_x = Gtk.Label(label="X:")
+        lbl_x.get_style_context().add_class("row-subtitle")
+        self.spin_pos_x = Gtk.SpinButton.new_with_range(-16384, 16384, 10)
+        self.spin_pos_x.set_value(0)
+        lbl_y = Gtk.Label(label="Y:")
+        lbl_y.get_style_context().add_class("row-subtitle")
+        self.spin_pos_y = Gtk.SpinButton.new_with_range(-16384, 16384, 10)
+        self.spin_pos_y.set_value(0)
+        pos_box.pack_start(lbl_x, False, False, 0)
+        pos_box.pack_start(self.spin_pos_x, False, False, 0)
+        pos_box.pack_start(lbl_y, False, False, 0)
+        pos_box.pack_start(self.spin_pos_y, False, False, 0)
+
+        box_cfg.pack_start(
+            make_setting_row(
+                "Pozycja w układzie wielomonitorowym (X, Y)",
+                "Współrzędne ekranu zapisywane w sekcji [output:<nazwa>] w ~/.config/wayfire.ini",
+                pos_box,
+            ),
+            False,
+            False,
+            0,
+        )
+
+        self.combo_transform = Gtk.ComboBoxText()
+        self.combo_transform.append("normal", "Standardowa (0°)")
+        self.combo_transform.append("90", "Obrót 90°")
+        self.combo_transform.append("180", "Obrót 180°")
+        self.combo_transform.append("270", "Obrót 270°")
+        self.combo_transform.set_active_id("normal")
+        box_cfg.pack_start(
+            make_setting_row(
+                "Orientacja ekranu (Transform)",
+                "Obrót przestrzeni roboczej wybranego monitora",
+                self.combo_transform,
+            ),
+            False,
+            False,
+            0,
         )
 
         # Przycisk Zastosuj + status
@@ -251,7 +325,7 @@ class DisplayTab(Gtk.Box):
         self.lbl_status.get_style_context().add_class("row-subtitle")
         footer.pack_start(self.lbl_status, True, True, 0)
 
-        self.btn_apply = Gtk.Button(label="Zastosuj ustawienia ekranu")
+        self.btn_apply = Gtk.Button(label="Zastosuj i zapisz w wayfire.ini")
         self.btn_apply.get_style_context().add_class("accent-btn")
         self.btn_apply.connect("clicked", self._on_apply_clicked)
         footer.pack_end(self.btn_apply, False, False, 0)
@@ -327,12 +401,13 @@ class DisplayTab(Gtk.Box):
             hbox.pack_start(icon, False, False, 0)
 
             cur_m = out.get("current_mode")
+            pos_str = f"({out.get('x', 0)}, {out.get('y', 0)})"
             if not out["enabled"]:
                 mode_info = "Wyłączony"
             elif cur_m:
-                mode_info = f"{cur_m['res']} @ {cur_m['refresh']:.2f} Hz • Skala {out['scale']:.2f}x"
+                mode_info = f"{cur_m['res']} @ {cur_m['refresh']:.2f} Hz • Skala {out['scale']:.2f}x • Pozycja {pos_str}"
             else:
-                mode_info = f"Skala {out['scale']:.2f}x"
+                mode_info = f"Skala {out['scale']:.2f}x • Pozycja {pos_str}"
 
             vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
             lbl_n = Gtk.Label(label=f"{out['name']} — {out['description']}", xalign=0.0)
@@ -371,8 +446,12 @@ class DisplayTab(Gtk.Box):
     def _load_output_controls(self, out: dict):
         self._updating_ui = True
         self.switch_enabled.set_active(bool(out.get("enabled", True)))
+        self.spin_pos_x.set_value(float(out.get("x", 0)))
+        self.spin_pos_y.set_value(float(out.get("y", 0)))
+        tf = str(out.get("transform", "normal") or "normal")
+        if not self.combo_transform.set_active_id(tf):
+            self.combo_transform.set_active_id("normal")
 
-        # Budowanie mapy rozdzielczości -> lista trybów
         self._res_map = {}
         for m in out.get("modes", []):
             self._res_map.setdefault(m["res"], []).append(m)
@@ -408,6 +487,9 @@ class DisplayTab(Gtk.Box):
         self.combo_res.set_sensitive(active)
         self.combo_rate.set_sensitive(active)
         self.scale_slider.set_sensitive(active)
+        self.spin_pos_x.set_sensitive(active)
+        self.spin_pos_y.set_sensitive(active)
+        self.combo_transform.set_sensitive(active)
         for tb in self._scale_pills.values():
             tb.set_sensitive(active)
 
@@ -454,7 +536,6 @@ class DisplayTab(Gtk.Box):
         if tb.get_active():
             self._sync_scale_widgets(preset)
         else:
-            # Jeśli odznaczono aktywny przycisk, upewnij się że stan jest spójny
             self._sync_scale_widgets(self.scale_slider.get_value())
 
     def _on_scale_slider_changed(self, slider):
@@ -474,8 +555,35 @@ class DisplayTab(Gtk.Box):
         res_str = self.combo_res.get_active_text()
         rate_idx = self.combo_rate.get_active()
         scale_val = round(self.scale_slider.get_value(), 2)
+        pos_x = int(self.spin_pos_x.get_value_as_int())
+        pos_y = int(self.spin_pos_y.get_value_as_int())
+        transform = self.combo_transform.get_active_id() or "normal"
 
         mode_obj = self._rate_items[rate_idx] if (0 <= rate_idx < len(self._rate_items)) else None
+        width, height, hz = 1920, 1080, 60.0
+        if mode_obj:
+            width = int(mode_obj.get("width", 1920))
+            height = int(mode_obj.get("height", 1080))
+            hz = float(mode_obj.get("refresh", 60.0))
+        elif res_str and "x" in res_str:
+            try:
+                w_s, h_s = res_str.split("x", 1)
+                width, height = int(w_s), int(h_s)
+            except Exception:
+                pass
+
+        # Trwały zapis sekcji [output:<name>] w ~/.config/wayfire.ini
+        apply_wayfire_outputs([{
+            "name": out_name,
+            "enabled": enabled,
+            "width": width,
+            "height": height,
+            "refresh": hz,
+            "scale": scale_val,
+            "x": pos_x,
+            "y": pos_y,
+            "transform": transform,
+        }])
 
         self.btn_apply.set_sensitive(False)
         self.lbl_status.set_text(f"Stosowanie konfiguracji dla {out_name}...")
@@ -484,7 +592,11 @@ class DisplayTab(Gtk.Box):
             if not enabled:
                 return run_cmd(["wlr-randr", "--output", out_name, "--off"], timeout=6)
 
-            cmd = ["wlr-randr", "--output", out_name, "--on"]
+            cmd = [
+                "wlr-randr", "--output", out_name, "--on",
+                "--pos", f"{pos_x},{pos_y}",
+                "--transform", transform,
+            ]
             if res_str and mode_obj:
                 cmd += ["--mode", f"{res_str}@{mode_obj['refresh_raw']}Hz"]
             elif res_str:
@@ -493,10 +605,11 @@ class DisplayTab(Gtk.Box):
 
             rc, out, err = run_cmd(cmd, timeout=6)
             if rc != 0 and res_str and mode_obj:
-                # Fallback bez dokładnych miejsc po przecinku w Hz
                 fallback_cmd = [
                     "wlr-randr", "--output", out_name, "--on",
-                    "--mode", res_str, "--scale", f"{scale_val:.2f}"
+                    "--mode", res_str, "--scale", f"{scale_val:.2f}",
+                    "--pos", f"{pos_x},{pos_y}",
+                    "--transform", transform,
                 ]
                 return run_cmd(fallback_cmd, timeout=6)
             return rc, out, err
@@ -505,9 +618,11 @@ class DisplayTab(Gtk.Box):
             rc, _out, err = res
             self.btn_apply.set_sensitive(True)
             if rc == 0:
-                self.lbl_status.set_text(f"Zastosowano ustawienia dla {out_name}.")
+                self.lbl_status.set_text(f"Zastosowano i zapisano [output:{out_name}] w ~/.config/wayfire.ini.")
                 self.refresh_displays()
             else:
-                self.lbl_status.set_text(f"Błąd wlr-randr: {err.strip() or 'nieznany błąd'}")
+                self.lbl_status.set_text(
+                    f"Zapisano [output:{out_name}] w wayfire.ini (wlr-randr: {err.strip() or 'kod ' + str(rc)})."
+                )
 
         run_async(_worker, _on_done, lambda e: (self.btn_apply.set_sensitive(True), self.lbl_status.set_text(f"Błąd: {e}")))

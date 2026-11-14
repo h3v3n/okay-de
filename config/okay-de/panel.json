@@ -1,30 +1,33 @@
 {
-  "icon_only": true,
-  "show_labels": false,
+  "theme_mode": "dark",
   "position": "bottom",
-  "mode": "panel",
-  "animations": true,
-  "accent_color": "#00e676",
+  "height": 44,
+  "opacity": 0.90,
+  "floating": false,
+  "accent_color": "#C9A0DC",
+  "window_rounding": 12,
   "window_buttons_style": "rectangles",
-  "window_corner_radius": 0,
+  "window_opacity": 1.0,
+  "blur_enabled": false,
+  "wobbly_enabled": false,
+  "reduce_motion": false,
+  "animation_speed": 1.0,
+  "open_effect": "zoom",
+  "minimize_effect": "squeezimize",
+  "focus_mode": false,
+  "idle_timeout": 600,
+  "workspace_count": 3,
   "pinned_apps": [
-    {
-      "app_id": "foot",
-      "name": "Terminal (foot)",
-      "cmd": "foot",
-      "icon": "utilities-terminal"
-    },
-    {
-      "app_id": "pcmanfm",
-      "name": "Menedżer plików",
-      "cmd": "pcmanfm",
-      "icon": "system-file-manager"
-    },
-    {
-      "app_id": "okay-settings",
-      "name": "Ustawienia OKay",
-      "cmd": "okay-settings",
-      "icon": "preferences-system"
-    }
-  ]
+    "firefox.desktop",
+    "thunar.desktop",
+    "foot.desktop",
+    "okay-settings.desktop"
+  ],
+  "show_clock": true,
+  "show_seconds": false,
+  "show_volume": true,
+  "show_network": true,
+  "show_battery": true,
+  "show_sysload": true,
+  "show_workspaces": true
 }

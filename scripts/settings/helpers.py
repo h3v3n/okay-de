@@ -25,13 +25,14 @@ import urllib.error
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib, Pango
+from gi.repository import Gtk, Gdk, Gio, GLib, Pango
 
 
 DEFAULT_ACCENT_COLOR = "#00e676"
 
 COLOR_PRESETS = [
     ("#00e676", "OKsavi Neon"),
+    ("#c9a0dc", "Wisteria Fiolet"),
     ("#89b4fa", "Catppuccin Blue"),
     ("#cba6f7", "Mauve Fiolet"),
     ("#94e2d5", "Teal Morski"),
@@ -40,7 +41,6 @@ COLOR_PRESETS = [
     ("#f38ba8", "Red Czerwień"),
     ("#f9e2af", "Sun Słoneczny"),
     ("#b4befe", "Lavender Lawenda"),
-    ("#2ecc71", "Emerald Szmaragd"),
 ]
 
 
@@ -146,14 +146,14 @@ def ensure_wayfire_decorator_plugin() -> bool:
 SETTINGS_CSS_TEMPLATE = """
 window#okay-settings {
     background-color: __BG_WIN__;
-    color: #f5f5f5;
+    color: __FG_MAIN__;
     font-family: "Inter", "JetBrains Mono", system-ui, sans-serif;
     font-size: 13px;
 }
 
 .settings-sidebar {
     background-color: __BG_SIDEBAR__;
-    border-right: 1px solid #282828;
+    border-right: 1px solid __BORDER_COL__;
     padding: 8px 6px;
 }
 
@@ -162,7 +162,7 @@ window#okay-settings {
 }
 
 .settings-sidebar row {
-    color: #cdd6f4;
+    color: __FG_MAIN__;
     border-radius: 6px;
     margin: 2px 4px;
     padding: 10px 14px;
@@ -171,8 +171,8 @@ window#okay-settings {
 }
 
 .settings-sidebar row:hover {
-    background-color: #222222;
-    color: #ffffff;
+    background-color: __BG_HOVER__;
+    color: __FG_MAIN__;
 }
 
 .settings-sidebar row:selected {
@@ -184,8 +184,8 @@ window#okay-settings {
 
 .settings-brand {
     background-color: __BG_SIDEBAR__;
-    border-right: 1px solid #282828;
-    border-bottom: 1px solid #282828;
+    border-right: 1px solid __BORDER_COL__;
+    border-bottom: 1px solid __BORDER_COL__;
     padding: 14px 16px;
 }
 
@@ -197,25 +197,25 @@ window#okay-settings {
 }
 
 .brand-subtitle {
-    color: #bac2de;
+    color: __FG_SUB__;
     font-size: 12px;
 }
 
 .page-title {
-    color: #ffffff;
+    color: __FG_MAIN__;
     font-size: 20px;
     font-weight: 700;
 }
 
 .page-subtitle {
-    color: #bac2de;
+    color: __FG_SUB__;
     font-size: 13px;
 }
 
 .card-frame {
     background-color: __BG_CARD__;
-    border: 1px solid rgba(__ACCENT_RGB__, 0.18);
-    border-radius: 8px;
+    border: 1px solid rgba(__ACCENT_RGB__, 0.22);
+    border-radius: 10px;
     padding: 14px 16px;
 }
 
@@ -228,13 +228,13 @@ window#okay-settings {
 }
 
 .row-title {
-    color: #ffffff;
+    color: __FG_MAIN__;
     font-size: 13.5px;
     font-weight: 600;
 }
 
 .row-subtitle {
-    color: #bac2de;
+    color: __FG_SUB__;
     font-size: 12px;
 }
 
@@ -260,22 +260,22 @@ window#okay-settings {
     background-color: rgba(__ACCENT_RGB__, 0.16);
     color: __ACCENT__;
     border: 1px solid rgba(__ACCENT_RGB__, 0.45);
-    border-radius: 4px;
+    border-radius: 5px;
     padding: 3px 8px;
     font-size: 12px;
     font-weight: 700;
 }
 
 list.settings-list {
-    background-color: #161616;
-    border: 1px solid #282828;
-    border-radius: 6px;
+    background-color: __BG_LIST__;
+    border: 1px solid __BORDER_COL__;
+    border-radius: 8px;
 }
 
 list.settings-list row {
     padding: 9px 12px;
-    border-bottom: 1px solid #222222;
-    color: #f0f0f0;
+    border-bottom: 1px solid __BORDER_COL__;
+    color: __FG_MAIN__;
     font-size: 13px;
 }
 
@@ -284,12 +284,12 @@ list.settings-list row:last-child {
 }
 
 list.settings-list row:hover {
-    background-color: #222222;
+    background-color: __BG_HOVER__;
 }
 
 list.settings-list row:selected {
     background-color: rgba(__ACCENT_RGB__, 0.14);
-    color: #ffffff;
+    color: __FG_MAIN__;
 }
 
 button.accent-btn {
@@ -297,7 +297,7 @@ button.accent-btn {
     background-image: none;
     color: __ACCENT_CONTRAST__;
     border: none;
-    border-radius: 5px;
+    border-radius: 6px;
     padding: 7px 15px;
     font-weight: 700;
     font-size: 12.5px;
@@ -308,23 +308,23 @@ button.accent-btn:hover {
 }
 
 button.accent-btn:disabled {
-    background-color: #2c2c2c;
-    color: #666666;
+    background-color: __BG_BTN__;
+    color: __FG_SUB__;
 }
 
 button.secondary-btn {
-    background-color: #242424;
+    background-color: __BG_BTN__;
     background-image: none;
-    color: #f0f0f0;
-    border: 1px solid #383838;
-    border-radius: 5px;
+    color: __FG_MAIN__;
+    border: 1px solid __BORDER_COL__;
+    border-radius: 6px;
     padding: 7px 13px;
     font-weight: 600;
     font-size: 12.5px;
 }
 
 button.secondary-btn:hover {
-    background-color: #2e2e2e;
+    background-color: __BG_HOVER__;
     border-color: __ACCENT__;
 }
 
@@ -333,7 +333,7 @@ button.danger-btn {
     background-image: none;
     color: #f38ba8;
     border: 1px solid #592632;
-    border-radius: 5px;
+    border-radius: 6px;
     padding: 7px 13px;
     font-weight: 600;
     font-size: 12.5px;
@@ -344,11 +344,11 @@ button.danger-btn:hover {
 }
 
 button.scale-pill {
-    background-color: #222222;
+    background-color: __BG_BTN__;
     background-image: none;
-    color: #dddddd;
-    border: 1px solid #383838;
-    border-radius: 5px;
+    color: __FG_MAIN__;
+    border: 1px solid __BORDER_COL__;
+    border-radius: 6px;
     padding: 6px 13px;
     font-weight: 600;
     font-size: 12.5px;
@@ -361,10 +361,10 @@ button.scale-pill:checked {
 }
 
 button.color-preset-btn {
-    background-color: #202020;
+    background-color: __BG_BTN__;
     background-image: none;
-    color: #f0f0f0;
-    border: 1px solid #353535;
+    color: __FG_MAIN__;
+    border: 1px solid __BORDER_COL__;
     border-radius: 6px;
     padding: 6px 10px;
     font-weight: 600;
@@ -372,19 +372,19 @@ button.color-preset-btn {
 }
 
 button.color-preset-btn:hover {
-    background-color: #2a2a2a;
+    background-color: __BG_HOVER__;
     border-color: __ACCENT__;
 }
 
 button.color-preset-btn:checked {
     background-color: rgba(__ACCENT_RGB__, 0.16);
-    color: #ffffff;
+    color: __FG_MAIN__;
     border: 1px solid __ACCENT__;
 }
 
 switch {
-    background-color: #2d2d2d;
-    border: 1px solid #3f3f3f;
+    background-color: __BG_BTN__;
+    border: 1px solid __BORDER_COL__;
     border-radius: 12px;
 }
 
@@ -394,7 +394,7 @@ switch:checked {
 }
 
 switch slider {
-    background-color: #f5f5f5;
+    background-color: #ffffff;
     border-radius: 10px;
 }
 
@@ -404,25 +404,25 @@ scale highlight {
 }
 
 scale trough {
-    background-color: #2c2c2c;
+    background-color: __BG_BTN__;
     border-radius: 3px;
     min-height: 6px;
 }
 
 scale slider {
     background-color: __ACCENT__;
-    border: 2px solid #111111;
+    border: 2px solid __BG_WIN__;
     border-radius: 10px;
     min-width: 16px;
     min-height: 16px;
 }
 
 entry, combobox button {
-    background-color: #121212;
+    background-color: __BG_ENTRY__;
     background-image: none;
-    color: #ffffff;
-    border: 1px solid #383838;
-    border-radius: 5px;
+    color: __FG_MAIN__;
+    border: 1px solid __BORDER_COL__;
+    border-radius: 6px;
     padding: 6px 10px;
     font-size: 12.5px;
 }
@@ -434,9 +434,9 @@ entry:focus {
 menu,
 combobox menu,
 combobox window menu {
-    background-color: #181825;
+    background-color: __BG_CARD__;
     background-image: none;
-    color: #cdd6f4;
+    color: __FG_MAIN__;
     border: 1px solid rgba(__ACCENT_RGB__, 0.45);
     border-radius: 6px;
     padding: 4px 0;
@@ -446,7 +446,7 @@ menu menuitem,
 combobox menuitem {
     background-color: transparent;
     background-image: none;
-    color: #cdd6f4;
+    color: __FG_MAIN__;
     padding: 6px 12px;
     font-size: 12.5px;
 }
@@ -454,18 +454,18 @@ combobox menuitem {
 menu menuitem label,
 combobox menuitem label,
 combobox cellview {
-    color: #cdd6f4;
+    color: __FG_MAIN__;
 }
 
 menu menuitem:hover,
 combobox menuitem:hover {
     background-color: rgba(__ACCENT_RGB__, 0.22);
-    color: #ffffff;
+    color: __FG_MAIN__;
 }
 
 menu menuitem:hover label,
 combobox menuitem:hover label {
-    color: #ffffff;
+    color: __FG_MAIN__;
 }
 
 .settings-sidebar row,
@@ -493,14 +493,52 @@ window.no-animations * {
 _SETTINGS_CSS_PROVIDER = None
 
 
-def get_settings_css(accent_hex: str = DEFAULT_ACCENT_COLOR) -> str:
+def get_current_theme_mode() -> str:
+    panel_json = os.path.join(okay_config_dir(), "panel.json")
+    candidates = (panel_json, okay_template_file("panel.json"))
+    for path in candidates:
+        if path and os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    parsed = json.load(f)
+                if isinstance(parsed, dict) and "theme_mode" in parsed:
+                    m = str(parsed["theme_mode"]).strip().lower()
+                    if m in ("dark", "light"):
+                        return m
+            except Exception:
+                pass
+    return "dark"
+
+
+def get_settings_css(accent_hex: str = DEFAULT_ACCENT_COLOR, theme_mode: str = None) -> str:
     clean = sanitize_hex_color(accent_hex)
+    mode = (theme_mode or get_current_theme_mode() or "dark").lower()
     r, g, b = parse_hex_rgb(clean)
     hover = compute_hover_hex(clean)
     contrast = compute_contrast_text(clean)
-    bg_win = blend_hex_color("#111111", clean, 0.035)
-    bg_sidebar = blend_hex_color("#151515", clean, 0.045)
-    bg_card = blend_hex_color("#1a1a1a", clean, 0.045)
+    if mode == "light":
+        bg_win = blend_hex_color("#f4f5f8", clean, 0.03)
+        bg_sidebar = blend_hex_color("#ebedf2", clean, 0.04)
+        bg_card = "#ffffff"
+        bg_list = "#f8f9fc"
+        bg_btn = "#e6e8f0"
+        bg_hover = "#dcdff0"
+        bg_entry = "#ffffff"
+        fg_main = "#181825"
+        fg_sub = "#4c4f69"
+        border_col = "#d0d4e0"
+    else:
+        bg_win = blend_hex_color("#111111", clean, 0.035)
+        bg_sidebar = blend_hex_color("#151515", clean, 0.045)
+        bg_card = blend_hex_color("#1a1a1a", clean, 0.045)
+        bg_list = "#161616"
+        bg_btn = "#242424"
+        bg_hover = "#2c2c34"
+        bg_entry = "#121212"
+        fg_main = "#f5f5f5"
+        fg_sub = "#bac2de"
+        border_col = "#282828"
+
     return (
         SETTINGS_CSS_TEMPLATE
         .replace("__ACCENT__", clean)
@@ -510,6 +548,13 @@ def get_settings_css(accent_hex: str = DEFAULT_ACCENT_COLOR) -> str:
         .replace("__BG_WIN__", bg_win)
         .replace("__BG_SIDEBAR__", bg_sidebar)
         .replace("__BG_CARD__", bg_card)
+        .replace("__BG_LIST__", bg_list)
+        .replace("__BG_BTN__", bg_btn)
+        .replace("__BG_HOVER__", bg_hover)
+        .replace("__BG_ENTRY__", bg_entry)
+        .replace("__FG_MAIN__", fg_main)
+        .replace("__FG_SUB__", fg_sub)
+        .replace("__BORDER_COL__", border_col)
     )
 
 
@@ -528,11 +573,12 @@ def get_current_accent_color() -> str:
     return DEFAULT_ACCENT_COLOR
 
 
-def apply_settings_css(accent_hex: str = None):
-    """Rejestruje lub przeładowuje dynamiczny styl CSS OKsavi Linux dla okna OKay Settings."""
+def apply_settings_css(accent_hex: str = None, theme_mode: str = None):
+    """Rejestruje lub przeładowuje dynamiczny styl CSS OKay DE dla okna OKay Settings."""
     global _SETTINGS_CSS_PROVIDER
     target_hex = sanitize_hex_color(accent_hex) if accent_hex else get_current_accent_color()
-    css_data = get_settings_css(target_hex).encode("utf-8")
+    target_mode = theme_mode if theme_mode in ("dark", "light") else get_current_theme_mode()
+    css_data = get_settings_css(target_hex, target_mode).encode("utf-8")
     if _SETTINGS_CSS_PROVIDER is None:
         _SETTINGS_CSS_PROVIDER = Gtk.CssProvider()
         screen = Gdk.Screen.get_default()
@@ -724,14 +770,36 @@ class SystemHelper:
 # ============================================================================
 
 DEFAULT_PANEL_CONFIG = {
+    "theme_mode": "dark",
     "icon_only": True,
     "show_labels": False,
     "position": "bottom",
     "mode": "panel",
+    "floating": False,
+    "height": 44,
+    "opacity": 0.90,
     "animations": True,
+    "reduce_motion": False,
+    "animation_speed": 1.0,
+    "open_effect": "zoom",
+    "minimize_effect": "squeezimize",
+    "blur_enabled": False,
+    "wobbly_enabled": False,
+    "window_opacity": 1.0,
+    "focus_mode": False,
+    "idle_timeout": 600,
+    "workspace_count": 3,
     "accent_color": DEFAULT_ACCENT_COLOR,
     "window_buttons_style": "rectangles",
-    "window_corner_radius": 0,
+    "window_corner_radius": 12,
+    "window_rounding": 12,
+    "show_clock": True,
+    "show_seconds": False,
+    "show_volume": True,
+    "show_network": True,
+    "show_battery": True,
+    "show_sysload": True,
+    "show_workspaces": True,
     "pinned_apps": [
         {
             "app_id": "foot",
@@ -1045,31 +1113,128 @@ def atomic_copy_file(src_path: str, dest_path: str, mode: int = None) -> None:
 
 
 def normalize_panel_config(cfg: dict) -> dict:
+    """Waliduje typy, migruje schemat ze starszych wersji i zapewnia bezpieczny fallback ustawień."""
     data = copy.deepcopy(DEFAULT_PANEL_CONFIG)
-    if isinstance(cfg, dict):
-        data.update(cfg)
-    if "icon_only" in data:
-        icon_only = bool(data["icon_only"])
-    elif "show_labels" in data:
-        icon_only = not bool(data["show_labels"])
+    raw = cfg if isinstance(cfg, dict) else {}
+    data.update(raw)
+
+    theme_mode = str(data.get("theme_mode", "dark")).strip().lower()
+    data["theme_mode"] = "light" if theme_mode == "light" else "dark"
+
+    if "icon_only" in raw:
+        icon_only = bool(raw["icon_only"])
+    elif "show_labels" in raw:
+        icon_only = not bool(raw["show_labels"])
     else:
-        icon_only = True
+        icon_only = bool(data.get("icon_only", True))
     data["icon_only"] = icon_only
     data["show_labels"] = not icon_only
+
     pos = str(data.get("position", "bottom")).lower()
     data["position"] = "top" if pos == "top" else "bottom"
-    mode = str(data.get("mode", "panel")).lower()
-    data["mode"] = "dock" if mode == "dock" else "panel"
-    data["animations"] = bool(data.get("animations", True))
+
+    if "mode" in raw:
+        mode = "dock" if str(raw["mode"]).lower() == "dock" else "panel"
+        floating = (mode == "dock")
+    elif "floating" in raw:
+        floating = bool(raw["floating"])
+        mode = "dock" if floating else "panel"
+    else:
+        mode = "panel"
+        floating = False
+    data["mode"] = mode
+    data["floating"] = floating
+
+    try:
+        data["height"] = max(32, min(72, int(data.get("height", 44))))
+    except Exception:
+        data["height"] = 44
+
+    try:
+        data["opacity"] = max(0.20, min(1.00, round(float(data.get("opacity", 0.90)), 2)))
+    except Exception:
+        data["opacity"] = 0.90
+
+    # Synchronizacja reduce_motion <-> animations
+    if "reduce_motion" in raw and "animations" not in raw:
+        reduce_motion = bool(raw["reduce_motion"])
+        animations = not reduce_motion
+    elif "animations" in raw and "reduce_motion" not in raw:
+        animations = bool(raw["animations"])
+        reduce_motion = not animations
+    else:
+        reduce_motion = bool(data.get("reduce_motion", False))
+        animations = not reduce_motion
+    data["reduce_motion"] = reduce_motion
+    data["animations"] = animations
+
+    try:
+        speed = float(data.get("animation_speed", 1.0))
+        data["animation_speed"] = max(0.5, min(2.0, round(speed, 2)))
+    except Exception:
+        data["animation_speed"] = 1.0
+
+    open_eff = str(data.get("open_effect", "zoom")).strip().lower()
+    data["open_effect"] = open_eff if open_eff in ("zoom", "fade", "fire", "none") else "zoom"
+
+    min_eff = str(data.get("minimize_effect", "squeezimize")).strip().lower()
+    data["minimize_effect"] = min_eff if min_eff in ("squeezimize", "zoom", "fade", "blinds", "none") else "squeezimize"
+
+    data["blur_enabled"] = bool(data.get("blur_enabled", False))
+    data["wobbly_enabled"] = bool(data.get("wobbly_enabled", False))
+
+    try:
+        w_op = float(data.get("window_opacity", 1.0))
+        data["window_opacity"] = max(0.50, min(1.00, round(w_op, 2)))
+    except Exception:
+        data["window_opacity"] = 1.0
+
+    data["focus_mode"] = bool(data.get("focus_mode", False))
+
+    try:
+        idle_s = int(data.get("idle_timeout", 600))
+        data["idle_timeout"] = max(0, min(7200, idle_s))
+    except Exception:
+        data["idle_timeout"] = 600
+
+    try:
+        ws_cnt = int(data.get("workspace_count", 3))
+        data["workspace_count"] = max(1, min(9, ws_cnt))
+    except Exception:
+        data["workspace_count"] = 3
+
     raw_accent = str(data.get("accent_color", DEFAULT_ACCENT_COLOR)).strip()
     data["accent_color"] = sanitize_hex_color(raw_accent, DEFAULT_ACCENT_COLOR)
+
     btn_style = str(data.get("window_buttons_style", "rectangles")).lower()
-    data["window_buttons_style"] = btn_style if btn_style in ("rectangles", "circles_left", "circles_right", "windows") else "rectangles"
+    data["window_buttons_style"] = (
+        btn_style if btn_style in ("rectangles", "circles_left", "circles_right", "windows") else "rectangles"
+    )
+
     try:
-        radius = int(data.get("window_corner_radius", 0))
-        data["window_corner_radius"] = radius if 0 <= radius <= 32 else 0
+        if "window_corner_radius" in raw:
+            radius = int(raw["window_corner_radius"])
+        elif "window_rounding" in raw:
+            radius = int(raw["window_rounding"])
+        else:
+            radius = int(data.get("window_corner_radius", 12))
+        radius = max(0, min(32, radius))
     except Exception:
-        data["window_corner_radius"] = 0
+        radius = 12
+    data["window_corner_radius"] = radius
+    data["window_rounding"] = radius
+
+    for flag_key in (
+        "show_clock",
+        "show_seconds",
+        "show_volume",
+        "show_network",
+        "show_battery",
+        "show_sysload",
+        "show_workspaces",
+    ):
+        data[flag_key] = bool(data.get(flag_key, DEFAULT_PANEL_CONFIG.get(flag_key, True)))
+
     if not isinstance(data.get("pinned_apps"), list):
         data["pinned_apps"] = copy.deepcopy(DEFAULT_PANEL_CONFIG["pinned_apps"])
     return data
@@ -1667,13 +1832,23 @@ def _get_button_layouts(buttons_style: str) -> tuple:
     return "minimize maximize close", ":minimize,maximize,close"
 
 
-def sync_gtk_settings(decoration_layout: str = None, animations: bool = None) -> None:
+def sync_gtk_settings(decoration_layout: str = None, animations: bool = None, theme_mode: str = None) -> None:
     """Aktualizuje ~/.config/gtk-3.0/settings.ini oraz gtk-4.0/settings.ini, zachowując spójność układu przycisków i motywu."""
     updates = {}
     if decoration_layout is not None:
         updates["gtk-decoration-layout"] = decoration_layout
     if animations is not None:
         updates["gtk-enable-animations"] = "1" if animations else "0"
+    if theme_mode is not None:
+        is_light = (str(theme_mode).lower() == "light")
+        updates["gtk-application-prefer-dark-theme"] = "0" if is_light else "1"
+        updates["gtk-theme-name"] = "Adwaita" if is_light else "Adwaita-dark"
+        updates["gtk-icon-theme-name"] = "Papirus" if is_light else "Papirus-Dark"
+        if shutil.which("gsettings"):
+            color_scheme = "prefer-light" if is_light else "prefer-dark"
+            gtk_theme = "Adwaita" if is_light else "Adwaita-dark"
+            run_cmd(["gsettings", "set", "org.gnome.desktop.interface", "color-scheme", color_scheme], timeout=2)
+            run_cmd(["gsettings", "set", "org.gnome.desktop.interface", "gtk-theme", gtk_theme], timeout=2)
 
     for gtk_ver in ("gtk-3.0", "gtk-4.0"):
         ini_path = os.path.join(xdg_config_home(), gtk_ver, "settings.ini")
@@ -1724,13 +1899,38 @@ def sync_gnome_wm_button_layout(gtk_layout: str) -> None:
     run_cmd(["gsettings", "set", "org.gnome.desktop.wm.preferences", "button-layout", gtk_layout], timeout=2)
 
 
+def sync_flatpak_environment(theme_mode: str = "dark") -> None:
+    """Synchronizuje w tle uprawnienia i zmienne sandboxa Flatpaka z motywem oraz arkuszami CSS OKay DE."""
+    if not shutil.which("flatpak"):
+        return
+    gtk_theme = "Adwaita" if str(theme_mode).lower() == "light" else "Adwaita-dark"
+
+    def _worker():
+        run_cmd([
+            "flatpak", "override", "--user",
+            "--filesystem=xdg-config/gtk-3.0:ro",
+            "--filesystem=xdg-config/gtk-4.0:ro",
+            "--filesystem=xdg-config/okay-de:ro",
+            "--env=GTK_CSD=0",
+            f"--env=GTK_THEME={gtk_theme}",
+            "--env=XCURSOR_THEME=Adwaita",
+            "--env=XCURSOR_SIZE=24",
+        ], timeout=6)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def apply_window_decorations(
     buttons_style: str = None,
     corner_radius: int = None,
     accent_hex: str = None,
+    theme_mode: str = None,
     _from_ensure: bool = False,
 ) -> dict:
-    """Zapisuje styl przycisków, zaokrąglenie ramek okien i kolory akcentu w Wayfire, pixdecor, GTK oraz GSettings."""
+    """
+    Zapisuje styl przycisków, zaokrąglenie ramek okien, motyw (dark/light) i kolor akcentu
+    w Wayfire ([decoration], [pixdecor]), GTK3/GTK4/libadwaita CSS, settings.ini, GSettings oraz Flatpaku.
+    """
     if not _from_ensure:
         ensure_user_configs()
     panel_file = os.path.join(okay_config_dir(), "panel.json")
@@ -1751,28 +1951,65 @@ def apply_window_decorations(
         buttons_style = "rectangles"
 
     if corner_radius is None:
-        corner_radius = cfg.get("window_corner_radius", 0)
+        corner_radius = cfg.get("window_corner_radius", cfg.get("window_rounding", 12))
     try:
         corner_radius = max(0, min(32, int(corner_radius)))
     except Exception:
-        corner_radius = 0
+        corner_radius = 12
 
     if accent_hex is None:
         accent_hex = cfg.get("accent_color", DEFAULT_ACCENT_COLOR)
     accent_hex = sanitize_hex_color(accent_hex)
 
+    if theme_mode is None:
+        theme_mode = cfg.get("theme_mode", "dark")
+    theme_mode = "light" if str(theme_mode).lower() == "light" else "dark"
+
     cfg["window_buttons_style"] = buttons_style
     cfg["window_corner_radius"] = corner_radius
+    cfg["window_rounding"] = corner_radius
     cfg["accent_color"] = accent_hex
+    cfg["theme_mode"] = theme_mode
     atomic_write_json(panel_file, normalize_panel_config(cfg))
 
     wf_layout, pix_layout = _get_button_layouts(buttons_style)
     contrast_text = compute_contrast_text(accent_hex)
     svg_opts = _ensure_window_button_svgs(buttons_style, accent_hex)
 
-    # Synchronizacja układu przycisków w GTK3/GTK4 settings.ini oraz GSettings (przeglądarki, Flatpak, libadwaita)
-    sync_gtk_settings(decoration_layout=pix_layout)
+    # Synchronizacja układu przycisków i motywu w GTK3/GTK4 settings.ini, GSettings oraz Flatpaku
+    sync_gtk_settings(decoration_layout=pix_layout, theme_mode=theme_mode)
     sync_gnome_wm_button_layout(pix_layout)
+    sync_flatpak_environment(theme_mode=theme_mode)
+
+    is_light = (theme_mode == "light")
+    win_bg = "#f4f5f8" if is_light else "#181825"
+    win_fg = "#181825" if is_light else "#f2f2f7"
+    hdr_bg = blend_hex_color("#ebedf2" if is_light else "#1e1e2e", accent_hex, 0.08)
+    hdr_backdrop = "#e2e4ec" if is_light else "#14141d"
+    card_bg = "#ffffff" if is_light else "#1e1e2e"
+    btn_bg = "#dce0ec" if is_light else "#313244"
+    btn_border = "#bcc2d6" if is_light else "#45475a"
+
+    # Zmienne kolorystyczne libadwaita / GTK4 + GTK3 dla pełnej spójności aplikacji CSD i Flatpak
+    adw_color_defs = (
+        f"@define-color accent_color {accent_hex};\n"
+        f"@define-color accent_bg_color {accent_hex};\n"
+        f"@define-color accent_fg_color {contrast_text};\n"
+        f"@define-color window_bg_color {win_bg};\n"
+        f"@define-color window_fg_color {win_fg};\n"
+        f"@define-color view_bg_color {card_bg};\n"
+        f"@define-color view_fg_color {win_fg};\n"
+        f"@define-color headerbar_bg_color {hdr_bg};\n"
+        f"@define-color headerbar_fg_color {win_fg};\n"
+        f"@define-color headerbar_border_color {accent_hex};\n"
+        f"@define-color headerbar_backdrop_color {hdr_backdrop};\n"
+        f"@define-color card_bg_color {card_bg};\n"
+        f"@define-color card_fg_color {win_fg};\n"
+        f"@define-color popover_bg_color {card_bg};\n"
+        f"@define-color popover_fg_color {win_fg};\n"
+        f"@define-color dialog_bg_color {win_bg};\n"
+        f"@define-color dialog_fg_color {win_fg};\n"
+    )
 
     # Stylizacja przycisków okna GTK3/GTK4/libadwaita CSD (kompatybilna z rectangles / circles_* / windows)
     btn_sel = "headerbar button.titlebutton, .titlebar button.titlebutton, headerbar windowcontrols > button, windowcontrols > button"
@@ -1806,7 +2043,7 @@ def apply_window_decorations(
             f"    background-color: transparent;\n"
             f"    border: none;\n"
             f"    box-shadow: none;\n"
-            f"    color: #cdd6f4;\n"
+            f"    color: {win_fg};\n"
             f"}}\n"
             f"headerbar button.titlebutton.close:hover, .titlebar button.titlebutton.close:hover,\n"
             f"headerbar windowcontrols > button.close:hover, windowcontrols > button.close:hover {{ background-color: #e81123; color: #ffffff; }}\n"
@@ -1818,10 +2055,10 @@ def apply_window_decorations(
             f"{btn_sel} {{\n"
             f"    border-radius: 5px;\n"
             f"    background-image: none;\n"
-            f"    background-color: #313244;\n"
-            f"    border: 1px solid #45475a;\n"
+            f"    background-color: {btn_bg};\n"
+            f"    border: 1px solid {btn_border};\n"
             f"    box-shadow: none;\n"
-            f"    color: #cdd6f4;\n"
+            f"    color: {win_fg};\n"
             f"    min-width: 22px; min-height: 20px;\n"
             f"    padding: 2px; margin: 0 2px;\n"
             f"}}\n"
@@ -1833,11 +2070,12 @@ def apply_window_decorations(
             f"headerbar windowcontrols > button:not(.close):hover, windowcontrols > button:not(.close):hover {{ background-color: {accent_hex}; border-color: {accent_hex}; color: {contrast_text}; }}\n"
         )
 
-    # Wymuszenie zaokrąglenia narożników i koloru ramki w aplikacjach GTK3 / GTK4
+    # Wymuszenie zaokrąglenia narożników, palety barw i koloru ramki w aplikacjach GTK3 / GTK4 / libadwaita
     marker_start = "/* OKAY-DE-CORNERS-START */"
     marker_end = "/* OKAY-DE-CORNERS-END */"
     gtk3_block = (
         f"{marker_start}\n"
+        f"{adw_color_defs}"
         f"window, window.background, window.csd, window.ssd, window.solid-csd,\n"
         f"decoration, messagedialog, dialog, popover > contents, menu {{\n"
         f"    border-radius: {corner_radius}px;\n"
@@ -1846,7 +2084,17 @@ def apply_window_decorations(
         f"    border: 2px solid {accent_hex};\n"
         f"}}\n"
         f"window.csd decoration:backdrop {{\n"
-        f"    border-color: #313244;\n"
+        f"    border-color: {btn_border};\n"
+        f"}}\n"
+        f"headerbar, .titlebar {{\n"
+        f"    background-color: {hdr_bg};\n"
+        f"    background-image: none;\n"
+        f"    color: {win_fg};\n"
+        f"    border-top-left-radius: {corner_radius}px;\n"
+        f"    border-top-right-radius: {corner_radius}px;\n"
+        f"}}\n"
+        f"headerbar:backdrop, .titlebar:backdrop {{\n"
+        f"    background-color: {hdr_backdrop};\n"
         f"}}\n"
         f"headerbar:not(.backdrop), .titlebar:not(.backdrop) {{\n"
         f"    border-bottom: 2px solid {accent_hex};\n"
@@ -1860,6 +2108,7 @@ def apply_window_decorations(
     )
     gtk4_block = (
         f"{marker_start}\n"
+        f"{adw_color_defs}"
         f"window, window.background, window.csd, window.ssd, window.solid-csd,\n"
         f"decoration, messagedialog, dialog, popover > contents {{\n"
         f"    border-radius: {corner_radius}px;\n"
@@ -1869,7 +2118,15 @@ def apply_window_decorations(
         f"    border: 2px solid {accent_hex};\n"
         f"}}\n"
         f"window.csd decoration:backdrop {{\n"
-        f"    border-color: #313244;\n"
+        f"    border-color: {btn_border};\n"
+        f"}}\n"
+        f"headerbar, .titlebar {{\n"
+        f"    background-color: {hdr_bg};\n"
+        f"    background-image: none;\n"
+        f"    color: {win_fg};\n"
+        f"}}\n"
+        f"headerbar:backdrop, .titlebar:backdrop {{\n"
+        f"    background-color: {hdr_backdrop};\n"
         f"}}\n"
         f"headerbar:not(.backdrop), .titlebar:not(.backdrop) {{\n"
         f"    border-bottom: 2px solid {accent_hex};\n"
@@ -1913,11 +2170,14 @@ def apply_window_decorations(
 
     # Aktualizacja Wayfire (~/.config/wayfire.ini: format float RGBA wymagany przez wf-config)
     ensure_wayfire_decorator_plugin()
+    inactive_hex = "#d0d4e0" if is_light else "#313244"
+    pix_bg_hex = "#ebedf2" if is_light else "#1e1e2e"
     update_wayfire_section("decoration", {
         "button_order": wf_layout,
         "active_color": hex_to_wf_rgba(accent_hex, 1.0),
-        "inactive_color": hex_to_wf_rgba("#313244", 1.0),
+        "inactive_color": hex_to_wf_rgba(inactive_hex, 1.0),
         "border_size": "2",
+        "ignore_views": "none",
     })
     pix_updates = {
         "titlebar": "true",
@@ -1928,9 +2188,9 @@ def apply_window_decorations(
         "always_decorate": "all",
         "button_layout": pix_layout,
         "fg_color": hex_to_wf_rgba(accent_hex, 1.0),
-        "bg_color": hex_to_wf_rgba("#1e1e2e", 1.0),
+        "bg_color": hex_to_wf_rgba(pix_bg_hex, 1.0),
         "fg_text_color": hex_to_wf_rgba(contrast_text, 1.0),
-        "bg_text_color": "0.6510 0.6784 0.7843 1.0000",
+        "bg_text_color": "0.2500 0.2700 0.3500 1.0000" if is_light else "0.6510 0.6784 0.7843 1.0000",
         "effect_color": hex_to_wf_rgba(accent_hex, 1.0),
         "maximized_borders": "true",
         "maximized_shadows": "true",
@@ -1949,33 +2209,237 @@ def apply_window_decorations(
         "status": "ok",
         "buttons_style": buttons_style,
         "corner_radius": corner_radius,
+        "theme_mode": theme_mode,
         "layout": wf_layout,
         "pixdecor_active": is_pixdecor_installed(),
     }
 
 
-def sync_gtk_animations(enabled: bool) -> None:
-    """Synchronizuje animacje GTK (settings.ini) oraz kompozytora Wayfire (~/.config/wayfire.ini)."""
-    sync_gtk_settings(animations=bool(enabled))
-
-    if enabled:
-        update_wayfire_section("animate", {
-            "open_animation": "zoom",
-            "close_animation": "zoom",
-            "minimize_animation": "squeezimize",
-            "duration": "220",
-            "zoom_duration": "220",
-            "fade_duration": "180",
-            "squeezimize_duration": "250",
-            "fade_enabled_for": '(type is "overlay" | (type is "x-or" & focusable is true))',
-        })
+def apply_wayfire_animations_and_effects(cfg: dict = None) -> dict:
+    """
+    Synchronizuje na żywo silnik animacji Wayfire ([animate], [vswitch], [expo], [grid], [switcher]),
+    efekty kompozytora ([blur], [wobbly], [window-rules]) oraz liczbę obszarów roboczych i blokadę ekranu ([idle]).
+    """
+    if cfg is None:
+        panel_file = os.path.join(okay_config_dir(), "panel.json")
+        raw_cfg = {}
+        if os.path.isfile(panel_file):
+            try:
+                with open(panel_file, "r", encoding="utf-8") as f:
+                    raw_cfg = json.load(f)
+            except Exception:
+                raw_cfg = {}
+        cfg = normalize_panel_config(raw_cfg)
     else:
+        cfg = normalize_panel_config(cfg)
+
+    reduce_motion = bool(cfg.get("reduce_motion", False))
+    speed = max(0.5, min(2.0, float(cfg.get("animation_speed", 1.0))))
+    open_eff = str(cfg.get("open_effect", "zoom"))
+    min_eff = str(cfg.get("minimize_effect", "squeezimize"))
+    blur_enabled = bool(cfg.get("blur_enabled", False))
+    wobbly_enabled = bool(cfg.get("wobbly_enabled", False))
+    win_opacity = max(0.50, min(1.00, float(cfg.get("window_opacity", 1.0))))
+    ws_count = max(1, min(9, int(cfg.get("workspace_count", 3))))
+    idle_timeout = max(0, min(7200, int(cfg.get("idle_timeout", 600))))
+    accent_hex = sanitize_hex_color(cfg.get("accent_color", DEFAULT_ACCENT_COLOR))
+
+    # Synchronizacja natywnego kontrolera animacji w samym procesie Pythona
+    try:
+        for p in [os.path.abspath(os.path.join(os.path.dirname(__file__), "..")), xdg_bin_home()]:
+            if os.path.isdir(os.path.join(p, "panel")) and p not in sys.path:
+                sys.path.insert(0, p)
+        from panel.animations import configure_animations
+        configure_animations(reduce_motion=reduce_motion, speed_multiplier=speed)
+    except Exception:
+        pass
+
+    sync_gtk_settings(animations=(not reduce_motion))
+
+    def _scaled_ms(base_ms: int, curve: str = "circle") -> str:
+        if reduce_motion:
+            return f"1ms {curve}"
+        ms = max(30, int(round(float(base_ms) / speed)))
+        return f"{ms}ms {curve}"
+
+    if reduce_motion or open_eff == "none":
         update_wayfire_section("animate", {
             "open_animation": "none",
             "close_animation": "none",
             "minimize_animation": "none",
             "fade_enabled_for": "none",
         })
+    else:
+        update_wayfire_section("animate", {
+            "open_animation": open_eff,
+            "close_animation": open_eff,
+            "minimize_animation": min_eff,
+            "duration": _scaled_ms(180, "circle"),
+            "startup_duration": _scaled_ms(260, "circle"),
+            "fade_duration": _scaled_ms(150, "circle"),
+            "zoom_duration": _scaled_ms(180, "circle"),
+            "fire_duration": _scaled_ms(220, "linear"),
+            "squeezimize_duration": _scaled_ms(160, "linear"),
+            "fire_color": hex_to_wf_rgba(accent_hex, 1.0),
+            "fade_enabled_for": '(type is "overlay" | (type is "x-or" & focusable is true))',
+        })
+
+    update_wayfire_section("vswitch", {"duration": _scaled_ms(180, "circle")})
+    update_wayfire_section("expo", {"duration": _scaled_ms(200, "circle")})
+    update_wayfire_section("grid", {"duration": _scaled_ms(160, "circle")})
+    update_wayfire_section("switcher", {"speed": _scaled_ms(180, "circle")})
+
+    # Aktualizacja [core]: vwidth, preferred_decoration_mode oraz dynamiczne wtyczki (blur, wobbly)
+    plugins_str = read_wayfire_value(
+        "core",
+        "plugins",
+        "alpha animate autostart blur command decoration expo fast-switcher foreign-toplevel grid gtk-shell idle move place resize switcher vswitch window-rules wm-actions xdg-activation",
+    )
+    tokens = [t for t in plugins_str.split() if t]
+    if wobbly_enabled and not reduce_motion:
+        if "wobbly" not in tokens:
+            tokens.append("wobbly")
+    else:
+        tokens = [t for t in tokens if t != "wobbly"]
+
+    if blur_enabled:
+        if "blur" not in tokens:
+            tokens.append("blur")
+    update_wayfire_section("core", {
+        "plugins": " ".join(tokens),
+        "vwidth": str(ws_count),
+        "preferred_decoration_mode": "server",
+    })
+
+    update_wayfire_section("blur", {
+        "mode": "normal" if blur_enabled else "none",
+        "method": "kawase",
+        "kawase_offset": "2.0",
+        "kawase_degrade": "2",
+        "kawase_iterations": "2",
+    })
+
+    # Reguły przezroczystości okien ([window-rules])
+    wr_updates = {
+        "rule_panel_ignore": 'on created if app_id is "okay-panel" then set alpha 1.0',
+    }
+    if win_opacity < 0.995:
+        wr_updates["rule_global_opacity"] = (
+            f'on created if !(app_id is "okay-panel") then set alpha {win_opacity:.2f}'
+        )
+    update_wayfire_section(
+        "window-rules",
+        wr_updates,
+        remove_keys={"rule_global_opacity"} if win_opacity >= 0.995 else None,
+    )
+
+    update_wayfire_section("idle", {
+        "screensaver_timeout": str(idle_timeout) if idle_timeout > 0 else "-1",
+        "dpms_timeout": str(idle_timeout + 300) if idle_timeout > 0 else "-1",
+    })
+
+    return {
+        "reduce_motion": reduce_motion,
+        "animation_speed": speed,
+        "open_effect": open_eff,
+        "minimize_effect": min_eff,
+        "blur_enabled": blur_enabled,
+        "wobbly_enabled": wobbly_enabled,
+        "window_opacity": win_opacity,
+    }
+
+
+def apply_wayfire_outputs(outputs_config: list) -> bool:
+    """
+    Zapisuje konfigurację monitorów w sekcjach `[output:<name>]` w `~/.config/wayfire.ini`,
+    zapewniając trwałość układu wielomonitorowego, rozdzielczości, odświeżania Hz oraz skalowania ułamkowego.
+    """
+    if not isinstance(outputs_config, list):
+        return False
+    ok_all = True
+    for out in outputs_config:
+        if not isinstance(out, dict):
+            continue
+        name = str(out.get("name", "")).strip()
+        if not name:
+            continue
+        sec_name = f"output:{name}"
+        enabled = bool(out.get("enabled", True))
+        if not enabled:
+            ok_all = update_wayfire_section(sec_name, {"mode": "off"}) and ok_all
+            continue
+        w = int(out.get("width", 1920))
+        h = int(out.get("height", 1080))
+        hz = float(out.get("refresh", 60.0))
+        hz_int = int(round(hz * 1000)) if hz < 1000 else int(round(hz))
+        scale = float(out.get("scale", 1.0))
+        pos_x = int(out.get("x", 0))
+        pos_y = int(out.get("y", 0))
+        transform = str(out.get("transform", "normal")).strip() or "normal"
+        ok_all = update_wayfire_section(sec_name, {
+            "mode": f"{w}x{h}@{hz_int}",
+            "scale": f"{scale:.2f}",
+            "position": f"{pos_x},{pos_y}",
+            "transform": transform,
+        }) and ok_all
+    return ok_all
+
+
+def set_focus_mode(enabled: bool) -> bool:
+    """Włącza lub wyłącza Tryb Skupienia (Do Not Disturb) w demonie powiadomień mako i zapisuje stan w panel.json."""
+    focus = bool(enabled)
+    if shutil.which("makoctl"):
+        if focus:
+            run_cmd(["makoctl", "mode", "-a", "do-not-disturb"], timeout=2)
+        else:
+            run_cmd(["makoctl", "mode", "-r", "do-not-disturb"], timeout=2)
+    try:
+        get_state_manager().update({"focus_mode": focus}, sync_wayfire=False)
+    except Exception:
+        pass
+    return focus
+
+
+def sync_gtk_animations(enabled: bool) -> None:
+    """Synchronizuje animacje GTK (settings.ini) oraz kompozytora Wayfire (~/.config/wayfire.ini)."""
+    panel_file = os.path.join(okay_config_dir(), "panel.json")
+    cfg = {}
+    if os.path.isfile(panel_file):
+        try:
+            with open(panel_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = copy.deepcopy(DEFAULT_PANEL_CONFIG)
+    cfg["animations"] = bool(enabled)
+    cfg["reduce_motion"] = not bool(enabled)
+    norm = normalize_panel_config(cfg)
+    try:
+        atomic_write_json(panel_file, norm)
+    except Exception:
+        pass
+    apply_wayfire_animations_and_effects(norm)
+
+
+def sync_startup_environment() -> None:
+    """Wykonywane przy starcie sesji OKay DE: synchronizuje dekoracje, animacje, motyw i Flatpaka."""
+    try:
+        ensure_user_configs()
+        state = get_state_manager()
+        cfg = state.get_config()
+        apply_window_decorations(
+            buttons_style=cfg.get("window_buttons_style", "rectangles"),
+            corner_radius=cfg.get("window_corner_radius", 12),
+            accent_hex=cfg.get("accent_color", DEFAULT_ACCENT_COLOR),
+            theme_mode=cfg.get("theme_mode", "dark"),
+            _from_ensure=True,
+        )
+        apply_wayfire_animations_and_effects(cfg)
+        if cfg.get("focus_mode", False):
+            set_focus_mode(True)
+    except Exception:
+        pass
 
 
 def update_system_accent_color(new_accent: str) -> dict:
@@ -1994,7 +2458,8 @@ def update_system_accent_color(new_accent: str) -> dict:
     ensure_user_configs()
     panel_file = os.path.join(okay_config_dir(), "panel.json")
     cur_btn_style = "rectangles"
-    cur_radius = 0
+    cur_radius = 12
+    cur_theme = "dark"
     try:
         cfg = {}
         if os.path.isfile(panel_file):
@@ -2004,7 +2469,8 @@ def update_system_accent_color(new_accent: str) -> dict:
             cfg = copy.deepcopy(DEFAULT_PANEL_CONFIG)
         cfg["accent_color"] = clean_hex
         cur_btn_style = cfg.get("window_buttons_style", "rectangles")
-        cur_radius = cfg.get("window_corner_radius", 0)
+        cur_radius = cfg.get("window_corner_radius", 12)
+        cur_theme = cfg.get("theme_mode", "dark")
         atomic_write_json(panel_file, normalize_panel_config(cfg))
         notes.append("panel.json")
     except Exception:
@@ -2012,7 +2478,12 @@ def update_system_accent_color(new_accent: str) -> dict:
 
     # 2. ~/.config/wayfire.ini ([decoration], [pixdecor], SVG przycisków, GTK CSS)
     try:
-        apply_window_decorations(buttons_style=cur_btn_style, corner_radius=cur_radius, accent_hex=clean_hex)
+        apply_window_decorations(
+            buttons_style=cur_btn_style,
+            corner_radius=cur_radius,
+            accent_hex=clean_hex,
+            theme_mode=cur_theme,
+        )
         notes.append("wayfire.ini")
         notes.append("decorations")
     except Exception:
@@ -2061,3 +2532,135 @@ def update_system_accent_color(new_accent: str) -> dict:
         "contrast": compute_contrast_text(clean_hex),
         "hover": compute_hover_hex(clean_hex),
     }
+
+
+class StateManager:
+    """
+    Centralny, reaktywny menedżer stanu i konfiguracji OKay DE.
+    Zapewnia:
+    - Atomowy zapis do ~/.config/okay-de/panel.json z walidacją typów i migracją schematu,
+    - Nasłuchiwanie zmian na żywo przez Gio.FileMonitor (inotify) z debouncingiem,
+    - Reaktywne powiadamianie obserwatorów UI (subscribe / unsubscribe),
+    - Automatyczną synchronizację z silnikiem animacji oraz kompozytorem Wayfire.
+    """
+
+    def __init__(self):
+        self._config_path = os.path.join(okay_config_dir(), "panel.json")
+        self._observers = []
+        self._monitor = None
+        self._debounce_id = 0
+        self._data = copy.deepcopy(DEFAULT_PANEL_CONFIG)
+        self.reload(notify=False)
+        self._setup_file_monitor()
+
+    def _setup_file_monitor(self):
+        try:
+            os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
+            gfile = Gio.File.new_for_path(self._config_path)
+            self._monitor = gfile.monitor_file(Gio.FileMonitorFlags.NONE, None)
+            self._monitor.connect("changed", self._on_file_changed)
+        except Exception:
+            self._monitor = None
+
+    def _on_file_changed(self, _monitor, _file, _other_file, event_type):
+        if event_type in (
+            Gio.FileMonitorEvent.CHANGED,
+            Gio.FileMonitorEvent.CREATED,
+            Gio.FileMonitorEvent.CHANGES_DONE_HINT,
+            Gio.FileMonitorEvent.ATTRIBUTE_CHANGED,
+        ):
+            if self._debounce_id:
+                GLib.source_remove(self._debounce_id)
+            self._debounce_id = GLib.timeout_add(80, self._debounced_reload)
+
+    def _debounced_reload(self):
+        self._debounce_id = 0
+        self.reload(notify=True)
+        return False
+
+    def reload(self, notify: bool = True) -> dict:
+        raw = {}
+        if os.path.isfile(self._config_path):
+            try:
+                with open(self._config_path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            except Exception:
+                raw = {}
+        self._data = normalize_panel_config(raw)
+        try:
+            for p in [os.path.abspath(os.path.join(os.path.dirname(__file__), "..")), xdg_bin_home()]:
+                if os.path.isdir(os.path.join(p, "panel")) and p not in sys.path:
+                    sys.path.insert(0, p)
+            from panel.animations import configure_animations
+            configure_animations(
+                reduce_motion=self._data.get("reduce_motion", False),
+                speed_multiplier=self._data.get("animation_speed", 1.0),
+            )
+        except Exception:
+            pass
+        if notify:
+            self._notify_observers()
+        return copy.deepcopy(self._data)
+
+    def get_config(self) -> dict:
+        return copy.deepcopy(self._data)
+
+    def get(self, key: str, default=None):
+        return copy.deepcopy(self._data.get(key, default))
+
+    def update(self, updates: dict, sync_wayfire: bool = True) -> dict:
+        if not isinstance(updates, dict):
+            return self.get_config()
+        merged = copy.deepcopy(self._data)
+        merged.update(updates)
+        self._data = normalize_panel_config(merged)
+        try:
+            atomic_write_json(self._config_path, self._data)
+        except Exception:
+            pass
+
+        if sync_wayfire:
+            anim_keys = {
+                "reduce_motion", "animations", "animation_speed", "open_effect",
+                "minimize_effect", "blur_enabled", "wobbly_enabled", "window_opacity",
+                "workspace_count", "idle_timeout",
+            }
+            decor_keys = {"window_buttons_style", "window_corner_radius", "window_rounding", "accent_color", "theme_mode"}
+            if anim_keys.intersection(updates.keys()):
+                apply_wayfire_animations_and_effects(self._data)
+            if decor_keys.intersection(updates.keys()):
+                apply_window_decorations(
+                    buttons_style=self._data["window_buttons_style"],
+                    corner_radius=self._data["window_corner_radius"],
+                    accent_hex=self._data["accent_color"],
+                    theme_mode=self._data["theme_mode"],
+                )
+
+        self._notify_observers()
+        return self.get_config()
+
+    def subscribe(self, callback):
+        if callable(callback) and callback not in self._observers:
+            self._observers.append(callback)
+
+    def unsubscribe(self, callback):
+        if callback in self._observers:
+            self._observers.remove(callback)
+
+    def _notify_observers(self):
+        snapshot = copy.deepcopy(self._data)
+        for cb in list(self._observers):
+            try:
+                cb(snapshot)
+            except Exception:
+                pass
+
+
+_STATE_MANAGER_INSTANCE = None
+
+
+def get_state_manager() -> StateManager:
+    global _STATE_MANAGER_INSTANCE
+    if _STATE_MANAGER_INSTANCE is None:
+        _STATE_MANAGER_INSTANCE = StateManager()
+    return _STATE_MANAGER_INSTANCE

@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 
 """
-Quick Settings Popover (okno warstwy GtkLayerShell.Layer.TOP) dla okay-panel.
-Styl: Catppuccin Mocha (#1e1e2e) + akcent OKsavi (#00e676).
+Quick Settings & Notification Center Popover (okno warstwy GtkLayerShell.Layer.TOP) dla okay-panel.
+Zawiera:
+- Kafelki szybkich przełączników: Wi-Fi, Bluetooth, Tryb Skupienia (Do Not Disturb),
+- Suwaki głośności (PipeWire / wpctl) i jasności ekranu (brightnessctl),
+- Listę sieci Wi-Fi (NetworkManager / nmcli) z wbudowanym paskiem hasła,
+- Centrum powiadomień (makoctl: aktywne powiadomienia, przywracanie z historii, czyszczenie).
 """
 
 import re
 import os
+import json
 import time
 import shutil
 import threading
@@ -15,7 +20,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("GtkLayerShell", "0.1")
-from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
+from gi.repository import Gtk, Gdk, GLib, Pango, GtkLayerShell
 
 from .animations import apply_animation_class, prepare_fade_in, start_fade_in, fade_out_and_hide, fade_widget, stop_fade
 
@@ -70,8 +75,34 @@ def _sig_icon(signal: int) -> str:
     return "network-wireless-signal-none-symbolic"
 
 
+def _parse_mako_notifications(raw_out: str) -> list:
+    """Parsuje wyjście `makoctl list` na listę słowników {id, summary, app}."""
+    items = []
+    cur = None
+    hdr_re = re.compile(r"^Notification\s+(\d+):\s*(.*)$")
+    app_re = re.compile(r"^\s*App\s+name:\s*(.*)$", re.IGNORECASE)
+    for ln in (raw_out or "").splitlines():
+        mh = hdr_re.match(ln)
+        if mh:
+            if cur:
+                items.append(cur)
+            cur = {
+                "id": mh.group(1).strip(),
+                "summary": mh.group(2).strip() or "Powiadomienie",
+                "app": "",
+            }
+            continue
+        if cur is not None:
+            ma = app_re.match(ln)
+            if ma:
+                cur["app"] = ma.group(1).strip()
+    if cur:
+        items.append(cur)
+    return items[:12]
+
+
 class QuickSettingsPopover(Gtk.Window):
-    """Lekkie okno szybkich ustawień na warstwie GtkLayerShell.Layer.TOP."""
+    """Lekkie okno szybkich ustawień i centrum powiadomień na warstwie GtkLayerShell.Layer.TOP."""
 
     def __init__(self, get_panel_pos_cb, on_volume_changed_cb=None, animations_enabled_cb=None):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
@@ -98,7 +129,7 @@ class QuickSettingsPopover(Gtk.Window):
         self.set_resizable(False)
         self.set_skip_taskbar_hint(True)
         self.set_skip_pager_hint(True)
-        self.set_default_size(340, -1)
+        self.set_default_size(360, -1)
 
         screen = self.get_screen()
         visual = screen.get_rgba_visual() if screen is not None else None
@@ -127,6 +158,27 @@ class QuickSettingsPopover(Gtk.Window):
         self.btn_refresh.connect("clicked", lambda _w: self.refresh_all(rescan_wifi=True))
         hdr.pack_end(self.btn_refresh, False, False, 0)
         root.pack_start(hdr, False, False, 0)
+
+        # Kafelki szybkich przełączników (Wi-Fi, Bluetooth, Tryb Skupienia)
+        tiles_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, homogeneous=True)
+
+        self.tile_wifi = Gtk.ToggleButton(label="Wi-Fi")
+        self.tile_wifi.get_style_context().add_class("qs-mini-btn")
+        self.tile_wifi.connect("toggled", self._on_tile_wifi_toggled)
+        tiles_box.pack_start(self.tile_wifi, True, True, 0)
+
+        self.tile_bt = Gtk.ToggleButton(label="Bluetooth")
+        self.tile_bt.get_style_context().add_class("qs-mini-btn")
+        self.tile_bt.connect("toggled", self._on_tile_bt_toggled)
+        tiles_box.pack_start(self.tile_bt, True, True, 0)
+
+        self.tile_dnd = Gtk.ToggleButton(label="Skupienie")
+        self.tile_dnd.get_style_context().add_class("qs-mini-btn")
+        self.tile_dnd.set_tooltip_text("Tryb Nie przeszkadzać (mako)")
+        self.tile_dnd.connect("toggled", self._on_tile_dnd_toggled)
+        tiles_box.pack_start(self.tile_dnd, True, True, 0)
+
+        root.pack_start(tiles_box, False, False, 0)
 
         # Suwak głośności (wpctl)
         vol_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -164,7 +216,7 @@ class QuickSettingsPopover(Gtk.Window):
         root.pack_start(wifi_sep, False, False, 0)
 
         wifi_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        lbl_wifi = Gtk.Label(label="Wi-Fi", xalign=0.0)
+        lbl_wifi = Gtk.Label(label="Sieci Wi-Fi", xalign=0.0)
         lbl_wifi.get_style_context().add_class("popover-subtitle")
         wifi_hdr.pack_start(lbl_wifi, True, True, 0)
 
@@ -179,8 +231,8 @@ class QuickSettingsPopover(Gtk.Window):
 
         self.wifi_scroll = Gtk.ScrolledWindow()
         self.wifi_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.wifi_scroll.set_min_content_height(140)
-        self.wifi_scroll.set_max_content_height(210)
+        self.wifi_scroll.set_min_content_height(115)
+        self.wifi_scroll.set_max_content_height(165)
 
         self.wifi_list = Gtk.ListBox()
         self.wifi_list.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -188,7 +240,7 @@ class QuickSettingsPopover(Gtk.Window):
         self.wifi_scroll.add(self.wifi_list)
         root.pack_start(self.wifi_scroll, True, True, 0)
 
-        # Wbudowany pasek hasła do zabezpieczonych sieci (bez walki o fokus modali na layer-shell)
+        # Wbudowany pasek hasła do zabezpieczonych sieci
         self.pwd_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.pwd_box.set_no_show_all(True)
         self.pwd_entry = Gtk.Entry()
@@ -204,6 +256,40 @@ class QuickSettingsPopover(Gtk.Window):
         btn_pwd_ok.show()
         self.pwd_box.pack_end(btn_pwd_ok, False, False, 0)
         root.pack_start(self.pwd_box, False, False, 0)
+
+        # Sekcja Centrum Powiadomień (mako)
+        notif_sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        root.pack_start(notif_sep, False, False, 0)
+
+        notif_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        lbl_notif = Gtk.Label(label="Powiadomienia", xalign=0.0)
+        lbl_notif.get_style_context().add_class("popover-subtitle")
+        notif_hdr.pack_start(lbl_notif, True, True, 0)
+
+        btn_restore = Gtk.Button(label="Historia")
+        btn_restore.get_style_context().add_class("qs-mini-btn")
+        btn_restore.set_tooltip_text("Przywróć ostatnie powiadomienie z historii (makoctl restore)")
+        btn_restore.connect("clicked", self._on_notif_restore)
+        notif_hdr.pack_end(btn_restore, False, False, 0)
+
+        btn_clear_notif = Gtk.Button(label="Wyczyść")
+        btn_clear_notif.get_style_context().add_class("qs-mini-btn")
+        btn_clear_notif.set_tooltip_text("Zamknij wszystkie powiadomienia (makoctl dismiss -a)")
+        btn_clear_notif.connect("clicked", self._on_notif_dismiss_all)
+        notif_hdr.pack_end(btn_clear_notif, False, False, 0)
+
+        root.pack_start(notif_hdr, False, False, 0)
+
+        self.notif_scroll = Gtk.ScrolledWindow()
+        self.notif_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.notif_scroll.set_min_content_height(70)
+        self.notif_scroll.set_max_content_height(120)
+
+        self.notif_list = Gtk.ListBox()
+        self.notif_list.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.notif_list.get_style_context().add_class("qs-list")
+        self.notif_scroll.add(self.notif_list)
+        root.pack_start(self.notif_scroll, False, False, 0)
 
         self.lbl_qs_status = Gtk.Label(label="", xalign=0.0)
         self.lbl_qs_status.set_line_wrap(True)
@@ -282,6 +368,132 @@ class QuickSettingsPopover(Gtk.Window):
     def refresh_all(self, rescan_wifi: bool = False):
         self._refresh_audio_and_brightness()
         self._refresh_wifi(rescan=rescan_wifi)
+        self._refresh_bt_and_notifications()
+
+    def _refresh_bt_and_notifications(self):
+        def _worker():
+            bt_on = False
+            if shutil.which("bluetoothctl"):
+                rc_b, out_b, _ = _run_cmd(["bluetoothctl", "show"], timeout=2.5)
+                if rc_b == 0:
+                    bt_on = bool(re.search(r"Powered:\s*yes", out_b, re.IGNORECASE))
+
+            dnd_on = False
+            notifs = []
+            if shutil.which("makoctl"):
+                rc_m, out_m, _ = _run_cmd(["makoctl", "mode"], timeout=2.0)
+                if rc_m == 0:
+                    dnd_on = "do-not-disturb" in out_m.splitlines()
+                rc_l, out_l, _ = _run_cmd(["makoctl", "list"], timeout=2.0)
+                if rc_l == 0:
+                    notifs = _parse_mako_notifications(out_l)
+            return (bt_on, dnd_on, notifs)
+
+        def _done(res):
+            if not res:
+                return
+            bt_on, dnd_on, notifs = res
+            self._updating_ui = True
+            self.tile_bt.set_active(bt_on)
+            self.tile_dnd.set_active(dnd_on)
+            self._updating_ui = False
+            self._populate_notif_rows(notifs, dnd_on)
+
+        _async(_worker, _done)
+
+    def _populate_notif_rows(self, notifs: list, dnd_on: bool):
+        for ch in self.notif_list.get_children():
+            self.notif_list.remove(ch)
+            ch.destroy()
+
+        if not notifs:
+            row = Gtk.ListBoxRow()
+            msg = "Tryb Skupienia aktywny • Brak nowych powiadomień" if dnd_on else "Brak aktywnych powiadomień"
+            lbl = Gtk.Label(label=msg)
+            lbl.set_margin_top(10)
+            lbl.set_margin_bottom(10)
+            lbl.get_style_context().add_class("popover-status")
+            row.add(lbl)
+            self.notif_list.add(row)
+            self.notif_list.show_all()
+            return
+
+        for item in notifs:
+            row = Gtk.ListBoxRow()
+            hb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            txt = f"{item['app']}: {item['summary']}" if item.get("app") else item["summary"]
+            lbl = Gtk.Label(label=txt, xalign=0.0)
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            lbl.get_style_context().add_class("qs-ssid")
+            hb.pack_start(lbl, True, True, 0)
+
+            btn_x = Gtk.Button(label="×")
+            btn_x.get_style_context().add_class("qs-mini-btn")
+            btn_x.connect("clicked", lambda _b, nid=item["id"]: self._dismiss_single_notif(nid))
+            hb.pack_end(btn_x, False, False, 0)
+
+            row.add(hb)
+            self.notif_list.add(row)
+
+        self.notif_list.show_all()
+
+    def _dismiss_single_notif(self, nid: str):
+        _async(
+            lambda: _run_cmd(["makoctl", "dismiss", "-n", str(nid)], timeout=2.0),
+            lambda _r: self._refresh_bt_and_notifications(),
+        )
+
+    def _on_notif_restore(self, _btn):
+        _async(
+            lambda: _run_cmd(["makoctl", "restore"], timeout=2.0),
+            lambda _r: self._refresh_bt_and_notifications(),
+        )
+
+    def _on_notif_dismiss_all(self, _btn):
+        _async(
+            lambda: _run_cmd(["makoctl", "dismiss", "-a"], timeout=2.0),
+            lambda _r: self._refresh_bt_and_notifications(),
+        )
+
+    def _on_tile_wifi_toggled(self, tb):
+        if self._updating_ui:
+            return
+        self.wifi_switch.set_active(tb.get_active())
+
+    def _on_tile_bt_toggled(self, tb):
+        if self._updating_ui or not shutil.which("bluetoothctl"):
+            return
+        enable = bool(tb.get_active())
+
+        def _w():
+            if enable and shutil.which("rfkill"):
+                _run_cmd(["rfkill", "unblock", "bluetooth"], timeout=2.5)
+            _run_cmd(["bluetoothctl", "power", "on" if enable else "off"], timeout=4.0)
+
+        _async(_w, lambda _r: self._refresh_bt_and_notifications())
+
+    def _on_tile_dnd_toggled(self, tb):
+        if self._updating_ui:
+            return
+        enable = bool(tb.get_active())
+
+        def _w():
+            if shutil.which("makoctl"):
+                _run_cmd(["makoctl", "mode", "-a" if enable else "-r", "do-not-disturb"], timeout=2.0)
+            panel_json = os.path.expanduser("~/.config/okay-de/panel.json")
+            if os.path.isfile(panel_json):
+                try:
+                    with open(panel_json, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, dict):
+                        data["focus_mode"] = enable
+                        with open(panel_json + ".tmp", "w", encoding="utf-8") as f:
+                            json.dump(data, f, indent=2, ensure_ascii=False)
+                        os.replace(panel_json + ".tmp", panel_json)
+                except Exception:
+                    pass
+
+        _async(_w, lambda _r: self._refresh_bt_and_notifications())
 
     def _refresh_audio_and_brightness(self):
         def _worker():
@@ -320,7 +532,7 @@ class QuickSettingsPopover(Gtk.Window):
                 self.vol_scale.set_value(vol_pct)
                 self.img_mute.set_from_icon_name(
                     "audio-volume-muted-symbolic" if muted else "audio-volume-high-symbolic",
-                    Gtk.IconSize.MENU
+                    Gtk.IconSize.MENU,
                 )
             self.bri_scale.set_sensitive(has_bri)
             if has_bri:
@@ -335,6 +547,7 @@ class QuickSettingsPopover(Gtk.Window):
     def _refresh_wifi(self, rescan: bool = False):
         if not shutil.which("nmcli"):
             self.wifi_switch.set_sensitive(False)
+            self.tile_wifi.set_sensitive(False)
             self._populate_wifi_rows(False, [], "Brak pakietu NetworkManager (nmcli).")
             return
 
@@ -358,7 +571,7 @@ class QuickSettingsPopover(Gtk.Window):
                 flag = "yes" if rescan else "auto"
                 rc_w, out_w, err_w = _run_cmd(
                     ["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "dev", "wifi", "list", "--rescan", flag],
-                    timeout=10.0
+                    timeout=10.0,
                 )
                 if rc_w == 0:
                     by_ssid = {}
@@ -398,6 +611,8 @@ class QuickSettingsPopover(Gtk.Window):
             self._updating_ui = True
             self.wifi_switch.set_sensitive(ok)
             self.wifi_switch.set_active(enabled)
+            self.tile_wifi.set_sensitive(ok)
+            self.tile_wifi.set_active(enabled)
             self._updating_ui = False
             self._populate_wifi_rows(enabled, nets, err_msg)
 
@@ -442,7 +657,9 @@ class QuickSettingsPopover(Gtk.Window):
             if n["secured"]:
                 hb.pack_start(
                     Gtk.Image.new_from_icon_name("network-wireless-encrypted-symbolic", Gtk.IconSize.MENU),
-                    False, False, 0
+                    False,
+                    False,
+                    0,
                 )
 
             btn = Gtk.Button(label="Rozłącz" if n["in_use"] else "Połącz")
@@ -461,7 +678,7 @@ class QuickSettingsPopover(Gtk.Window):
             self.lbl_qs_status.set_text(f"Rozłączanie {ssid}...")
             _async(
                 lambda: _run_cmd(["nmcli", "con", "down", "id", ssid], timeout=8.0),
-                lambda _r: (self.lbl_qs_status.set_text(""), self._refresh_wifi(False))
+                lambda _r: (self.lbl_qs_status.set_text(""), self._refresh_wifi(False)),
             )
             return
 
@@ -518,6 +735,9 @@ class QuickSettingsPopover(Gtk.Window):
         if self._updating_ui or not shutil.which("nmcli"):
             return
         on = switch.get_active()
+        self._updating_ui = True
+        self.tile_wifi.set_active(on)
+        self._updating_ui = False
         self._set_wifi_busy(True)
 
         def _w():
@@ -537,10 +757,12 @@ class QuickSettingsPopover(Gtk.Window):
 
     def _apply_vol(self, pct: int) -> bool:
         self._vol_debounce = 0
+
         def _w():
             _run_cmd(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{pct}%"], timeout=2.0)
             if self._on_volume_changed:
                 self._on_volume_changed()
+
         _async(_w)
         return False
 
@@ -549,6 +771,7 @@ class QuickSettingsPopover(Gtk.Window):
             _run_cmd(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"], timeout=2.0)
             if self._on_volume_changed:
                 self._on_volume_changed()
+
         _async(_w, lambda _r: self._refresh_audio_and_brightness())
 
     def _on_bri_scale(self, scale):

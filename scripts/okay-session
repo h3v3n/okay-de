@@ -1,144 +1,131 @@
-#!/bin/sh
+#!/usr/bin/env bash
+# =============================================================================
+# OKay DE — Skrypt inicjalizujący sesję Wayland (kompozytor Wayfire)
+# Wstrzykuje zmienne środowiskowe wymuszające SSD (GTK_CSD=0, Qt, Mozilla),
+# konfiguruje xdg-desktop-portal oraz synchronizuje sandbox Flatpaka.
+# =============================================================================
 
-# OKay DE - Główny skrypt startowy sesji środowiska graficznego (Wayfire)
-export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
-export XDG_CURRENT_DESKTOP=OKay:wayfire
-export XDG_SESSION_DESKTOP=OKay
-export XDG_SESSION_TYPE=wayland
+# Ścieżka do skryptów użytkownika lub systemowych
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PATH="${HOME}/.local/bin:${SCRIPT_DIR}:${PATH}"
 
-# Optymalizacja zużycia pamięci RAM w całej sesji (ograniczenie aren glibc i mostu AT-SPI)
-export MALLOC_ARENA_MAX=2
-export NO_AT_BRIDGE=1
+# Standardowe katalogi XDG
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 
-# Spójność kursorów na całym pulpicie Wayland
-# WLR_NO_HARDWARE_CURSORS=1 zapobiega niewidocznemu kursorowi na maszynach wirtualnych i kartach GPU
-export WLR_NO_HARDWARE_CURSORS=1
-export XCURSOR_THEME=Adwaita
-export XCURSOR_SIZE=24
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
 
-# Integracja zestawów narzędzi (toolkitów) z Wayland
-export MOZ_ENABLE_WAYLAND=1
+# Identyfikacja sesji Wayland dla XDG Portals, systemd i aplikacji
+export XDG_SESSION_TYPE="wayland"
+export XDG_SESSION_DESKTOP="OKay"
+export XDG_CURRENT_DESKTOP="OKay:wayfire"
+export DESKTOP_SESSION="okay"
+
+# Wymuszenie dekoracji po stronie serwera (SSD) dla GTK3/GTK4 oraz wyłączenie paska CSD GNOME
+export GTK_CSD=0
+export GDK_BACKEND="wayland,x11"
+
+# Natywne wsparcie Wayland dla Qt5/Qt6, przeglądarek (Firefox/Chromium/Electron) oraz SDL/Java
 export QT_QPA_PLATFORM="wayland;xcb"
-export GDK_BACKEND="wayland,x11,*"
-export SDL_VIDEODRIVER=wayland
-export CLUTTER_BACKEND=wayland
+export QT_AUTO_SCREEN_SCALE_FACTOR=1
+export QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+export QT_QPA_PLATFORMTHEME="qt6ct"
+export MOZ_ENABLE_WAYLAND=1
+export MOZ_GTK_TITLEBAR_DECORATION="system"
+export ELECTRON_OZONE_PLATFORM_HINT="auto"
+export NIXOS_OZONE_WL=1
+export SDL_VIDEODRIVER="wayland"
+export CLUTTER_BACKEND="wayland"
 export _JAVA_AWT_WM_NONREPARENTING=1
 
-# Wymuszenie architektury Server-Side Decorations (SSD) oraz integracja Qt6/GTK
-export GTK_CSD=0
-export GTK_THEME=Adwaita-dark
-export GTK_USE_PORTAL=0
-export QT_WAYLAND_DISABLE_WINDOWDECORATION=0
-export QT_QPA_PLATFORMTHEME="qt6ct"
+# Domyślny motyw kursora
+export XCURSOR_THEME="${XCURSOR_THEME:-Adwaita}"
+export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
 
-# Aktualizacja środowiska D-Bus dla usług systemd i portali (eliminuje 25-sekundowe opóźnienia)
-if command -v dbus-update-activation-environment >/dev/null 2>&1; then
-    dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XCURSOR_THEME XCURSOR_SIZE 2>/dev/null || true
-fi
+# -----------------------------------------------------------------------------
+# Pierwsze uruchomienie — kopiowanie domyślnych plików konfiguracyjnych
+# -----------------------------------------------------------------------------
+SYS_SHARE="/usr/share/okay-de/config"
+REPO_CONF="$(cd "${SCRIPT_DIR}/../config" 2>/dev/null && pwd || true)"
 
-# Inicjalizacja standardowych katalogów użytkownika XDG oraz pulpitu
-command -v xdg-user-dirs-update >/dev/null 2>&1 && xdg-user-dirs-update
-mkdir -p "$HOME/Desktop"
-
-# Inicjalizacja domyślnej konfiguracji ~/.config/wayfire.ini oraz ~/.config/okay-de/* z szablonów (jeśli brak)
-XDG_CFG="${XDG_CONFIG_HOME:-$HOME/.config}"
-XDG_DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
-WF_INI="$XDG_CFG/wayfire.ini"
-OKAY_CFG="$XDG_CFG/okay-de"
-mkdir -p "$OKAY_CFG"
-
-if [ ! -f "$WF_INI" ]; then
-    for cand in \
-        "$XDG_DATA/okay-de/defaults/wayfire/wayfire.ini" \
-        "/usr/share/okay-de/defaults/wayfire/wayfire.ini" \
-        "/etc/xdg/okay-de/wayfire.ini" \
-        "/etc/xdg/wayfire.ini"; do
-        if [ -f "$cand" ]; then
-            mkdir -p "$(dirname "$WF_INI")"
-            cp "$cand" "$WF_INI" 2>/dev/null || true
-            break
+copy_if_missing() {
+    local rel_src="$1"
+    local dst="$2"
+    if [ ! -f "$dst" ]; then
+        mkdir -p "$(dirname "$dst")"
+        if [ -f "${SYS_SHARE}/${rel_src}" ]; then
+            cp -f "${SYS_SHARE}/${rel_src}" "$dst"
+        elif [ -n "$REPO_CONF" ] && [ -f "${REPO_CONF}/${rel_src}" ]; then
+            cp -f "${REPO_CONF}/${rel_src}" "$dst"
         fi
-    done
-fi
-
-if [ ! -f "$OKAY_CFG/autostart" ]; then
-    for cand in \
-        "$XDG_DATA/okay-de/defaults/okay-de/autostart" \
-        "/usr/share/okay-de/defaults/okay-de/autostart" \
-        "/etc/xdg/okay-de/autostart" \
-        "/etc/okay-de/autostart"; do
-        if [ -f "$cand" ]; then
-            cp "$cand" "$OKAY_CFG/autostart" 2>/dev/null || true
-            break
-        fi
-    done
-fi
-
-if [ ! -f "$OKAY_CFG/panel.json" ]; then
-    for cand in \
-        "$XDG_DATA/okay-de/defaults/okay-de/panel.json" \
-        "/usr/share/okay-de/defaults/okay-de/panel.json" \
-        "/etc/xdg/okay-de/panel.json" \
-        "/etc/okay-de/panel.json"; do
-        if [ -f "$cand" ]; then
-            cp "$cand" "$OKAY_CFG/panel.json" 2>/dev/null || true
-            break
-        fi
-    done
-fi
-
-# Ścieżki wtyczek i metadanych Wayfire (obsługa pixdecor w katalogu użytkownika i systemowym)
-XDG_DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
-export WAYFIRE_PLUGIN_PATH="${XDG_DATA}/wayfire/plugins:/usr/lib/wayfire:/usr/local/lib/wayfire${WAYFIRE_PLUGIN_PATH:+:$WAYFIRE_PLUGIN_PATH}"
-export WAYFIRE_PLUGIN_XML_PATH="${XDG_DATA}/wayfire/metadata:/usr/share/wayfire/metadata:/usr/local/share/wayfire/metadata${WAYFIRE_PLUGIN_XML_PATH:+:$WAYFIRE_PLUGIN_XML_PATH}"
-
-# Jeśli dostępny jest plugin pixdecor, automatycznie aktywuj go zamiast decoration
-if [ -f "$WF_INI" ] && { [ -f "$XDG_DATA/wayfire/plugins/libpixdecor.so" ] || [ -f /usr/lib/wayfire/libpixdecor.so ] || [ -f /usr/local/lib/wayfire/libpixdecor.so ]; }; then
-    if grep -qE '^plugins\s*=.*\bdecoration\b' "$WF_INI" 2>/dev/null && ! grep -qE '^plugins\s*=.*\bpixdecor\b' "$WF_INI" 2>/dev/null; then
-        sed -i -E 's/(^plugins\s*=.*)\bdecoration\b/\1pixdecor/' "$WF_INI" 2>/dev/null || true
     fi
-elif [ -f "$WF_INI" ] && grep -qE '^plugins\s*=.*\bpixdecor\b' "$WF_INI" 2>/dev/null; then
-    sed -i -E 's/(^plugins\s*=.*)\bpixdecor\b/\1decoration/' "$WF_INI" 2>/dev/null || true
-fi
+}
 
-# Zapewnienie uprawnień wykonywalności dla autostartu
-[ -f "$OKAY_CFG/autostart" ] && chmod +x "$OKAY_CFG/autostart" 2>/dev/null || true
-[ -f "/etc/xdg/okay-de/autostart" ] && chmod +x "/etc/xdg/okay-de/autostart" 2>/dev/null || true
+copy_if_missing "wayfire/wayfire.ini" "$XDG_CONFIG_HOME/wayfire.ini"
+copy_if_missing "okay-de/autostart"   "$XDG_CONFIG_HOME/okay-de/autostart"
+copy_if_missing "okay-de/panel.json"  "$XDG_CONFIG_HOME/okay-de/panel.json"
+copy_if_missing "mako/config"         "$XDG_CONFIG_HOME/mako/config"
+copy_if_missing "rofi/config.rasi"    "$XDG_CONFIG_HOME/rofi/config.rasi"
+copy_if_missing "gtk-3.0/settings.ini" "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
+copy_if_missing "gtk-4.0/settings.ini" "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"
 
-# Synchronizacja układu przycisków okien CSD (GTK3/GTK4/przeglądarki) przed startem sesji
-BTN_LAYOUT=":minimize,maximize,close"
-if [ -f "$OKAY_CFG/panel.json" ] && grep -qE '"window_buttons_style"[[:space:]]*:[[:space:]]*"circles_left"' "$OKAY_CFG/panel.json" 2>/dev/null; then
-    BTN_LAYOUT="close,maximize,minimize:"
-fi
+chmod +x "$XDG_CONFIG_HOME/okay-de/autostart" 2>/dev/null || true
+
+# -----------------------------------------------------------------------------
+# Konfiguracja xdg-desktop-portal (wlr dla ekranu/zrzutów + gtk dla motywów/okien dialogowych)
+# -----------------------------------------------------------------------------
+PORTAL_DIR="$XDG_CONFIG_HOME/xdg-desktop-portal"
+mkdir -p "$PORTAL_DIR"
+cat > "$PORTAL_DIR/okay-portals.conf" << 'EOF'
+[preferred]
+default=gtk
+org.freedesktop.impl.portal.ScreenCast=wlr
+org.freedesktop.impl.portal.Screenshot=wlr
+org.freedesktop.impl.portal.Settings=gtk
+org.freedesktop.impl.portal.FileChooser=gtk
+EOF
+cp -f "$PORTAL_DIR/okay-portals.conf" "$PORTAL_DIR/portals.conf" 2>/dev/null || true
+
+# -----------------------------------------------------------------------------
+# Wymuszenie pełnych przycisków (minimalizuj, maksymalizuj, zamknij) w plikach GTK
+# -----------------------------------------------------------------------------
 for gtk_ver in gtk-3.0 gtk-4.0; do
-    GTK_INI="$XDG_CFG/$gtk_ver/settings.ini"
-    if [ ! -f "$GTK_INI" ]; then
-        mkdir -p "$XDG_CFG/$gtk_ver"
-        for tmpl_cand in \
-            "/etc/xdg/$gtk_ver/settings.ini" \
-            "/etc/skel/.config/$gtk_ver/settings.ini"; do
-            if [ -f "$tmpl_cand" ]; then
-                cp "$tmpl_cand" "$GTK_INI" 2>/dev/null || true
-                break
-            fi
-        done
-    fi
-    if [ -f "$GTK_INI" ]; then
-        if grep -qE '^gtk-decoration-layout[[:space:]]*=' "$GTK_INI" 2>/dev/null; then
-            sed -i -E "s|^gtk-decoration-layout[[:space:]]*=.*|gtk-decoration-layout = $BTN_LAYOUT|" "$GTK_INI" 2>/dev/null || true
+    ini_file="$XDG_CONFIG_HOME/$gtk_ver/settings.ini"
+    if [ -f "$ini_file" ]; then
+        if grep -q '^gtk-decoration-layout' "$ini_file"; then
+            sed -i 's|^gtk-decoration-layout.*|gtk-decoration-layout = :minimize,maximize,close|' "$ini_file"
         else
-            printf 'gtk-decoration-layout = %s\n' "$BTN_LAYOUT" >> "$GTK_INI" 2>/dev/null || true
+            echo "gtk-decoration-layout = :minimize,maximize,close" >> "$ini_file"
         fi
     fi
 done
-if command -v gsettings >/dev/null 2>&1; then
-    gsettings set org.gnome.desktop.wm.preferences button-layout "$BTN_LAYOUT" 2>/dev/null || true
+
+# -----------------------------------------------------------------------------
+# Automatyczna synchronizacja sandboxa Flatpak z motywami i konfiguracją OKay DE
+# -----------------------------------------------------------------------------
+if command -v flatpak >/dev/null 2>&1; then
+    (
+        flatpak override --user \
+            --filesystem=xdg-config/gtk-3.0:ro \
+            --filesystem=xdg-config/gtk-4.0:ro \
+            --filesystem=xdg-config/okay-de:ro \
+            --env=GTK_CSD=0 \
+            --env=XCURSOR_THEME="${XCURSOR_THEME}" \
+            --env=XCURSOR_SIZE="${XCURSOR_SIZE}" >/dev/null 2>&1 || true
+    ) &
 fi
 
-# Uruchomienie kompozytora Wayfire
-if command -v wayfire >/dev/null 2>&1; then
-    exec wayfire
+# Weryfikacja obecności kompozytora Wayfire
+if ! command -v wayfire >/dev/null 2>&1; then
+    echo "BŁĄD KRYTYCZNY: Nie znaleziono kompozytora 'wayfire' w zmiennej PATH!" >&2
+    exit 1
 fi
 
-echo "OKay DE: Błąd krytyczny — nie znaleziono kompozytora 'wayfire'. Zainstaluj pakiet: sudo pacman -S wayfire" >&2
-exit 1
+# Start magistrali D-Bus (jeśli nie została uruchomiona przez Display Manager / systemd-logind)
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v dbus-run-session >/dev/null 2>&1; then
+    exec dbus-run-session -- wayfire -c "$XDG_CONFIG_HOME/wayfire.ini"
+else
+    exec wayfire -c "$XDG_CONFIG_HOME/wayfire.ini"
+fi

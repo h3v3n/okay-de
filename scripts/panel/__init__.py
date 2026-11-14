@@ -6,6 +6,10 @@ Modularne aplety paska zadań okay-panel (SNI Tray, Quick Settings, Window Previ
 
 try:
     from .animations import (
+        AnimationController,
+        ANIMATION_CONTROLLER,
+        get_animation_controller,
+        configure_animations,
         apply_animation_class,
         prepare_fade_in,
         start_fade_in,
@@ -15,6 +19,10 @@ try:
         stop_fade,
     )
 except Exception:
+    AnimationController = None
+    ANIMATION_CONTROLLER = None
+    def get_animation_controller(): return None
+    def configure_animations(reduce_motion=False, speed_multiplier=1.0): pass
     def apply_animation_class(widget, enabled=True): pass
     def prepare_fade_in(window, enabled=True): pass
     def start_fade_in(window, enabled=True, duration_ms=144, interval_ms=16): pass

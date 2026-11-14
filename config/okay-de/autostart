@@ -1,90 +1,109 @@
-#!/bin/sh
+#!/usr/bin/env sh
+# =============================================================================
+# OKay DE — Skrypt autostartu sesji Wayland (uruchamiany przez kompozytor Wayfire)
+# =============================================================================
 
-# OKay DE - Skrypt autostartu sesji środowiska (Wayfire)
+export PATH="$HOME/.local/bin:$PATH"
+export GTK_CSD=0
+export XDG_CURRENT_DESKTOP="OKay:wayfire"
+export XDG_SESSION_DESKTOP="OKay"
+export XDG_SESSION_TYPE="wayland"
+export QT_QPA_PLATFORM="wayland;xcb"
+export QT_QPA_PLATFORMTHEME="qt6ct"
+export QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+export MOZ_ENABLE_WAYLAND=1
+export MOZ_GTK_TITLEBAR_DECORATION="system"
 
-# 0. Zapewnienie pełnej ścieżki PATH oraz spójnego ciemnego motywu sesji (GTK / ikony / kursor)
-export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+# 1. Przekazanie zmiennych sesji Wayland do D-Bus i systemd (wymagane przez xdg-desktop-portal i Flatpaki)
+if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+    dbus-update-activation-environment --systemd \
+        WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP \
+        GTK_CSD QT_QPA_PLATFORM QT_QPA_PLATFORMTHEME MOZ_ENABLE_WAYLAND >/dev/null 2>&1 &
+fi
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user import-environment \
+        WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP \
+        GTK_CSD QT_QPA_PLATFORM QT_QPA_PLATFORMTHEME MOZ_ENABLE_WAYLAND >/dev/null 2>&1 &
+fi
+
+# 2. Synchronizacja ustawień dconf/gsettings, stylów GTK3/GTK4/libadwaita oraz sandboxa Flatpak
 if command -v gsettings >/dev/null 2>&1; then
-    (
-        BTN_LAYOUT=':minimize,maximize,close'
-        PANEL_JSON="${XDG_CONFIG_HOME:-$HOME/.config}/okay-de/panel.json"
-        if [ -f "$PANEL_JSON" ] && grep -qE '"window_buttons_style"[[:space:]]*:[[:space:]]*"circles_left"' "$PANEL_JSON" 2>/dev/null; then
-            BTN_LAYOUT='close,maximize,minimize:'
-        fi
-        gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' 2>/dev/null || true
-        gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark' 2>/dev/null || true
-        gsettings set org.gnome.desktop.interface icon-theme 'Papirus-Dark' 2>/dev/null || true
-        gsettings set org.gnome.desktop.interface cursor-theme 'Adwaita' 2>/dev/null || true
-        gsettings set org.gnome.desktop.interface cursor-size 24 2>/dev/null || true
-        gsettings set org.gnome.desktop.interface font-name 'JetBrains Mono 10' 2>/dev/null || true
-        gsettings set org.gnome.desktop.wm.preferences button-layout "$BTN_LAYOUT" 2>/dev/null || true
-    ) &
+    gsettings set org.gnome.desktop.wm.preferences button-layout ':minimize,maximize,close' >/dev/null 2>&1 &
+    gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark' >/dev/null 2>&1 &
+    gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' >/dev/null 2>&1 &
+    gsettings set org.gnome.desktop.interface icon-theme 'Papirus-Dark' >/dev/null 2>&1 &
+    gsettings set org.gnome.desktop.interface cursor-theme 'Adwaita' >/dev/null 2>&1 &
 fi
 
-# Wyłączenie nadpisywania tła swaybg przez pcmanfm --desktop w sesji Wayland
-PCMANFM_CONF="$HOME/.config/pcmanfm/default/desktop-items-0.conf"
-if [ -f "$PCMANFM_CONF" ]; then
-    sed -i -E 's|^wallpaper_mode=.*|wallpaper_mode=color|; s|^wallpaper=.*|wallpaper=|; s|^desktop_bg=.*|desktop_bg=#00000000|' "$PCMANFM_CONF" 2>/dev/null || true
+if command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import sys, os
+for p in [os.path.expanduser("~/.local/bin"), "/usr/bin", "/usr/local/bin"]:
+    if os.path.isdir(os.path.join(p, "settings")) and p not in sys.path:
+        sys.path.insert(0, p)
+try:
+    from settings.helpers import sync_startup_environment
+    sync_startup_environment()
+except Exception:
+    pass
+' >/dev/null 2>&1 &
 fi
 
-# 1. Agent uwierzytelniania Polkit (gnome)
-if [ -x /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 ]; then
-    /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 &
-elif [ -x /usr/libexec/polkit-gnome-authentication-agent-1 ]; then
-    /usr/libexec/polkit-gnome-authentication-agent-1 &
-fi
+# 3. Tapeta pulpitu (swaybg)
+WALLPAPER_USER="$HOME/.config/okay-de/wallpaper"
+WALLPAPER_SYS="/usr/share/okay-de/wallpapers/default.png"
 
-# 2. Demon powiadomień
-mako &
-
-# 3. Pasek zadań OKay DE (Zunifikowany okay-panel)
-(
-    sleep 0.5
-    PANEL_LOG="${XDG_RUNTIME_DIR:-/tmp}/okay-panel.log"
-    pkill -9 -x sfwbar 2>/dev/null || true
-    pkill -9 -x waybar 2>/dev/null || true
-    pkill -9 -x okay-dock 2>/dev/null || true
-    if [ -x "$HOME/.local/bin/okay-panel" ]; then
-        "$HOME/.local/bin/okay-panel" > "$PANEL_LOG" 2>&1 &
-    elif [ -x /usr/local/bin/okay-panel ]; then
-        /usr/local/bin/okay-panel > "$PANEL_LOG" 2>&1 &
-    elif [ -x /usr/bin/okay-panel ]; then
-        /usr/bin/okay-panel > "$PANEL_LOG" 2>&1 &
-    elif command -v okay-panel >/dev/null 2>&1; then
-        okay-panel > "$PANEL_LOG" 2>&1 &
+pkill -x swaybg 2>/dev/null || true
+if command -v swaybg >/dev/null 2>&1; then
+    if [ -f "$WALLPAPER_USER" ]; then
+        swaybg -i "$WALLPAPER_USER" -m fill >/dev/null 2>&1 &
+    elif [ -f "$WALLPAPER_SYS" ]; then
+        swaybg -i "$WALLPAPER_SYS" -m fill >/dev/null 2>&1 &
+    else
+        swaybg -c "#0D0D11" >/dev/null 2>&1 &
     fi
-) &
-
-# 3b. Natywny pulpit z ikonami aplikacji i plików (~/Desktop)
-(
-    sleep 0.3
-    DESKTOP_LOG="${XDG_RUNTIME_DIR:-/tmp}/okay-desktop.log"
-    if [ -x "$HOME/.local/bin/okay-desktop" ]; then
-        "$HOME/.local/bin/okay-desktop" > "$DESKTOP_LOG" 2>&1 &
-    elif [ -x /usr/local/bin/okay-desktop ]; then
-        /usr/local/bin/okay-desktop > "$DESKTOP_LOG" 2>&1 &
-    elif [ -x /usr/bin/okay-desktop ]; then
-        /usr/bin/okay-desktop > "$DESKTOP_LOG" 2>&1 &
-    elif command -v okay-desktop >/dev/null 2>&1; then
-        okay-desktop > "$DESKTOP_LOG" 2>&1 &
-    fi
-) &
-
-# 4. Tapeta i tło pulpitu (swaybg z kolorem bazowym i tapetą)
-# Sprawdzenie w kolejności: tapeta użytkownika -> tapeta systemowa -> kolor awaryjny
-WALLPAPER_USER="$HOME/.config/okay-de/wallpaper.png"
-WALLPAPER_SYSTEM="/usr/share/backgrounds/okay-de/default.png"
-
-if [ -f "$WALLPAPER_USER" ]; then
-    swaybg -c "#1e1e2e" -i "$WALLPAPER_USER" -m fill &
-elif [ -f "$WALLPAPER_SYSTEM" ]; then
-    swaybg -c "#1e1e2e" -i "$WALLPAPER_SYSTEM" -m fill &
-else
-    swaybg -c "#1e1e2e" &
 fi
 
-# 5. Menedżer schowka (wl-clipboard + cliphist: obsługa tekstu oraz obrazów)
+# 4. Natywny pasek systemowy OKay Panel (GTK3 + GtkLayerShell)
+pkill -x waybar 2>/dev/null || true
+pkill -f "okay-panel" 2>/dev/null || true
+if command -v okay-panel >/dev/null 2>&1; then
+    okay-panel >/dev/null 2>&1 &
+elif [ -x "$HOME/.local/bin/okay-panel" ]; then
+    "$HOME/.local/bin/okay-panel" >/dev/null 2>&1 &
+fi
+
+# 5. Demon powiadomień (mako)
+pkill -x mako 2>/dev/null || true
+if command -v mako >/dev/null 2>&1; then
+    mako >/dev/null 2>&1 &
+fi
+
+# 6. Agent uwierzytelniania Polkit (uprawnienia administratora dla GUI)
+for polkit_agent in \
+    /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 \
+    /usr/libexec/polkit-gnome-authentication-agent-1 \
+    /usr/lib/polkit-kde-authentication-agent-1 \
+    /usr/libexec/polkit-kde-authentication-agent-1 \
+    /usr/lib/xfce-polkit/xfce-polkit \
+    /usr/bin/lxpolkit; do
+    if [ -x "$polkit_agent" ]; then
+        "$polkit_agent" >/dev/null 2>&1 &
+        break
+    fi
+done
+
+# 7. Menedżer historii schowka Wayland (wl-paste + cliphist)
 if command -v wl-paste >/dev/null 2>&1 && command -v cliphist >/dev/null 2>&1; then
-    wl-paste --watch cliphist store &
-    wl-paste --type image --watch cliphist store &
+    pkill -f "wl-paste --type text --watch cliphist store" 2>/dev/null || true
+    pkill -f "wl-paste --type image --watch cliphist store" 2>/dev/null || true
+    wl-paste --type text --watch cliphist store >/dev/null 2>&1 &
+    wl-paste --type image --watch cliphist store >/dev/null 2>&1 &
+fi
+
+# 8. Aplet sieciowy w zasobniku (nm-applet)
+if command -v nm-applet >/dev/null 2>&1; then
+    pkill -x nm-applet 2>/dev/null || true
+    nm-applet --indicator >/dev/null 2>&1 &
 fi

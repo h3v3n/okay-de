@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 
 """
-Zakładka „Wi-Fi i Sieć” (NetworkManager / nmcli) w GTK3.
+Zakładka „Sieć i Bluetooth” (NetworkManager / nmcli + BlueZ / bluetoothctl) w GTK3.
 Wszystkie operacje skanowania i łączenia wykonuje asynchronicznie w wątku roboczym.
 """
 
+import re
 import time
 import shutil
 from gi.repository import Gtk
@@ -52,52 +53,103 @@ def _signal_icon_name(signal: int) -> str:
     return "network-wireless-signal-none-symbolic"
 
 
+def _query_bluetooth_state(scan: bool = False) -> dict:
+    """Pobiera stan adaptera Bluetooth oraz listę sparowanych/wykrytych urządzeń przez bluetoothctl."""
+    if not shutil.which("bluetoothctl"):
+        return {"available": False, "powered": False, "devices": [], "err": "Brak narzędzia bluetoothctl (pakiet bluez-utils)."}
+
+    if scan:
+        run_cmd(["bluetoothctl", "--timeout", "3", "scan", "on"], timeout=5)
+
+    rc_show, out_show, err_show = run_cmd(["bluetoothctl", "show"], timeout=4)
+    if rc_show != 0:
+        return {
+            "available": True,
+            "powered": False,
+            "devices": [],
+            "err": err_show.strip() or out_show.strip() or "Brak kontrolera Bluetooth.",
+        }
+
+    powered = bool(re.search(r"Powered:\s*yes", out_show, re.IGNORECASE))
+    devices = []
+    if powered:
+        rc_d, out_d, _ = run_cmd(["bluetoothctl", "devices"], timeout=4)
+        rc_c, out_c, _ = run_cmd(["bluetoothctl", "devices", "Connected"], timeout=3)
+        connected_macs = set()
+        if rc_c == 0:
+            for ln in out_c.splitlines():
+                m = re.match(r"^Device\s+([0-9A-Fa-f:]{17})\s+(.+)$", ln.strip())
+                if m:
+                    connected_macs.add(m.group(1).upper())
+
+        if rc_d == 0:
+            for ln in out_d.splitlines():
+                m = re.match(r"^Device\s+([0-9A-Fa-f:]{17})\s+(.+)$", ln.strip())
+                if not m:
+                    continue
+                mac = m.group(1).upper()
+                name = m.group(2).strip() or mac
+                devices.append({
+                    "mac": mac,
+                    "name": name,
+                    "connected": (mac in connected_macs),
+                })
+            devices.sort(key=lambda d: (not d["connected"], d["name"].lower()))
+
+    return {"available": True, "powered": powered, "devices": devices, "err": ""}
+
+
 class WifiTab(Gtk.Box):
-    """Widok zarządzania Wi-Fi i połączeniami sieciowymi przez NetworkManager (nmcli)."""
+    """Widok zarządzania Wi-Fi, połączeniami sieciowymi (nmcli) oraz Bluetooth (bluetoothctl)."""
 
     def __init__(self, parent_window=None, defer_load: bool = False):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.parent_window = parent_window
         self._updating_ui = False
         self._busy = False
+        self._bt_busy = False
         self._loaded = False
         self._networks = []
         self._saved_profiles = {}
+        self._bt_devices = []
 
         sw, self.content = make_scrolled_page()
         self.pack_start(sw, True, True, 0)
 
-        # Nagłówek + spinner + przycisk skanowania
         right_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.spinner = Gtk.Spinner()
         self.spinner.set_no_show_all(True)
         right_box.pack_start(self.spinner, False, False, 0)
 
-        self.btn_scan = Gtk.Button(label="Skanuj sieci")
+        self.btn_scan = Gtk.Button(label="Skanuj Wi-Fi")
         self.btn_scan.get_style_context().add_class("secondary-btn")
         self.btn_scan.connect("clicked", lambda _w: self.refresh_state(rescan=True))
         right_box.pack_start(self.btn_scan, False, False, 0)
 
         self.content.pack_start(
             make_page_header(
-                "Wi-Fi i Sieć",
-                "Zarządzanie kartą bezprzewodową oraz połączeniami NetworkManager.",
-                right_box
+                "Sieć i Bluetooth",
+                "Zarządzanie kartą bezprzewodową Wi-Fi (NetworkManager) oraz urządzeniami Bluetooth (BlueZ).",
+                right_box,
             ),
-            False, False, 0
+            False,
+            False,
+            0,
         )
 
         # Karta stanu radia Wi-Fi i połączeń przewodowych
-        card_status, box_status = make_card("Adapter sieciowy")
+        card_status, box_status = make_card("Adapter sieciowy Wi-Fi")
         self.wifi_switch = Gtk.Switch()
         self.wifi_switch.connect("notify::active", self._on_wifi_switch_toggled)
         box_status.pack_start(
             make_setting_row(
                 "Sieć bezprzewodowa Wi-Fi",
                 "Włącza lub wyłącza moduł radiowy Wi-Fi",
-                self.wifi_switch
+                self.wifi_switch,
             ),
-            False, False, 0
+            False,
+            False,
+            0,
         )
 
         self.lbl_active_net = Gtk.Label(label="Sprawdzanie połączeń...", xalign=0.0)
@@ -105,7 +157,7 @@ class WifiTab(Gtk.Box):
         box_status.pack_start(self.lbl_active_net, False, False, 0)
         self.content.pack_start(card_status, False, False, 0)
 
-        # Karta listy dostępnych sieci
+        # Karta listy dostępnych sieci Wi-Fi
         card_list, box_list = make_card("Dostępne sieci Wi-Fi")
 
         self.listbox = Gtk.ListBox()
@@ -115,7 +167,6 @@ class WifiTab(Gtk.Box):
         self.listbox.connect("row-activated", self._on_row_activated)
         box_list.pack_start(self.listbox, True, True, 0)
 
-        # Pasek akcji na dole listy („Połącz / Rozłącz”)
         action_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.lbl_status = Gtk.Label(label="", xalign=0.0)
         self.lbl_status.set_line_wrap(True)
@@ -129,7 +180,43 @@ class WifiTab(Gtk.Box):
         action_bar.pack_end(self.btn_connect_toggle, False, False, 0)
 
         box_list.pack_start(action_bar, False, False, 0)
-        self.content.pack_start(card_list, True, True, 0)
+        self.content.pack_start(card_list, False, False, 0)
+
+        # Karta Bluetooth
+        card_bt, box_bt = make_card("Urządzenia Bluetooth")
+
+        bt_ctrl_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.btn_bt_scan = Gtk.Button(label="Skanuj Bluetooth")
+        self.btn_bt_scan.get_style_context().add_class("secondary-btn")
+        self.btn_bt_scan.connect("clicked", lambda _w: self.refresh_bluetooth(scan=True))
+        bt_ctrl_box.pack_start(self.btn_bt_scan, False, False, 0)
+
+        self.bt_switch = Gtk.Switch()
+        self.bt_switch.connect("notify::active", self._on_bt_switch_toggled)
+        bt_ctrl_box.pack_start(self.bt_switch, False, False, 0)
+
+        box_bt.pack_start(
+            make_setting_row(
+                "Adapter Bluetooth",
+                "Włącza zasilanie kontrolera Bluetooth oraz wyszukiwanie słuchawek, myszy i kontrolerów",
+                bt_ctrl_box,
+            ),
+            False,
+            False,
+            0,
+        )
+
+        self.bt_listbox = Gtk.ListBox()
+        self.bt_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.bt_listbox.get_style_context().add_class("settings-list")
+        box_bt.pack_start(self.bt_listbox, False, False, 0)
+
+        self.lbl_bt_status = Gtk.Label(label="", xalign=0.0)
+        self.lbl_bt_status.set_line_wrap(True)
+        self.lbl_bt_status.get_style_context().add_class("row-subtitle")
+        box_bt.pack_start(self.lbl_bt_status, False, False, 0)
+
+        self.content.pack_start(card_bt, False, False, 0)
 
         if not defer_load:
             self.ensure_loaded()
@@ -138,6 +225,7 @@ class WifiTab(Gtk.Box):
         if not self._loaded:
             self._loaded = True
             self.refresh_state(rescan=False)
+            self.refresh_bluetooth(scan=False)
 
     def _set_busy(self, busy: bool, message: str = ""):
         self._busy = busy
@@ -153,6 +241,142 @@ class WifiTab(Gtk.Box):
             self._update_bottom_action_button()
         if message:
             self.lbl_status.set_text(message)
+
+    def refresh_bluetooth(self, scan: bool = False):
+        if self._bt_busy:
+            return
+        self._bt_busy = True
+        self.btn_bt_scan.set_sensitive(False)
+        self.lbl_bt_status.set_text("Skanowanie urządzeń Bluetooth..." if scan else "Odczytywanie stanu Bluetooth...")
+
+        def _worker():
+            return _query_bluetooth_state(scan=scan)
+
+        def _done(res: dict):
+            self._bt_busy = False
+            self.btn_bt_scan.set_sensitive(bool(res.get("available")))
+            self.bt_switch.set_sensitive(bool(res.get("available")))
+
+            self._updating_ui = True
+            self.bt_switch.set_active(bool(res.get("powered")))
+            self._updating_ui = False
+
+            self._bt_devices = res.get("devices", [])
+            self._populate_bt_devices(res)
+
+        def _err(exc):
+            self._bt_busy = False
+            self.btn_bt_scan.set_sensitive(True)
+            self.lbl_bt_status.set_text(f"Błąd Bluetooth: {exc}")
+
+        run_async(_worker, _done, _err)
+
+    def _populate_bt_devices(self, res: dict):
+        clear_container(self.bt_listbox)
+        if not res.get("available"):
+            row = Gtk.ListBoxRow()
+            row.set_selectable(False)
+            lbl = Gtk.Label(label=res.get("err") or "Bluetooth niedostępny w systemie.")
+            lbl.set_margin_top(12)
+            lbl.set_margin_bottom(12)
+            lbl.get_style_context().add_class("row-subtitle")
+            row.add(lbl)
+            self.bt_listbox.add(row)
+            self.bt_listbox.show_all()
+            self.lbl_bt_status.set_text(res.get("err") or "")
+            return
+
+        if not res.get("powered"):
+            row = Gtk.ListBoxRow()
+            row.set_selectable(False)
+            lbl = Gtk.Label(label="Adapter Bluetooth jest wyłączony.")
+            lbl.set_margin_top(12)
+            lbl.set_margin_bottom(12)
+            lbl.get_style_context().add_class("row-subtitle")
+            row.add(lbl)
+            self.bt_listbox.add(row)
+            self.bt_listbox.show_all()
+            self.lbl_bt_status.set_text(res.get("err") or "Moduł Bluetooth wyłączony.")
+            return
+
+        if not self._bt_devices:
+            row = Gtk.ListBoxRow()
+            row.set_selectable(False)
+            lbl = Gtk.Label(label="Brak wykrytych urządzeń Bluetooth. Kliknij „Skanuj Bluetooth”.")
+            lbl.set_margin_top(12)
+            lbl.set_margin_bottom(12)
+            lbl.get_style_context().add_class("row-subtitle")
+            row.add(lbl)
+            self.bt_listbox.add(row)
+            self.bt_listbox.show_all()
+            self.lbl_bt_status.set_text("Brak sparowanych lub wykrytych urządzeń.")
+            return
+
+        for dev in self._bt_devices:
+            row = Gtk.ListBoxRow()
+            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+
+            icon = Gtk.Image.new_from_icon_name("bluetooth-active-symbolic", Gtk.IconSize.MENU)
+            hbox.pack_start(icon, False, False, 0)
+
+            vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+            lbl_name = Gtk.Label(label=dev["name"], xalign=0.0)
+            lbl_name.get_style_context().add_class("row-title")
+            lbl_mac = Gtk.Label(label=dev["mac"], xalign=0.0)
+            lbl_mac.get_style_context().add_class("row-subtitle")
+            vbox.pack_start(lbl_name, False, False, 0)
+            vbox.pack_start(lbl_mac, False, False, 0)
+            hbox.pack_start(vbox, True, True, 0)
+
+            if dev["connected"]:
+                badge = Gtk.Label(label="Połączono")
+                badge.get_style_context().add_class("badge-connected")
+                hbox.pack_start(badge, False, False, 2)
+
+            btn_act = Gtk.Button(label="Rozłącz" if dev["connected"] else "Połącz")
+            btn_act.get_style_context().add_class("danger-btn" if dev["connected"] else "secondary-btn")
+            btn_act.connect("clicked", lambda _b, d=dev: self._toggle_bt_device(d))
+            hbox.pack_end(btn_act, False, False, 0)
+
+            row.add(hbox)
+            self.bt_listbox.add(row)
+
+        self.bt_listbox.show_all()
+        self.lbl_bt_status.set_text(f"Urządzenia Bluetooth: {len(self._bt_devices)}")
+
+    def _on_bt_switch_toggled(self, switch, _pspec):
+        if self._updating_ui or not shutil.which("bluetoothctl"):
+            return
+        enable = bool(switch.get_active())
+        self.lbl_bt_status.set_text("Włączanie Bluetooth..." if enable else "Wyłączanie Bluetooth...")
+
+        def _worker():
+            if enable and shutil.which("rfkill"):
+                run_cmd(["rfkill", "unblock", "bluetooth"], timeout=3)
+            return run_cmd(["bluetoothctl", "power", "on" if enable else "off"], timeout=5)
+
+        run_async(_worker, lambda _r: self.refresh_bluetooth(scan=False))
+
+    def _toggle_bt_device(self, dev: dict):
+        mac = dev["mac"]
+        connected = dev["connected"]
+        action = "disconnect" if connected else "connect"
+        self.lbl_bt_status.set_text(f"{'Rozłączanie' if connected else 'Łączenie z'} {dev['name']}...")
+
+        def _worker():
+            if not connected:
+                run_cmd(["bluetoothctl", "trust", mac], timeout=4)
+            return run_cmd(["bluetoothctl", action, mac], timeout=12)
+
+        def _done(res):
+            rc, out, err = res
+            if rc == 0:
+                self.lbl_bt_status.set_text(f"{'Rozłączono' if connected else 'Połączono'}: {dev['name']}")
+            else:
+                self.lbl_bt_status.set_text(f"Błąd Bluetooth ({dev['name']}): {err.strip() or out.strip()}")
+            self.refresh_bluetooth(scan=False)
+
+        run_async(_worker, _done)
 
     def refresh_state(self, rescan: bool = False):
         """Pobiera asynchronicznie stan radia Wi-Fi, aktywne połączenia oraz listę sieci."""
@@ -178,7 +402,7 @@ class WifiTab(Gtk.Box):
 
             rc_saved, out_saved, _ = run_cmd(["nmcli", "-t", "-f", "NAME,TYPE", "con", "show"], timeout=5)
             wireless_profiles = []
-            saved_wifi = {}  # ssid -> profile_name
+            saved_wifi = {}
             if rc_saved == 0:
                 for ln in out_saved.splitlines():
                     parts = _split_nmcli_terse(ln)
@@ -193,7 +417,7 @@ class WifiTab(Gtk.Box):
                 rescan_flag = "yes" if rescan else "auto"
                 rc_wifi, out_wifi, err_wifi = run_cmd([
                     "nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY,BARS",
-                    "dev", "wifi", "list", "--rescan", rescan_flag
+                    "dev", "wifi", "list", "--rescan", rescan_flag,
                 ], timeout=12)
                 if rc_wifi == 0:
                     by_ssid = {}
@@ -224,19 +448,18 @@ class WifiTab(Gtk.Box):
                             }
                     networks = sorted(
                         by_ssid.values(),
-                        key=lambda n: (not n["in_use"], -n["signal"], n["ssid"].lower())
+                        key=lambda n: (not n["in_use"], -n["signal"], n["ssid"].lower()),
                     )
                 else:
                     scan_err = err_wifi.strip() or err_radio.strip()
 
-            # Sprawdź powiązanie `802-11-wireless.ssid` tylko dla profili o niestandardowej nazwie
             visible_ssids = {n["ssid"] for n in networks}
             for prof_name in wireless_profiles[:50]:
                 if prof_name in visible_ssids:
                     continue
                 rc_ssid, out_ssid, _ = run_cmd(
                     ["nmcli", "-t", "-g", "802-11-wireless.ssid", "con", "show", "id", prof_name],
-                    timeout=3
+                    timeout=3,
                 )
                 if rc_ssid == 0 and out_ssid.strip():
                     saved_wifi.setdefault(out_ssid.strip(), prof_name)
@@ -394,7 +617,6 @@ class WifiTab(Gtk.Box):
             self._disconnect_ssid(ssid)
             return
 
-        # Jeśli sieć ma zapisany profil, spróbuj połączyć bezpośrednio; w przeciwnym razie zapytaj o hasło
         if not net["secured"] or ssid in self._saved_profiles:
             self._connect_ssid(ssid, password=None, retry_prompt_if_auth_fail=net["secured"])
         else:
@@ -409,7 +631,6 @@ class WifiTab(Gtk.Box):
             profile_id = self._saved_profiles.get(ssid, ssid)
             rc, out, err = run_cmd(["nmcli", "con", "down", "id", profile_id], timeout=8)
             if rc != 0:
-                # Fallback po aktywnym interfejsie wifi
                 rc2, devs, _ = run_cmd(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "dev"], timeout=5)
                 if rc2 == 0:
                     for ln in devs.splitlines():
@@ -462,7 +683,7 @@ class WifiTab(Gtk.Box):
         dialog = Gtk.Dialog(
             title=f"Hasło do sieci {ssid}",
             transient_for=self.parent_window,
-            flags=Gtk.DialogFlags.MODAL | Gtk.DialogFlags.DESTROY_WITH_PARENT
+            flags=Gtk.DialogFlags.MODAL | Gtk.DialogFlags.DESTROY_WITH_PARENT,
         )
         dialog.add_button("Anuluj", Gtk.ResponseType.CANCEL)
         btn_ok = dialog.add_button("Połącz", Gtk.ResponseType.OK)

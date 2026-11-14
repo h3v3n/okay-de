@@ -525,10 +525,25 @@ class StartMenuPopover(Gtk.Window):
             child.destroy()
 
         pins = self._get_pinned_apps() or []
+        apps_by_id = {a.get("app_id", "").lower(): a for a in self._scanner.get_apps()}
         for pin in pins[:6]:
-            cmd = str(pin.get("cmd", "")).strip()
-            name = str(pin.get("name", pin.get("app_id", ""))).strip()
-            icon = str(pin.get("icon", "application-x-executable")).strip()
+            if isinstance(pin, str):
+                key = pin.lower().removesuffix(".desktop")
+                found = apps_by_id.get(key) or apps_by_id.get(pin.lower())
+                if found:
+                    cmd = found["exec"]
+                    name = found["name"]
+                    icon = found["icon"]
+                else:
+                    cmd = key
+                    name = key.capitalize()
+                    icon = key
+            elif isinstance(pin, dict):
+                cmd = str(pin.get("cmd", "")).strip()
+                name = str(pin.get("name", pin.get("app_id", ""))).strip()
+                icon = str(pin.get("icon", "application-x-executable")).strip()
+            else:
+                continue
             if not cmd:
                 continue
 
@@ -550,6 +565,53 @@ class StartMenuPopover(Gtk.Window):
 
         self.pinned_flow.show_all()
 
+    @staticmethod
+    def _fuzzy_score(query: str, app: dict) -> int:
+        """
+        Oblicza wynik dopasowania rozmytego (fuzzy search) dla zapytania `query`:
+        - 1000+ pkt: dokładny prefiks nazwy aplikacji
+        - 800+ pkt : prefiks słowa w nazwie
+        - 600+ pkt : podciąg w nazwie
+        - 400+ pkt : podciąg w opisie / słowach kluczowych / poleceniu
+        - 100+ pkt : dopasowanie podciągu znakowego (subsequence fuzzy match) w nazwie
+        Zwraca 0 gdy brak dopasowania.
+        """
+        q = query.strip().lower()
+        if not q:
+            return 1
+        name_l = str(app.get("name", "")).lower()
+        blob_l = str(app.get("search_blob") or f"{name_l} {app.get('desc', '')} {app.get('cmd', '')}").lower()
+
+        if name_l == q:
+            return 1500
+        if name_l.startswith(q):
+            return 1200 - min(100, len(name_l))
+        for word in name_l.replace("-", " ").replace("_", " ").split():
+            if word.startswith(q):
+                return 950 - min(100, len(name_l))
+        if q in name_l:
+            return 750 - name_l.find(q) * 4
+
+        terms = [t for t in q.split() if t]
+        if terms and all(t in blob_l for t in terms):
+            return 500
+
+        # Subsequence fuzzy match (np. "ffx" -> "Firefox", "okst" -> "OKay Settings")
+        q_clean = q.replace(" ", "")
+        idx = 0
+        q_len = len(q_clean)
+        consec_bonus = 0
+        last_match = -2
+        for pos, ch in enumerate(name_l):
+            if idx < q_len and ch == q_clean[idx]:
+                if pos == last_match + 1:
+                    consec_bonus += 18
+                last_match = pos
+                idx += 1
+        if idx == q_len:
+            return 180 + consec_bonus - min(60, len(name_l))
+        return 0
+
     def _populate_apps(self):
         self._row_apps.clear()
         for child in self.app_list.get_children():
@@ -560,15 +622,13 @@ class StartMenuPopover(Gtk.Window):
         query = self.search_entry.get_text().strip().lower()
 
         if query:
-            terms = [t for t in query.split() if t]
-            filtered = [a for a in apps if all(t in a["search_blob"] for t in terms)]
-            filtered.sort(
-                key=lambda a: (
-                    0 if a["name"].lower().startswith(query) else 1,
-                    0 if query in a["name"].lower() else 1,
-                    a["name"].casefold(),
-                )
-            )
+            scored = []
+            for a in apps:
+                sc = self._fuzzy_score(query, a)
+                if sc > 0:
+                    scored.append((sc, a))
+            scored.sort(key=lambda item: (-item[0], item[1]["name"].casefold()))
+            filtered = [item[1] for item in scored]
         elif self._active_category != "Wszystkie":
             filtered = [a for a in apps if self._active_category in a["categories"]]
         else:
