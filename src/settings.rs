@@ -1,5 +1,6 @@
 use std::{
     fs,
+    path::PathBuf,
     process::Command,
 };
 
@@ -14,6 +15,7 @@ use smithay::{
             gles::GlesRenderer,
         },
     },
+    input::keyboard::XkbConfig,
     output::Output,
     utils::{Logical, Physical, Point, Rectangle, Scale, Transform},
 };
@@ -24,33 +26,45 @@ use crate::{
     state::OkayState,
 };
 
-pub const SETTINGS_WIDTH: i32 = 680;
-pub const SETTINGS_HEIGHT: i32 = 440;
+pub const SETTINGS_WIDTH: i32 = 740;
+pub const SETTINGS_HEIGHT: i32 = 490;
 const HEADER_HEIGHT: i32 = 38;
-const SIDEBAR_WIDTH: i32 = 175;
+const SIDEBAR_WIDTH: i32 = 185;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     Appearance,
+    Displays,
     Network,
-    Mouse,
+    Bluetooth,
+    Sound,
+    MouseKeyboard,
+    DefaultApps,
     SystemInfo,
 }
 
 impl SettingsTab {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 8] = [
         Self::Appearance,
+        Self::Displays,
         Self::Network,
-        Self::Mouse,
+        Self::Bluetooth,
+        Self::Sound,
+        Self::MouseKeyboard,
+        Self::DefaultApps,
         Self::SystemInfo,
     ];
 
     fn title(self) -> &'static str {
         match self {
-            Self::Appearance => "Appearance (Wyglad)",
-            Self::Network => "Wi-Fi & Net (Siec)",
-            Self::Mouse => "Mouse & Input (Mysz)",
-            Self::SystemInfo => "System Info",
+            Self::Appearance => "1. Appearance & Anim",
+            Self::Displays => "2. Displays (Ekrany)",
+            Self::Network => "3. Wi-Fi & Network",
+            Self::Bluetooth => "4. Bluetooth",
+            Self::Sound => "5. Sound (Dzwiek)",
+            Self::MouseKeyboard => "6. Mouse & Keyboard",
+            Self::DefaultApps => "7. Default Apps",
+            Self::SystemInfo => "8. System Info",
         }
     }
 }
@@ -64,19 +78,46 @@ pub struct WifiNetwork {
 }
 
 #[derive(Debug, Clone)]
+pub struct BluetoothDevice {
+    pub mac: String,
+    pub name: String,
+    pub connected: bool,
+}
+
+#[derive(Debug, Clone)]
 enum SettingsAction {
     CloseWindow,
     SelectTab(SettingsTab),
     ToggleDockMode,
+    TogglePanelPosition,
     ToggleShowWorkspaces,
-    ToggleTilingMode,
+    ToggleDesktopIcons,
     SelectAccent(usize),
+    AdjustWindowGaps(i32),
+    AdjustBorderWidth(i32),
+    ToggleAnimations,
+    AdjustAnimSpeed(f32),
+    CycleMinimizeEffect,
     ReloadWallpaper,
+    SetDisplayScale(usize, f64),
+    SwapMonitorsOrder,
     RefreshWifi,
     ToggleWifi(usize),
+    ToggleBluetoothPower,
+    RefreshBluetooth,
+    ToggleBluetoothDevice(usize),
+    SetVolume(i32),
+    ToggleMuteOutput,
+    SetMicVolume(i32),
+    ToggleMuteMic,
     SetPointerSpeed(f64),
     AdjustPointerSpeed(f64),
     ToggleNaturalScroll,
+    CycleKeyboardLayout,
+    CycleDefaultTerminal,
+    CycleDefaultBrowser,
+    CycleDefaultFileManager,
+    OpenAutostartFile,
 }
 
 #[derive(Debug)]
@@ -87,11 +128,20 @@ pub struct SettingsState {
     pub dragging: Option<Point<f64, Logical>>,
     pub wifi_networks: Vec<WifiNetwork>,
     pub wifi_status: String,
+    pub bt_powered: bool,
+    pub bt_status: String,
+    pub bt_devices: Vec<BluetoothDevice>,
+    pub mic_volume: i32,
+    pub mic_muted: bool,
+    pub audio_sink_name: String,
+    pub xkb_layout: String,
     pub os_name: String,
     pub kernel_ver: String,
     pub cpu_model: String,
+    pub cpu_load: String,
     pub gpu_renderer: String,
     pub ram_summary: String,
+    pub disk_summary: String,
     pub input_devices: Vec<String>,
     hit_regions: Vec<(Rectangle<i32, Logical>, SettingsAction)>,
 }
@@ -101,15 +151,24 @@ impl Default for SettingsState {
         let mut s = Self {
             open: false,
             active_tab: SettingsTab::Appearance,
-            position: Point::from((140, 90)),
+            position: Point::from((120, 75)),
             dragging: None,
             wifi_networks: Vec::new(),
-            wifi_status: "Click Refresh Scan to query NetworkManager".to_string(),
+            wifi_status: "Click 'Refresh Scan' to query NetworkManager".to_string(),
+            bt_powered: true,
+            bt_status: "Bluetooth Ready (click Scan Devices)".to_string(),
+            bt_devices: Vec::new(),
+            mic_volume: 80,
+            mic_muted: false,
+            audio_sink_name: "PipeWire / PulseAudio Default Output".to_string(),
+            xkb_layout: "us".to_string(),
             os_name: String::new(),
             kernel_ver: String::new(),
             cpu_model: String::new(),
+            cpu_load: String::new(),
             gpu_renderer: "OpenGL ES (Smithay GlesRenderer / DRM-KMS)".to_string(),
             ram_summary: String::new(),
+            disk_summary: String::new(),
             input_devices: Vec::new(),
             hit_regions: Vec::new(),
         };
@@ -130,7 +189,9 @@ impl SettingsState {
             .trim()
             .to_string();
         self.cpu_model = read_cpu_model();
+        self.cpu_load = read_cpu_load();
         self.ram_summary = read_ram_summary();
+        self.disk_summary = read_disk_summary();
         self.gpu_renderer = read_gpu_name();
         self.input_devices = read_input_devices();
     }
@@ -199,6 +260,45 @@ impl SettingsState {
             }
         }
     }
+
+    pub fn refresh_bluetooth(&mut self) {
+        let out = Command::new("bluetoothctl").arg("devices").output();
+        match out {
+            Ok(res) if res.status.success() => {
+                let text = String::from_utf8_lossy(&res.stdout);
+                let mut devs = Vec::new();
+                for line in text.lines() {
+                    // Format: `Device XX:XX:XX:XX:XX:XX Name`
+                    let mut parts = line.splitn(3, ' ');
+                    if parts.next() == Some("Device") {
+                        if let (Some(mac), Some(name)) = (parts.next(), parts.next()) {
+                            devs.push(BluetoothDevice {
+                                mac: mac.to_string(),
+                                name: name.trim().to_string(),
+                                connected: false,
+                            });
+                        }
+                    }
+                }
+                self.bt_status = format!("Found {} Bluetooth devices", devs.len());
+                self.bt_devices = devs;
+            }
+            _ => {
+                self.bt_status = "bluetoothctl service not active or unavailable".to_string();
+            }
+        }
+    }
+}
+
+fn save_all_prefs(state: &OkayState) {
+    state.panel.save_full_config(
+        state.pointer_sensitivity,
+        state.natural_scroll,
+        state.animations.enabled,
+        state.animations.speed,
+        state.animations.minimize_effect,
+        &state.settings.xkb_layout,
+    );
 }
 
 /// Handles pointer motion when the settings window header is being dragged.
@@ -254,36 +354,93 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
             }
             SettingsAction::SelectTab(tab) => {
                 state.settings.active_tab = tab;
-                if tab == SettingsTab::Network && state.settings.wifi_networks.is_empty() {
-                    state.settings.refresh_wifi(false);
-                } else if tab == SettingsTab::SystemInfo {
-                    state.settings.refresh_system_info();
+                match tab {
+                    SettingsTab::Network if state.settings.wifi_networks.is_empty() => {
+                        state.settings.refresh_wifi(false);
+                    }
+                    SettingsTab::Bluetooth if state.settings.bt_devices.is_empty() => {
+                        state.settings.refresh_bluetooth();
+                    }
+                    SettingsTab::SystemInfo => {
+                        state.settings.refresh_system_info();
+                    }
+                    _ => {}
                 }
             }
             SettingsAction::ToggleDockMode => {
                 state.panel.dock_mode = !state.panel.dock_mode;
-                state
-                    .panel
-                    .save_config_file(state.pointer_sensitivity, state.natural_scroll);
+                save_all_prefs(state);
+            }
+            SettingsAction::TogglePanelPosition => {
+                state.panel.panel_top = !state.panel.panel_top;
+                state.retile_workspace();
+                save_all_prefs(state);
             }
             SettingsAction::ToggleShowWorkspaces => {
                 state.panel.show_workspaces = !state.panel.show_workspaces;
-                state
-                    .panel
-                    .save_config_file(state.pointer_sensitivity, state.natural_scroll);
+                save_all_prefs(state);
             }
-            SettingsAction::ToggleTilingMode => {
-                state.toggle_tiling();
+            SettingsAction::ToggleDesktopIcons => {
+                state.overlays.show_desktop_icons = !state.overlays.show_desktop_icons;
             }
             SettingsAction::SelectAccent(idx) => {
                 state.panel.accent_preset = idx % ACCENT_PRESETS.len();
                 state.theme.active_border_color = state.panel.accent_f32();
-                state
-                    .panel
-                    .save_config_file(state.pointer_sensitivity, state.natural_scroll);
+                save_all_prefs(state);
+            }
+            SettingsAction::AdjustWindowGaps(delta) => {
+                state.panel.window_gaps = (state.panel.window_gaps + delta).clamp(0, 28);
+                state.retile_workspace();
+                save_all_prefs(state);
+            }
+            SettingsAction::AdjustBorderWidth(delta) => {
+                state.theme.border_width = (state.theme.border_width + delta).clamp(1, 6);
+            }
+            SettingsAction::ToggleAnimations => {
+                state.animations.enabled = !state.animations.enabled;
+                save_all_prefs(state);
+            }
+            SettingsAction::AdjustAnimSpeed(delta) => {
+                state.animations.speed = (state.animations.speed + delta).clamp(0.4, 2.5);
+                save_all_prefs(state);
+            }
+            SettingsAction::CycleMinimizeEffect => {
+                state.animations.minimize_effect = state.animations.minimize_effect.next();
+                save_all_prefs(state);
             }
             SettingsAction::ReloadWallpaper => {
                 state.desktop.reload();
+                state
+                    .overlays
+                    .push_notification("Wallpaper", "Reloaded ~/.config/okay-de/wallpaper.png");
+            }
+            SettingsAction::SetDisplayScale(out_idx, new_scale) => {
+                let outputs: Vec<Output> = state.space.outputs().cloned().collect();
+                if let Some(out) = outputs.get(out_idx) {
+                    out.change_current_state(
+                        None,
+                        None,
+                        Some(smithay::output::Scale::Fractional(new_scale)),
+                        None,
+                    );
+                    state.retile_workspace();
+                }
+            }
+            SettingsAction::SwapMonitorsOrder => {
+                let outputs: Vec<Output> = state.space.outputs().cloned().collect();
+                if outputs.len() >= 2 {
+                    let mut x_cursor = 0;
+                    for out in outputs.iter().rev() {
+                        let w = out
+                            .current_mode()
+                            .map(|m| m.size.w)
+                            .unwrap_or(1920);
+                        out.change_current_state(None, None, None, Some((x_cursor, 0).into()));
+                        state.space.map_output(out, (x_cursor, 0));
+                        x_cursor += w;
+                    }
+                    state.retile_workspace();
+                }
             }
             SettingsAction::RefreshWifi => {
                 state.settings.refresh_wifi(true);
@@ -303,29 +460,117 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                     }
                 }
             }
+            SettingsAction::ToggleBluetoothPower => {
+                state.settings.bt_powered = !state.settings.bt_powered;
+                let arg = if state.settings.bt_powered { "on" } else { "off" };
+                let _ = Command::new("bluetoothctl").args(["power", arg]).spawn();
+                state.settings.bt_status = format!("Bluetooth power {}", arg);
+            }
+            SettingsAction::RefreshBluetooth => {
+                state.settings.refresh_bluetooth();
+            }
+            SettingsAction::ToggleBluetoothDevice(idx) => {
+                if let Some(dev) = state.settings.bt_devices.get_mut(idx) {
+                    let sub = if dev.connected { "disconnect" } else { "connect" };
+                    let _ = Command::new("bluetoothctl").args([sub, &dev.mac]).spawn();
+                    dev.connected = !dev.connected;
+                    state.settings.bt_status = format!("{} {}...", sub, dev.name);
+                }
+            }
+            SettingsAction::SetVolume(vol) => {
+                state.panel.set_volume(vol);
+            }
+            SettingsAction::ToggleMuteOutput => {
+                state.panel.toggle_mute();
+            }
+            SettingsAction::SetMicVolume(vol) => {
+                state.settings.mic_volume = vol.clamp(0, 100);
+                let pct = format!("{}%", state.settings.mic_volume);
+                let _ = Command::new("wpctl")
+                    .args(["set-volume", "@DEFAULT_AUDIO_SOURCE@", &pct])
+                    .spawn();
+            }
+            SettingsAction::ToggleMuteMic => {
+                state.settings.mic_muted = !state.settings.mic_muted;
+                let _ = Command::new("wpctl")
+                    .args(["set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"])
+                    .spawn();
+            }
             SettingsAction::SetPointerSpeed(speed) => {
                 state.pointer_sensitivity = speed.clamp(0.25, 2.50);
-                state
-                    .panel
-                    .save_config_file(state.pointer_sensitivity, state.natural_scroll);
+                save_all_prefs(state);
             }
             SettingsAction::AdjustPointerSpeed(delta) => {
                 state.pointer_sensitivity = (state.pointer_sensitivity + delta).clamp(0.25, 2.50);
-                state
-                    .panel
-                    .save_config_file(state.pointer_sensitivity, state.natural_scroll);
+                save_all_prefs(state);
             }
             SettingsAction::ToggleNaturalScroll => {
                 state.natural_scroll = !state.natural_scroll;
-                state
-                    .panel
-                    .save_config_file(state.pointer_sensitivity, state.natural_scroll);
+                save_all_prefs(state);
+            }
+            SettingsAction::CycleKeyboardLayout => {
+                let layouts = ["us", "pl", "de", "fr"];
+                let cur = layouts
+                    .iter()
+                    .position(|x| *x == state.settings.xkb_layout)
+                    .unwrap_or(0);
+                let next_layout = layouts[(cur + 1) % layouts.len()];
+                state.settings.xkb_layout = next_layout.to_string();
+                if let Some(kb) = state.seat.get_keyboard() {
+                    let xkb = XkbConfig {
+                        layout: next_layout,
+                        ..XkbConfig::default()
+                    };
+                    let _ = kb.set_xkb_config(state, xkb);
+                }
+                save_all_prefs(state);
+            }
+            SettingsAction::CycleDefaultTerminal => {
+                let terms = ["foot", "kitty", "alacritty", "wezterm", "konsole", "xterm"];
+                let cur = terms
+                    .iter()
+                    .position(|x| *x == state.panel.default_terminal)
+                    .unwrap_or(0);
+                state.panel.default_terminal = terms[(cur + 1) % terms.len()].to_string();
+                save_all_prefs(state);
+            }
+            SettingsAction::CycleDefaultBrowser => {
+                let browsers = ["firefox", "chromium", "brave", "floorp"];
+                let cur = browsers
+                    .iter()
+                    .position(|x| *x == state.panel.default_browser)
+                    .unwrap_or(0);
+                state.panel.default_browser = browsers[(cur + 1) % browsers.len()].to_string();
+                save_all_prefs(state);
+            }
+            SettingsAction::CycleDefaultFileManager => {
+                let fms = ["thunar", "pcmanfm", "dolphin", "nautilus", "nemo"];
+                let cur = fms
+                    .iter()
+                    .position(|x| *x == state.panel.default_file_manager)
+                    .unwrap_or(0);
+                state.panel.default_file_manager = fms[(cur + 1) % fms.len()].to_string();
+                save_all_prefs(state);
+            }
+            SettingsAction::OpenAutostartFile => {
+                if let Ok(home) = std::env::var("HOME") {
+                    let path = PathBuf::from(home).join(".config/okay-de/autostart.sh");
+                    if let Some(p) = path.parent() {
+                        let _ = fs::create_dir_all(p);
+                    }
+                    if !path.exists() {
+                        let _ = fs::write(&path, "#!/bin/sh\n# OKay DE Autostart commands\n");
+                    }
+                    let _ = Command::new("xdg-open")
+                        .arg(&path)
+                        .env("WAYLAND_DISPLAY", &state.socket_name)
+                        .spawn();
+                }
             }
         }
         return true;
     }
 
-    // Clicking on the header bar initiates window drag
     let header_rect = Rectangle::new(
         state.settings.position,
         (SETTINGS_WIDTH - 40, HEADER_HEIGHT).into(),
@@ -340,7 +585,7 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
     true
 }
 
-/// Renders the native `OKay Settings` window if open on the primary output.
+/// Renders the native 8-Tab `OKay Settings` Control Center window if open on the primary output.
 pub fn render_settings_elements(
     state: &mut OkayState,
     renderer: &mut GlesRenderer,
@@ -371,17 +616,16 @@ pub fn render_settings_elements(
     let pointer_y = state.pointer_location.y.round() as i32;
 
     let mut canvas = Canvas::new(SETTINGS_WIDTH, SETTINGS_HEIGHT);
-    // Window frame & border
     canvas.fill_rounded_rect(0, 0, SETTINGS_WIDTH, SETTINGS_HEIGHT, 10, [18, 18, 28, 250]);
-    canvas.stroke_rect(0, 0, SETTINGS_WIDTH, SETTINGS_HEIGHT, [accent[0], accent[1], accent[2], 210]);
+    canvas.stroke_rect(0, 0, SETTINGS_WIDTH, SETTINGS_HEIGHT, [accent[0], accent[1], accent[2], 215]);
 
-    // Header bar
+    // Header Bar
     canvas.fill_rect(2, 2, SETTINGS_WIDTH - 4, HEADER_HEIGHT - 2, [28, 26, 44, 255]);
     canvas.fill_rect(0, 0, SETTINGS_WIDTH, 2, [accent[0], accent[1], accent[2], 255]);
     canvas.draw_text_px(
         14,
         10,
-        "OKay Settings  -  System Configuration",
+        "OKay Settings  —  Control Center (Super+I)",
         14.5,
         [240, 242, 252, 255],
     );
@@ -400,7 +644,7 @@ pub fn render_settings_elements(
         .hit_regions
         .push((close_rect, SettingsAction::CloseWindow));
 
-    // Left Sidebar
+    // Left Sidebar (8 Tabs)
     canvas.fill_rect(
         2,
         HEADER_HEIGHT,
@@ -417,10 +661,10 @@ pub fn render_settings_elements(
     );
 
     for (i, tab) in SettingsTab::ALL.iter().enumerate() {
-        let ty = HEADER_HEIGHT + 12 + i as i32 * 42;
+        let ty = HEADER_HEIGHT + 10 + i as i32 * 40;
         let tab_rect = Rectangle::new(
-            (wx + 10, wy + ty).into(),
-            (SIDEBAR_WIDTH - 16, 34).into(),
+            (wx + 8, wy + ty).into(),
+            (SIDEBAR_WIDTH - 14, 34).into(),
         );
         let is_selected = state.settings.active_tab == *tab;
         let hovered = rect_contains(tab_rect, pointer_x, pointer_y);
@@ -436,8 +680,8 @@ pub fn render_settings_elements(
         } else {
             [230, 232, 246, 255]
         };
-        canvas.fill_rounded_rect(10, ty, SIDEBAR_WIDTH - 16, 34, 6, bg);
-        canvas.draw_text_px(20, ty + 9, tab.title(), 13.5, fg);
+        canvas.fill_rounded_rect(8, ty, SIDEBAR_WIDTH - 14, 34, 6, bg);
+        canvas.draw_text_px(16, ty + 9, tab.title(), 13.0, fg);
         state
             .settings
             .hit_regions
@@ -445,138 +689,228 @@ pub fn render_settings_elements(
     }
 
     let content_x = SIDEBAR_WIDTH + 20;
-    let mut cy = HEADER_HEIGHT + 18;
+    let mut cy = HEADER_HEIGHT + 14;
 
     match state.settings.active_tab {
         SettingsTab::Appearance => {
             canvas.draw_text_px(
                 content_x,
                 cy,
-                "Appearance & Taskbar (Wyglad i pasek zadan)",
-                15.5,
+                "Appearance, Taskbar & Animations (Wyglad i animacje)",
+                15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
-            cy += 32;
+            cy += 26;
 
-            // 1. Dock Mode toggle
-            let dock_rect = Rectangle::new((wx + content_x, wy + cy).into(), (460, 36).into());
-            let dock_label = if state.panel.dock_mode {
-                "Taskbar Style:  Floating Centered Dock (macOS / Plasma style)"
-            } else {
-                "Taskbar Style:  Full-Width Edge-to-Edge Bar"
-            };
+            // Row 1: Dock Mode + Panel Position
+            let dock_rect = Rectangle::new((wx + content_x, wy + cy).into(), (248, 32).into());
+            let dock_lbl = if state.panel.dock_mode { "Style: Floating Dock" } else { "Style: Full Taskbar" };
+            draw_setting_button(&mut canvas, content_x, cy, 248, 32, dock_lbl, state.panel.dock_mode, accent);
+            state.settings.hit_regions.push((dock_rect, SettingsAction::ToggleDockMode));
+
+            let pos_rect = Rectangle::new((wx + content_x + 258, wy + cy).into(), (248, 32).into());
+            let pos_lbl = if state.panel.panel_top { "Panel Edge: Top" } else { "Panel Edge: Bottom" };
+            draw_setting_button(&mut canvas, content_x + 258, cy, 248, 32, pos_lbl, state.panel.panel_top, accent);
+            state.settings.hit_regions.push((pos_rect, SettingsAction::TogglePanelPosition));
+            cy += 38;
+
+            // Row 2: Show Workspaces + Desktop Icons
+            let ws_rect = Rectangle::new((wx + content_x, wy + cy).into(), (248, 32).into());
+            let ws_lbl = if state.panel.show_workspaces { "Workspaces (1..9): Shown" } else { "Workspaces (1..9): Hidden" };
+            draw_setting_button(&mut canvas, content_x, cy, 248, 32, ws_lbl, state.panel.show_workspaces, accent);
+            state.settings.hit_regions.push((ws_rect, SettingsAction::ToggleShowWorkspaces));
+
+            let ic_rect = Rectangle::new((wx + content_x + 258, wy + cy).into(), (248, 32).into());
+            let ic_lbl = if state.overlays.show_desktop_icons { "Desktop Icons: Shown" } else { "Desktop Icons: Hidden" };
+            draw_setting_button(&mut canvas, content_x + 258, cy, 248, 32, ic_lbl, state.overlays.show_desktop_icons, accent);
+            state.settings.hit_regions.push((ic_rect, SettingsAction::ToggleDesktopIcons));
+            cy += 40;
+
+            // Row 3: Minimize Animation Effect Selector (Magic Lamp Genie / ScaleGlide / Off)
+            let min_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 34).into());
+            let min_lbl = format!(
+                "Minimize Animation Effect:   {}   (click to cycle)",
+                state.animations.minimize_effect.label()
+            );
             draw_setting_button(
                 &mut canvas,
                 content_x,
                 cy,
-                460,
-                36,
-                dock_label,
-                state.panel.dock_mode,
+                506,
+                34,
+                &min_lbl,
+                state.animations.enabled,
                 accent,
             );
             state
                 .settings
                 .hit_regions
-                .push((dock_rect, SettingsAction::ToggleDockMode));
-            cy += 46;
+                .push((min_rect, SettingsAction::CycleMinimizeEffect));
+            cy += 40;
 
-            // 2. Show Workspaces toggle
-            let ws_rect = Rectangle::new((wx + content_x, wy + cy).into(), (460, 36).into());
-            let ws_label = if state.panel.show_workspaces {
-                "Workspace Indicators (1..9):  Visible on Taskbar"
-            } else {
-                "Workspace Indicators (1..9):  Hidden"
-            };
-            draw_setting_button(
-                &mut canvas,
-                content_x,
-                cy,
-                460,
-                36,
-                ws_label,
-                state.panel.show_workspaces,
-                accent,
-            );
-            state
-                .settings
-                .hit_regions
-                .push((ws_rect, SettingsAction::ToggleShowWorkspaces));
-            cy += 46;
+            // Row 4: Animations Toggle + Speed Slider
+            let anim_rect = Rectangle::new((wx + content_x, wy + cy).into(), (230, 32).into());
+            let anim_lbl = if state.animations.enabled { "60+ FPS Animations: ON" } else { "Animations: OFF" };
+            draw_setting_button(&mut canvas, content_x, cy, 230, 32, anim_lbl, state.animations.enabled, accent);
+            state.settings.hit_regions.push((anim_rect, SettingsAction::ToggleAnimations));
 
-            // 3. Tiling vs Floating toggle
-            let tile_rect = Rectangle::new((wx + content_x, wy + cy).into(), (460, 36).into());
-            let tile_label = if state.workspaces.tiling_enabled {
-                "Window Layout (Super+T):  Automatic Master-Stack Tiling"
-            } else {
-                "Window Layout (Super+T):  Floating Windows"
-            };
-            draw_setting_button(
-                &mut canvas,
-                content_x,
-                cy,
-                460,
-                36,
-                tile_label,
-                state.workspaces.tiling_enabled,
-                accent,
-            );
-            state
-                .settings
-                .hit_regions
-                .push((tile_rect, SettingsAction::ToggleTilingMode));
-            cy += 50;
+            let spd_txt = format!("Speed: {:.2}x", state.animations.speed);
+            canvas.draw_text_px(content_x + 244, cy + 8, &spd_txt, 13.0, [225, 228, 245, 255]);
+            let s_dec = Rectangle::new((wx + content_x + 365, wy + cy).into(), (32, 32).into());
+            canvas.fill_rounded_rect(content_x + 365, cy, 32, 32, 5, [44, 44, 66, 255]);
+            canvas.draw_text_px(content_x + 377, cy + 7, "-", 14.0, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((s_dec, SettingsAction::AdjustAnimSpeed(-0.25)));
 
-            // 4. Accent Color Presets
-            canvas.draw_text_px(
-                content_x,
-                cy,
-                "Accent Color Preset:",
-                13.5,
-                [210, 214, 235, 255],
-            );
-            cy += 24;
+            let s_inc = Rectangle::new((wx + content_x + 405, wy + cy).into(), (32, 32).into());
+            canvas.fill_rounded_rect(content_x + 405, cy, 32, 32, 5, [44, 44, 66, 255]);
+            canvas.draw_text_px(content_x + 416, cy + 7, "+", 14.0, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((s_inc, SettingsAction::AdjustAnimSpeed(0.25)));
+            cy += 40;
+
+            // Row 5: Window Gaps & Border Width
+            let gaps_txt = format!("Window Gaps: {}px", state.panel.window_gaps);
+            canvas.draw_text_px(content_x, cy + 8, &gaps_txt, 13.0, [225, 228, 245, 255]);
+            let g_dec = Rectangle::new((wx + content_x + 150, wy + cy).into(), (30, 30).into());
+            canvas.fill_rounded_rect(content_x + 150, cy, 30, 30, 5, [44, 44, 66, 255]);
+            canvas.draw_text_px(content_x + 161, cy + 6, "-", 14.0, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((g_dec, SettingsAction::AdjustWindowGaps(-2)));
+
+            let g_inc = Rectangle::new((wx + content_x + 186, wy + cy).into(), (30, 30).into());
+            canvas.fill_rounded_rect(content_x + 186, cy, 30, 30, 5, [44, 44, 66, 255]);
+            canvas.draw_text_px(content_x + 196, cy + 6, "+", 14.0, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((g_inc, SettingsAction::AdjustWindowGaps(2)));
+
+            let bw_txt = format!("Border: {}px", state.theme.border_width);
+            canvas.draw_text_px(content_x + 250, cy + 8, &bw_txt, 13.0, [225, 228, 245, 255]);
+            let b_dec = Rectangle::new((wx + content_x + 365, wy + cy).into(), (30, 30).into());
+            canvas.fill_rounded_rect(content_x + 365, cy, 30, 30, 5, [44, 44, 66, 255]);
+            canvas.draw_text_px(content_x + 376, cy + 6, "-", 14.0, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((b_dec, SettingsAction::AdjustBorderWidth(-1)));
+
+            let b_inc = Rectangle::new((wx + content_x + 401, wy + cy).into(), (30, 30).into());
+            canvas.fill_rounded_rect(content_x + 401, cy, 30, 30, 5, [44, 44, 66, 255]);
+            canvas.draw_text_px(content_x + 411, cy + 6, "+", 14.0, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((b_inc, SettingsAction::AdjustBorderWidth(1)));
+            cy += 40;
+
+            // Row 6: Accent Color Presets
+            canvas.draw_text_px(content_x, cy, "Accent Color Presets:", 13.0, [205, 210, 232, 255]);
+            cy += 22;
             for (idx, (name, rgb, _)) in ACCENT_PRESETS.iter().enumerate() {
-                let bx = content_x + idx as i32 * 92;
-                let preset_rect = Rectangle::new((wx + bx, wy + cy).into(), (86, 32).into());
-                canvas.fill_rounded_rect(bx, cy, 86, 32, 6, [rgb[0], rgb[1], rgb[2], 255]);
+                let bx = content_x + idx as i32 * 84;
+                let preset_rect = Rectangle::new((wx + bx, wy + cy).into(), (78, 30).into());
+                canvas.fill_rounded_rect(bx, cy, 78, 30, 6, [rgb[0], rgb[1], rgb[2], 255]);
                 if state.panel.accent_preset == idx {
-                    canvas.stroke_rect(bx - 1, cy - 1, 88, 34, [255, 255, 255, 255]);
+                    canvas.stroke_rect(bx - 1, cy - 1, 80, 32, [255, 255, 255, 255]);
                 }
-                canvas.draw_text_px(bx + 10, cy + 8, name, 12.5, [16, 16, 24, 255]);
-                state
-                    .settings
-                    .hit_regions
-                    .push((preset_rect, SettingsAction::SelectAccent(idx)));
+                canvas.draw_text_px(bx + 8, cy + 7, name, 12.0, [16, 16, 24, 255]);
+                state.settings.hit_regions.push((preset_rect, SettingsAction::SelectAccent(idx)));
             }
-            cy += 46;
+            cy += 40;
 
-            // 5. Reload Wallpaper button + Font status
-            let wp_rect = Rectangle::new((wx + content_x, wy + cy).into(), (460, 34).into());
-            canvas.fill_rounded_rect(content_x, cy, 460, 34, 6, [38, 38, 58, 255]);
+            // Row 7: Reload Wallpaper + Font Info
+            let wp_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 32).into());
+            canvas.fill_rounded_rect(content_x, cy, 506, 32, 6, [38, 38, 58, 255]);
             canvas.draw_text_px(
                 content_x + 14,
-                cy + 9,
+                cy + 8,
                 "Reload Wallpaper (~/.config/okay-de/wallpaper.png)",
                 13.0,
                 [235, 238, 250, 255],
             );
-            state
-                .settings
-                .hit_regions
-                .push((wp_rect, SettingsAction::ReloadWallpaper));
-            cy += 44;
+            state.settings.hit_regions.push((wp_rect, SettingsAction::ReloadWallpaper));
+            cy += 38;
 
-            let font_info = format!("Active UI Font: {} (TrueType anti-aliased)", active_font_name());
-            canvas.draw_text_px(content_x, cy, &font_info, 12.5, [155, 160, 185, 255]);
+            let font_info = format!("Active Font: {} (TrueType anti-aliased)", active_font_name());
+            canvas.draw_text_px(content_x, cy, &font_info, 12.0, [155, 160, 185, 255]);
+        }
+
+        SettingsTab::Displays => {
+            canvas.draw_text_px(
+                content_x,
+                cy,
+                "Displays & Multi-Monitor Arrangement (Ekrany)",
+                15.0,
+                [accent[0], accent[1], accent[2], 255],
+            );
+            cy += 30;
+
+            let outputs: Vec<Output> = state.space.outputs().cloned().collect();
+            for (idx, out) in outputs.iter().enumerate() {
+                let geo = state.space.output_geometry(out).unwrap_or_default();
+                let cur_scale = out.current_scale().fractional_scale();
+                let refresh_hz = out
+                    .current_mode()
+                    .map(|m| m.refresh as f64 / 1000.0)
+                    .unwrap_or(60.0);
+
+                canvas.fill_rounded_rect(content_x, cy, 506, 78, 7, [28, 28, 44, 245]);
+                let title = format!(
+                    "Monitor #{}: {}  ({}x{} @ {:.0}Hz, Pos +{},+{})",
+                    idx + 1,
+                    out.name(),
+                    geo.size.w,
+                    geo.size.h,
+                    refresh_hz,
+                    geo.loc.x,
+                    geo.loc.y
+                );
+                canvas.draw_text_px(content_x + 14, cy + 10, &title, 13.5, [238, 240, 252, 255]);
+
+                canvas.draw_text_px(
+                    content_x + 14,
+                    cy + 44,
+                    "UI Scale:",
+                    12.5,
+                    [175, 180, 205, 255],
+                );
+                for (si, s_val) in [1.0, 1.25, 1.5, 2.0].into_iter().enumerate() {
+                    let sx = content_x + 96 + si as i32 * 76;
+                    let s_rect = Rectangle::new((wx + sx, wy + cy + 38).into(), (68, 28).into());
+                    let is_cur = (cur_scale - s_val).abs() < 0.05;
+                    let bg = if is_cur {
+                        [accent[0], accent[1], accent[2], 255]
+                    } else {
+                        [44, 44, 66, 255]
+                    };
+                    let fg = if is_cur {
+                        [16, 16, 24, 255]
+                    } else {
+                        [230, 232, 246, 255]
+                    };
+                    canvas.fill_rounded_rect(sx, cy + 38, 68, 28, 5, bg);
+                    canvas.draw_text_px(sx + 14, cy + 44, &format!("{:.2}x", s_val), 12.0, fg);
+                    state
+                        .settings
+                        .hit_regions
+                        .push((s_rect, SettingsAction::SetDisplayScale(idx, s_val)));
+                }
+                cy += 88;
+            }
+
+            if outputs.len() >= 2 {
+                let swap_rect = Rectangle::new((wx + content_x, wy + cy).into(), (280, 34).into());
+                canvas.fill_rounded_rect(content_x, cy, 280, 34, 6, [44, 44, 68, 255]);
+                canvas.draw_text_px(
+                    content_x + 16,
+                    cy + 9,
+                    "Swap Left / Right Monitor Order",
+                    13.0,
+                    [238, 240, 252, 255],
+                );
+                state
+                    .settings
+                    .hit_regions
+                    .push((swap_rect, SettingsAction::SwapMonitorsOrder));
+            }
         }
 
         SettingsTab::Network => {
             canvas.draw_text_px(
                 content_x,
                 cy,
-                "Wi-Fi & Network (Siec bezprzewodowa)",
-                15.5,
+                "Wi-Fi & Network Connections (Siec bezprzewodowa)",
+                15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
             cy += 28;
@@ -589,10 +923,10 @@ pub fn render_settings_elements(
                 [200, 205, 225, 255],
             );
 
-            let scan_rect = Rectangle::new((wx + content_x + 340, wy + cy - 6).into(), (120, 28).into());
-            canvas.fill_rounded_rect(content_x + 340, cy - 6, 120, 28, 5, [48, 48, 72, 255]);
+            let scan_rect = Rectangle::new((wx + content_x + 380, wy + cy - 6).into(), (126, 28).into());
+            canvas.fill_rounded_rect(content_x + 380, cy - 6, 126, 28, 5, [48, 48, 72, 255]);
             canvas.draw_text_px(
-                content_x + 354,
+                content_x + 394,
                 cy,
                 "Refresh Scan",
                 12.5,
@@ -605,7 +939,7 @@ pub fn render_settings_elements(
             cy += 34;
 
             if state.settings.wifi_networks.is_empty() {
-                canvas.fill_rounded_rect(content_x, cy, 460, 64, 6, [28, 28, 42, 240]);
+                canvas.fill_rounded_rect(content_x, cy, 506, 64, 6, [28, 28, 42, 240]);
                 canvas.draw_text_px(
                     content_x + 14,
                     cy + 22,
@@ -621,12 +955,9 @@ pub fn render_settings_elements(
                     } else {
                         [30, 30, 46, 240]
                     };
-                    canvas.fill_rounded_rect(content_x, row_y, 460, 40, 6, row_bg);
+                    canvas.fill_rounded_rect(content_x, row_y, 506, 40, 6, row_bg);
 
-                    let ssid_line = format!(
-                        "{}  ({}%  /  {})",
-                        net.ssid, net.signal, net.security
-                    );
+                    let ssid_line = format!("{}  ({}%  /  {})", net.ssid, net.signal, net.security);
                     canvas.draw_text_px(
                         content_x + 14,
                         row_y + 11,
@@ -636,7 +967,7 @@ pub fn render_settings_elements(
                     );
 
                     let btn_rect = Rectangle::new(
-                        (wx + content_x + 352, wy + row_y + 6).into(),
+                        (wx + content_x + 396, wy + row_y + 6).into(),
                         (98, 28).into(),
                     );
                     let (btn_bg, btn_label) = if net.in_use {
@@ -644,9 +975,9 @@ pub fn render_settings_elements(
                     } else {
                         ([52, 86, 72, 255], "Connect")
                     };
-                    canvas.fill_rounded_rect(content_x + 352, row_y + 6, 98, 28, 5, btn_bg);
+                    canvas.fill_rounded_rect(content_x + 396, row_y + 6, 98, 28, 5, btn_bg);
                     canvas.draw_text_px(
-                        content_x + 366,
+                        content_x + 410,
                         row_y + 11,
                         btn_label,
                         12.5,
@@ -660,24 +991,196 @@ pub fn render_settings_elements(
             }
         }
 
-        SettingsTab::Mouse => {
+        SettingsTab::Bluetooth => {
             canvas.draw_text_px(
                 content_x,
                 cy,
-                "Mouse, Touchpad & Input (Mysz i urzadzenia)",
-                15.5,
+                "Bluetooth Adapter & Devices",
+                15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
-            cy += 34;
+            cy += 30;
+
+            let pwr_rect = Rectangle::new((wx + content_x, wy + cy).into(), (340, 34).into());
+            let pwr_lbl = if state.settings.bt_powered {
+                "Bluetooth Adapter Power:  Enabled"
+            } else {
+                "Bluetooth Adapter Power:  Disabled"
+            };
+            draw_setting_button(
+                &mut canvas,
+                content_x,
+                cy,
+                340,
+                34,
+                pwr_lbl,
+                state.settings.bt_powered,
+                accent,
+            );
+            state
+                .settings
+                .hit_regions
+                .push((pwr_rect, SettingsAction::ToggleBluetoothPower));
+
+            let scan_rect = Rectangle::new((wx + content_x + 356, wy + cy).into(), (150, 34).into());
+            canvas.fill_rounded_rect(content_x + 356, cy, 150, 34, 6, [48, 48, 72, 255]);
+            canvas.draw_text_px(
+                content_x + 376,
+                cy + 9,
+                "Scan Devices",
+                13.0,
+                [accent[0], accent[1], accent[2], 255],
+            );
+            state
+                .settings
+                .hit_regions
+                .push((scan_rect, SettingsAction::RefreshBluetooth));
+            cy += 46;
+
+            canvas.draw_text_px(content_x, cy, &state.settings.bt_status, 13.0, [195, 200, 222, 255]);
+            cy += 28;
+
+            if state.settings.bt_devices.is_empty() {
+                canvas.fill_rounded_rect(content_x, cy, 506, 60, 6, [28, 28, 42, 240]);
+                canvas.draw_text_px(
+                    content_x + 14,
+                    cy + 20,
+                    "No paired Bluetooth devices found. Click 'Scan Devices' above.",
+                    13.0,
+                    [165, 170, 195, 255],
+                );
+            } else {
+                for (idx, dev) in state.settings.bt_devices.iter().take(5).enumerate() {
+                    let ry = cy + idx as i32 * 44;
+                    canvas.fill_rounded_rect(content_x, ry, 506, 38, 6, [30, 30, 46, 240]);
+                    let line = format!("{}  ({})", dev.name, dev.mac);
+                    canvas.draw_text_px(content_x + 14, ry + 10, &line, 13.0, [238, 240, 252, 255]);
+
+                    let b_rect = Rectangle::new((wx + content_x + 396, wy + ry + 5).into(), (98, 28).into());
+                    let b_lbl = if dev.connected { "Disconnect" } else { "Connect" };
+                    canvas.fill_rounded_rect(content_x + 396, ry + 5, 98, 28, 5, [48, 72, 86, 255]);
+                    canvas.draw_text_px(content_x + 412, ry + 10, b_lbl, 12.0, [242, 244, 252, 255]);
+                    state
+                        .settings
+                        .hit_regions
+                        .push((b_rect, SettingsAction::ToggleBluetoothDevice(idx)));
+                }
+            }
+        }
+
+        SettingsTab::Sound => {
+            canvas.draw_text_px(
+                content_x,
+                cy,
+                "Sound, Master Output & Microphone (Dzwiek)",
+                15.0,
+                [accent[0], accent[1], accent[2], 255],
+            );
+            cy += 32;
+
+            canvas.draw_text_px(
+                content_x,
+                cy,
+                &format!("Active Audio Device: {}", state.settings.audio_sink_name),
+                13.0,
+                [195, 200, 222, 255],
+            );
+            cy += 30;
+
+            // Master Output Volume Slider
+            let out_lbl = format!(
+                "Master Output Volume:  {}% {}",
+                state.panel.volume_percent,
+                if state.panel.volume_muted { "(MUTED)" } else { "" }
+            );
+            canvas.draw_text_px(content_x, cy, &out_lbl, 14.0, [238, 240, 252, 255]);
+            cy += 24;
+
+            let bar_w = 380;
+            canvas.fill_rounded_rect(content_x, cy + 6, bar_w, 16, 6, [28, 28, 42, 255]);
+            let fill_w = ((state.panel.volume_percent as f32 / 100.0) * bar_w as f32).round() as i32;
+            canvas.fill_rounded_rect(
+                content_x,
+                cy + 6,
+                fill_w.max(8),
+                16,
+                6,
+                [accent[0], accent[1], accent[2], 255],
+            );
+            for step in 0..=10 {
+                let sx = content_x + step * (bar_w / 11);
+                let s_rect = Rectangle::new((wx + sx, wy + cy).into(), (bar_w / 11, 28).into());
+                state
+                    .settings
+                    .hit_regions
+                    .push((s_rect, SettingsAction::SetVolume(step * 10)));
+            }
+
+            let mute_rect = Rectangle::new((wx + content_x + 396, wy + cy).into(), (110, 28).into());
+            let mute_lbl = if state.panel.volume_muted { "Unmute" } else { "Mute Out" };
+            canvas.fill_rounded_rect(content_x + 396, cy, 110, 28, 5, [48, 48, 72, 255]);
+            canvas.draw_text_px(content_x + 414, cy + 6, mute_lbl, 12.5, [238, 240, 252, 255]);
+            state
+                .settings
+                .hit_regions
+                .push((mute_rect, SettingsAction::ToggleMuteOutput));
+            cy += 50;
+
+            // Microphone Input Volume Slider
+            let mic_lbl = format!(
+                "Microphone Input Level:  {}% {}",
+                state.settings.mic_volume,
+                if state.settings.mic_muted { "(MUTED)" } else { "" }
+            );
+            canvas.draw_text_px(content_x, cy, &mic_lbl, 14.0, [238, 240, 252, 255]);
+            cy += 24;
+
+            canvas.fill_rounded_rect(content_x, cy + 6, bar_w, 16, 6, [28, 28, 42, 255]);
+            let mfill_w = ((state.settings.mic_volume as f32 / 100.0) * bar_w as f32).round() as i32;
+            canvas.fill_rounded_rect(
+                content_x,
+                cy + 6,
+                mfill_w.max(8),
+                16,
+                6,
+                [accent[0], accent[1], accent[2], 255],
+            );
+            for step in 0..=10 {
+                let sx = content_x + step * (bar_w / 11);
+                let s_rect = Rectangle::new((wx + sx, wy + cy).into(), (bar_w / 11, 28).into());
+                state
+                    .settings
+                    .hit_regions
+                    .push((s_rect, SettingsAction::SetMicVolume(step * 10)));
+            }
+
+            let mmute_rect = Rectangle::new((wx + content_x + 396, wy + cy).into(), (110, 28).into());
+            let mmute_lbl = if state.settings.mic_muted { "Unmute Mic" } else { "Mute Mic" };
+            canvas.fill_rounded_rect(content_x + 396, cy, 110, 28, 5, [48, 48, 72, 255]);
+            canvas.draw_text_px(content_x + 412, cy + 6, mmute_lbl, 12.5, [238, 240, 252, 255]);
+            state
+                .settings
+                .hit_regions
+                .push((mmute_rect, SettingsAction::ToggleMuteMic));
+        }
+
+        SettingsTab::MouseKeyboard => {
+            canvas.draw_text_px(
+                content_x,
+                cy,
+                "Mouse, Touchpad & Keyboard (Mysz i klawiatura)",
+                15.0,
+                [accent[0], accent[1], accent[2], 255],
+            );
+            cy += 30;
 
             let speed_label = format!(
                 "Pointer Speed / Sensitivity:   {:.2}x",
                 state.pointer_sensitivity
             );
             canvas.draw_text_px(content_x, cy, &speed_label, 14.0, [235, 238, 250, 255]);
-            cy += 26;
+            cy += 24;
 
-            // [-] button
             let dec_rect = Rectangle::new((wx + content_x, wy + cy).into(), (36, 30).into());
             canvas.fill_rounded_rect(content_x, cy, 36, 30, 5, [44, 44, 66, 255]);
             canvas.draw_text_px(content_x + 14, cy + 6, "-", 15.0, [240, 242, 252, 255]);
@@ -686,9 +1189,8 @@ pub fn render_settings_elements(
                 .hit_regions
                 .push((dec_rect, SettingsAction::AdjustPointerSpeed(-0.15)));
 
-            // Slider bar (clickable segments)
             let bar_x = content_x + 46;
-            let bar_w = 350;
+            let bar_w = 360;
             canvas.fill_rounded_rect(bar_x, cy + 8, bar_w, 14, 6, [28, 28, 42, 255]);
             let norm = ((state.pointer_sensitivity - 0.25) / (2.50 - 0.25)).clamp(0.0, 1.0);
             let fill_w = (norm * bar_w as f64).round() as i32;
@@ -712,7 +1214,6 @@ pub fn render_settings_elements(
                     .push((seg_rect, SettingsAction::SetPointerSpeed(spd)));
             }
 
-            // [+] button
             let inc_rect = Rectangle::new((wx + bar_x + bar_w + 10, wy + cy).into(), (36, 30).into());
             canvas.fill_rounded_rect(bar_x + bar_w + 10, cy, 36, 30, 5, [44, 44, 66, 255]);
             canvas.draw_text_px(bar_x + bar_w + 22, cy + 6, "+", 15.0, [240, 242, 252, 255]);
@@ -720,10 +1221,9 @@ pub fn render_settings_elements(
                 .settings
                 .hit_regions
                 .push((inc_rect, SettingsAction::AdjustPointerSpeed(0.15)));
-            cy += 46;
+            cy += 42;
 
-            // Natural scroll toggle
-            let nat_rect = Rectangle::new((wx + content_x, wy + cy).into(), (442, 36).into());
+            let nat_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 34).into());
             let nat_label = if state.natural_scroll {
                 "Natural Scrolling (Przewijanie naturalne):   Enabled"
             } else {
@@ -733,8 +1233,8 @@ pub fn render_settings_elements(
                 &mut canvas,
                 content_x,
                 cy,
-                442,
-                36,
+                506,
+                34,
                 nat_label,
                 state.natural_scroll,
                 accent,
@@ -743,22 +1243,111 @@ pub fn render_settings_elements(
                 .settings
                 .hit_regions
                 .push((nat_rect, SettingsAction::ToggleNaturalScroll));
-            cy += 52;
+            cy += 42;
+
+            let kb_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 34).into());
+            let kb_label = format!(
+                "Keyboard XKB Layout:   '{}'   (click to cycle us / pl / de / fr)",
+                state.settings.xkb_layout.to_uppercase()
+            );
+            draw_setting_button(&mut canvas, content_x, cy, 506, 34, &kb_label, true, accent);
+            state
+                .settings
+                .hit_regions
+                .push((kb_rect, SettingsAction::CycleKeyboardLayout));
+            cy += 44;
 
             canvas.draw_text_px(
                 content_x,
                 cy,
-                "Detected Input Hardware (libinput / sysfs):",
-                13.5,
+                "Detected Input Devices (libinput / sysfs):",
+                13.0,
                 [accent[0], accent[1], accent[2], 255],
             );
-            cy += 24;
-            for dev in state.settings.input_devices.iter().take(5) {
-                canvas.fill_rounded_rect(content_x, cy, 442, 26, 4, [28, 28, 42, 235]);
-                let line = format!("•  {}", dev);
-                canvas.draw_text_px(content_x + 10, cy + 5, &line, 12.5, [215, 218, 236, 255]);
-                cy += 30;
+            cy += 22;
+            for dev in state.settings.input_devices.iter().take(4) {
+                canvas.fill_rounded_rect(content_x, cy, 506, 25, 4, [28, 28, 42, 235]);
+                canvas.draw_text_px(content_x + 10, cy + 5, dev, 12.0, [215, 218, 236, 255]);
+                cy += 28;
             }
+        }
+
+        SettingsTab::DefaultApps => {
+            canvas.draw_text_px(
+                content_x,
+                cy,
+                "Startup & Default Applications (Domyslne aplikacje)",
+                15.0,
+                [accent[0], accent[1], accent[2], 255],
+            );
+            cy += 32;
+
+            let term_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 36).into());
+            let term_lbl = format!(
+                "Default Terminal (Super+Return):   {}   (click to cycle)",
+                state.panel.default_terminal
+            );
+            draw_setting_button(&mut canvas, content_x, cy, 506, 36, &term_lbl, true, accent);
+            state
+                .settings
+                .hit_regions
+                .push((term_rect, SettingsAction::CycleDefaultTerminal));
+            cy += 46;
+
+            let br_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 36).into());
+            let br_lbl = format!(
+                "Default Web Browser:   {}   (click to cycle)",
+                state.panel.default_browser
+            );
+            draw_setting_button(&mut canvas, content_x, cy, 506, 36, &br_lbl, true, accent);
+            state
+                .settings
+                .hit_regions
+                .push((br_rect, SettingsAction::CycleDefaultBrowser));
+            cy += 46;
+
+            let fm_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 36).into());
+            let fm_lbl = format!(
+                "Default File Manager:   {}   (click to cycle)",
+                state.panel.default_file_manager
+            );
+            draw_setting_button(&mut canvas, content_x, cy, 506, 36, &fm_lbl, true, accent);
+            state
+                .settings
+                .hit_regions
+                .push((fm_rect, SettingsAction::CycleDefaultFileManager));
+            cy += 52;
+
+            let auto_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 36).into());
+            canvas.fill_rounded_rect(content_x, cy, 506, 36, 6, [40, 40, 62, 255]);
+            canvas.draw_text_px(
+                content_x + 14,
+                cy + 10,
+                "Edit Session Autostart Script (~/.config/okay-de/autostart.sh)",
+                13.0,
+                [238, 240, 252, 255],
+            );
+            state
+                .settings
+                .hit_regions
+                .push((auto_rect, SettingsAction::OpenAutostartFile));
+            cy += 50;
+
+            canvas.draw_text_px(
+                content_x,
+                cy,
+                "Shortcuts: Super+Ret Terminal | Super+D Launcher | Super+I Settings | Super+L Lock",
+                12.0,
+                [160, 165, 190, 255],
+            );
+            cy += 22;
+            canvas.draw_text_px(
+                content_x,
+                cy,
+                "           Super+T Layout | Super+F Fullscreen | Super+A Pin | Super+V Clipboard",
+                12.0,
+                [160, 165, 190, 255],
+            );
         }
 
         SettingsTab::SystemInfo => {
@@ -766,51 +1355,51 @@ pub fn render_settings_elements(
                 content_x,
                 cy,
                 "System Information (Informacje o systemie)",
-                15.5,
+                15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
-            cy += 30;
+            cy += 28;
 
             let outputs_summary: String = state
                 .space
                 .outputs()
                 .map(|o| {
                     let geo = state.space.output_geometry(o).unwrap_or_default();
-                    format!("{} ({}x{} @ +{},+{})", o.name(), geo.size.w, geo.size.h, geo.loc.x, geo.loc.y)
+                    format!("{} ({}x{})", o.name(), geo.size.w, geo.size.h)
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
 
             let rows = [
-                ("Desktop Environment", "OKay DE 0.1.0 (Native Smithay 0.7.0 / Wayland)"),
+                ("Desktop Environment", "OKay DE 0.2.0 (Smithay 0.7.0 / Wayland)"),
                 ("Operating System", &state.settings.os_name),
                 ("Linux Kernel", &state.settings.kernel_ver),
                 ("Processor (CPU)", &state.settings.cpu_model),
+                ("System Load", &state.settings.cpu_load),
                 ("Graphics (GPU)", &state.settings.gpu_renderer),
                 ("Memory (RAM)", &state.settings.ram_summary),
+                ("Root Disk Usage", &state.settings.disk_summary),
                 ("Active Monitors", &outputs_summary),
-                ("UI Font Engine", &active_font_name()),
             ];
 
             for (label, val) in rows {
-                canvas.fill_rounded_rect(content_x, cy, 460, 34, 5, [28, 28, 42, 240]);
+                canvas.fill_rounded_rect(content_x, cy, 506, 32, 5, [28, 28, 42, 240]);
                 canvas.draw_text_px(
                     content_x + 12,
-                    cy + 9,
+                    cy + 8,
                     label,
                     12.5,
                     [160, 165, 190, 255],
                 );
-                let max_chars = 38;
-                let trimmed: String = val.chars().take(max_chars).collect();
+                let trimmed: String = val.chars().take(42).collect();
                 canvas.draw_text_px(
                     content_x + 165,
-                    cy + 9,
+                    cy + 8,
                     &trimmed,
-                    13.0,
+                    12.5,
                     [238, 240, 252, 255],
                 );
-                cy += 40;
+                cy += 37;
             }
         }
     }
@@ -861,15 +1450,15 @@ fn draw_setting_button(
     } else {
         [64, 64, 88, 255]
     };
-    canvas.fill_rounded_rect(x + w - 54, y + 7, 42, h - 14, 5, badge_bg);
+    canvas.fill_rounded_rect(x + w - 48, y + 6, 38, h - 12, 5, badge_bg);
     let badge_txt = if active { "ON" } else { "OFF" };
     let badge_fg = if active {
         [16, 16, 24, 255]
     } else {
         [220, 224, 240, 255]
     };
-    canvas.draw_text_px(x + w - 43, y + 10, badge_txt, 12.0, badge_fg);
-    canvas.draw_text_px(x + 14, y + 10, label, 13.0, [238, 240, 252, 255]);
+    canvas.draw_text_px(x + w - 39, y + (h - 14) / 2, badge_txt, 11.5, badge_fg);
+    canvas.draw_text_px(x + 12, y + (h - 14) / 2, label, 12.5, [238, 240, 252, 255]);
 }
 
 fn read_os_release() -> String {
@@ -903,6 +1492,16 @@ fn read_cpu_model() -> String {
     "Unknown CPU".to_string()
 }
 
+fn read_cpu_load() -> String {
+    if let Ok(content) = fs::read_to_string("/proc/loadavg") {
+        let parts: Vec<&str> = content.split_whitespace().take(3).collect();
+        if parts.len() == 3 {
+            return format!("Load avg: {} (1m), {} (5m), {} (15m)", parts[0], parts[1], parts[2]);
+        }
+    }
+    "Normal".to_string()
+}
+
 fn read_ram_summary() -> String {
     if let Ok(content) = fs::read_to_string("/proc/meminfo") {
         let mut total_kb = 0u64;
@@ -925,10 +1524,25 @@ fn read_ram_summary() -> String {
         if total_kb > 0 {
             let used_mib = total_kb.saturating_sub(avail_kb) / 1024;
             let total_mib = total_kb / 1024;
-            return format!("{} MiB / {} MiB used", used_mib, total_mib);
+            let pct = (used_mib * 100) / total_mib.max(1);
+            return format!("{} MiB / {} MiB ({}%)", used_mib, total_mib, pct);
         }
     }
     "Unknown RAM".to_string()
+}
+
+fn read_disk_summary() -> String {
+    unsafe {
+        let mut stat: libc::statvfs = std::mem::zeroed();
+        let root = std::ffi::CString::new("/").unwrap();
+        if libc::statvfs(root.as_ptr(), &mut stat) == 0 && stat.f_blocks > 0 {
+            let total_gb = (stat.f_blocks * stat.f_frsize) / (1024 * 1024 * 1024);
+            let avail_gb = (stat.f_bavail * stat.f_frsize) / (1024 * 1024 * 1024);
+            let used_gb = total_gb.saturating_sub(avail_gb);
+            return format!("{} GiB used / {} GiB total", used_gb, total_gb);
+        }
+    }
+    " Mounted /".to_string()
 }
 
 fn read_gpu_name() -> String {

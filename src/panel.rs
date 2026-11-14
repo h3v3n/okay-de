@@ -21,27 +21,37 @@ use smithay::{
     },
     desktop::Window,
     output::Output,
-    reexports::wayland_server::Resource,
+    reexports::wayland_server::{backend::ObjectId, Resource},
     utils::{Logical, Physical, Point, Rectangle, Scale, Transform},
     wayland::{compositor::with_states, shell::xdg::XdgToplevelSurfaceData},
 };
 
-use crate::{render::OkayRenderElements, state::OkayState};
+use crate::{animation::MinimizeEffect, render::OkayRenderElements, state::OkayState};
 
 pub const PANEL_HEIGHT: i32 = 42;
-const MENU_WIDTH: i32 = 290;
-const MENU_HEADER_HEIGHT: i32 = 44;
-const MENU_ITEM_HEIGHT: i32 = 36;
+const MENU_WIDTH: i32 = 320;
+const MENU_HEADER_HEIGHT: i32 = 74;
+const MENU_ITEM_HEIGHT: i32 = 34;
+const MENU_FOOTER_HEIGHT: i32 = 42;
 const MENU_PADDING: i32 = 8;
 
 /// Accent color presets: `(Name, [R, G, B], linear [f32; 4])`.
-pub const ACCENT_PRESETS: [(&str, [u8; 3], [f32; 4]); 5] = [
+pub const ACCENT_PRESETS: [(&str, [u8; 3], [f32; 4]); 6] = [
     ("Lavender", [201, 160, 220], [0.788, 0.627, 0.863, 1.0]),
     ("Sky Blue", [137, 180, 250], [0.537, 0.706, 0.980, 1.0]),
     ("Emerald", [166, 227, 161], [0.651, 0.890, 0.631, 1.0]),
     ("Coral", [243, 139, 168], [0.953, 0.545, 0.659, 1.0]),
     ("Amber", [249, 226, 175], [0.976, 0.886, 0.686, 1.0]),
+    ("Crimson", [235, 111, 146], [0.922, 0.435, 0.573, 1.0]),
 ];
+
+#[derive(Debug, Clone)]
+pub struct DesktopAppEntry {
+    pub name: String,
+    pub exec: String,
+    pub category: String,
+    pub badge: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LauncherItem {
@@ -49,20 +59,20 @@ pub enum LauncherItem {
     FileManager,
     Browser,
     SystemMonitor,
+    Screenshot,
     OkaySettings,
     ReloadConfig,
-    ExitSession,
 }
 
 impl LauncherItem {
-    const ALL: [Self; 7] = [
+    const BUILTIN: [Self; 7] = [
         Self::Terminal,
         Self::FileManager,
         Self::Browser,
         Self::SystemMonitor,
+        Self::Screenshot,
         Self::OkaySettings,
         Self::ReloadConfig,
-        Self::ExitSession,
     ];
 
     fn badge(self) -> &'static str {
@@ -71,9 +81,9 @@ impl LauncherItem {
             Self::FileManager => "FM",
             Self::Browser => "WB",
             Self::SystemMonitor => "SM",
+            Self::Screenshot => "SC",
             Self::OkaySettings => "OS",
             Self::ReloadConfig => "RC",
-            Self::ExitSession => "EX",
         }
     }
 
@@ -83,9 +93,9 @@ impl LauncherItem {
             Self::FileManager => "File Manager",
             Self::Browser => "Web Browser",
             Self::SystemMonitor => "System Monitor",
+            Self::Screenshot => "Take Screenshot",
             Self::OkaySettings => "OKay Settings",
             Self::ReloadConfig => "Reload Config",
-            Self::ExitSession => "Exit Session",
         }
     }
 
@@ -95,9 +105,9 @@ impl LauncherItem {
             Self::FileManager => "Files",
             Self::Browser => "Internet",
             Self::SystemMonitor => "Resources",
+            Self::Screenshot => "Super+S",
             Self::OkaySettings => "Super+I",
-            Self::ReloadConfig => "Wallpaper",
-            Self::ExitSession => "Super+Esc",
+            Self::ReloadConfig => "Config",
         }
     }
 }
@@ -106,10 +116,19 @@ impl LauncherItem {
 enum ClickTarget {
     ToggleLauncher,
     ToggleSettings,
+    ToggleCalendar,
+    ToggleNotifDrawer,
+    ToggleMute,
     ToggleTiling,
+    PinnedApp(LauncherItem),
     Workspace(usize),
     FocusWindow(usize),
     LaunchItem(LauncherItem),
+    LaunchDesktopApp(String),
+    PowerLock,
+    PowerSuspend,
+    PowerReboot,
+    PowerExit,
 }
 
 #[derive(Debug)]
@@ -117,7 +136,17 @@ pub struct PanelState {
     pub launcher_open: bool,
     pub show_workspaces: bool,
     pub dock_mode: bool,
+    pub panel_top: bool,
     pub accent_preset: usize,
+    pub window_gaps: i32,
+    pub search_query: String,
+    pub desktop_apps: Vec<DesktopAppEntry>,
+    pub default_terminal: String,
+    pub default_browser: String,
+    pub default_file_manager: String,
+    pub volume_percent: i32,
+    pub volume_muted: bool,
+    pub battery_percent: Option<i32>,
     hit_regions: Vec<(Rectangle<i32, Logical>, ClickTarget)>,
 }
 
@@ -127,10 +156,30 @@ impl Default for PanelState {
             launcher_open: false,
             show_workspaces: true,
             dock_mode: false,
+            panel_top: false,
             accent_preset: 0,
+            window_gaps: 8,
+            search_query: String::new(),
+            desktop_apps: scan_desktop_applications(),
+            default_terminal: "foot".to_string(),
+            default_browser: "firefox".to_string(),
+            default_file_manager: "thunar".to_string(),
+            volume_percent: 75,
+            volume_muted: false,
+            battery_percent: read_battery_percent(),
             hit_regions: Vec::new(),
         }
     }
+}
+
+/// Extra initial settings loaded from `~/.config/okay-de/config.toml`.
+pub struct LoadedUserConfig {
+    pub pointer_speed: f64,
+    pub natural_scroll: bool,
+    pub anim_enabled: bool,
+    pub anim_speed: f32,
+    pub minimize_effect: MinimizeEffect,
+    pub xkb_layout: String,
 }
 
 impl PanelState {
@@ -148,15 +197,21 @@ impl PanelState {
         ACCENT_PRESETS[self.accent_preset % ACCENT_PRESETS.len()].2
     }
 
-    /// Reads `~/.config/okay-de/config.toml` and returns `(pointer_speed, natural_scroll)` if set.
-    pub fn load_config_file(&mut self) -> (f64, bool) {
-        let mut pointer_speed = 1.0_f64;
-        let mut natural_scroll = false;
+    /// Reads `~/.config/okay-de/config.toml` and returns user input & animation settings.
+    pub fn load_config_file(&mut self) -> LoadedUserConfig {
+        let mut cfg = LoadedUserConfig {
+            pointer_speed: 1.0,
+            natural_scroll: false,
+            anim_enabled: true,
+            anim_speed: 1.0,
+            minimize_effect: MinimizeEffect::MagicLamp,
+            xkb_layout: "us".to_string(),
+        };
         let Some(path) = config_file_path() else {
-            return (pointer_speed, natural_scroll);
+            return cfg;
         };
         let Ok(content) = fs::read_to_string(path) else {
-            return (pointer_speed, natural_scroll);
+            return cfg;
         };
         for line in content.lines() {
             let line = line.trim();
@@ -168,27 +223,68 @@ impl PanelState {
                 let val = v.trim().trim_matches('"');
                 match key {
                     "dock_mode" => self.dock_mode = val == "true",
+                    "panel_top" => self.panel_top = val == "true",
                     "show_workspaces" => self.show_workspaces = val != "false",
                     "accent_preset" => {
                         if let Ok(idx) = val.parse::<usize>() {
                             self.accent_preset = idx % ACCENT_PRESETS.len();
                         }
                     }
-                    "pointer_speed" => {
-                        if let Ok(spd) = val.parse::<f64>() {
-                            pointer_speed = spd.clamp(0.25, 2.5);
+                    "window_gaps" => {
+                        if let Ok(g) = val.parse::<i32>() {
+                            self.window_gaps = g.clamp(0, 32);
                         }
                     }
-                    "natural_scroll" => natural_scroll = val == "true",
+                    "pointer_speed" => {
+                        if let Ok(spd) = val.parse::<f64>() {
+                            cfg.pointer_speed = spd.clamp(0.25, 2.5);
+                        }
+                    }
+                    "natural_scroll" => cfg.natural_scroll = val == "true",
+                    "animations_enabled" => cfg.anim_enabled = val != "false",
+                    "animation_speed" => {
+                        if let Ok(s) = val.parse::<f32>() {
+                            cfg.anim_speed = s.clamp(0.4, 2.5);
+                        }
+                    }
+                    "minimize_effect" => cfg.minimize_effect = MinimizeEffect::from_str(val),
+                    "default_terminal" => {
+                        if !val.is_empty() {
+                            self.default_terminal = val.to_string();
+                        }
+                    }
+                    "default_browser" => {
+                        if !val.is_empty() {
+                            self.default_browser = val.to_string();
+                        }
+                    }
+                    "default_file_manager" => {
+                        if !val.is_empty() {
+                            self.default_file_manager = val.to_string();
+                        }
+                    }
+                    "xkb_layout" => {
+                        if !val.is_empty() {
+                            cfg.xkb_layout = val.to_string();
+                        }
+                    }
                     _ => {}
                 }
             }
         }
-        (pointer_speed, natural_scroll)
+        cfg
     }
 
-    /// Saves current panel & input preferences to `~/.config/okay-de/config.toml`.
-    pub fn save_config_file(&self, pointer_speed: f64, natural_scroll: bool) {
+    /// Saves all user preferences to `~/.config/okay-de/config.toml`.
+    pub fn save_full_config(
+        &self,
+        pointer_speed: f64,
+        natural_scroll: bool,
+        anim_enabled: bool,
+        anim_speed: f32,
+        minimize_effect: MinimizeEffect,
+        xkb_layout: &str,
+    ) {
         let Some(path) = config_file_path() else {
             return;
         };
@@ -196,14 +292,50 @@ impl PanelState {
             let _ = fs::create_dir_all(parent);
         }
         let body = format!(
-            "# OKay DE Configuration\ndock_mode = {}\nshow_workspaces = {}\naccent_preset = {}\npointer_speed = {:.2}\nnatural_scroll = {}\n",
+            "# OKay DE Configuration\ndock_mode = {}\npanel_top = {}\nshow_workspaces = {}\naccent_preset = {}\nwindow_gaps = {}\npointer_speed = {:.2}\nnatural_scroll = {}\nanimations_enabled = {}\nanimation_speed = {:.2}\nminimize_effect = \"{}\"\ndefault_terminal = \"{}\"\ndefault_browser = \"{}\"\ndefault_file_manager = \"{}\"\nxkb_layout = \"{}\"\n",
             self.dock_mode,
+            self.panel_top,
             self.show_workspaces,
             self.accent_preset,
+            self.window_gaps,
             pointer_speed,
-            natural_scroll
+            natural_scroll,
+            anim_enabled,
+            anim_speed,
+            minimize_effect.as_config_str(),
+            self.default_terminal,
+            self.default_browser,
+            self.default_file_manager,
+            xkb_layout,
         );
         let _ = fs::write(path, body);
+    }
+
+    pub fn set_volume(&mut self, new_vol: i32) {
+        self.volume_percent = new_vol.clamp(0, 100);
+        let pct_arg = format!("{}%", self.volume_percent);
+        if Command::new("wpctl")
+            .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &pct_arg])
+            .spawn()
+            .is_err()
+        {
+            let _ = Command::new("pactl")
+                .args(["set-sink-volume", "@DEFAULT_SINK@", &pct_arg])
+                .spawn();
+        }
+    }
+
+    pub fn toggle_mute(&mut self) {
+        self.volume_muted = !self.volume_muted;
+        if Command::new("wpctl")
+            .args(["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
+            .spawn()
+            .is_err()
+        {
+            let _ = Command::new("pactl")
+                .args(["set-sink-mute", "@DEFAULT_SINK@", "toggle"])
+                .spawn();
+        }
     }
 }
 
@@ -219,7 +351,94 @@ fn config_file_path() -> Option<PathBuf> {
         .map(|h| PathBuf::from(h).join(".config/okay-de/config.toml"))
 }
 
-/// Spawns the first available terminal emulator installed on the system.
+/// Scans `/usr/share/applications` and `~/.local/share/applications` for `.desktop` files.
+pub fn scan_desktop_applications() -> Vec<DesktopAppEntry> {
+    let mut dirs = vec![PathBuf::from("/usr/share/applications")];
+    if let Ok(home) = std::env::var("HOME") {
+        dirs.insert(0, PathBuf::from(home).join(".local/share/applications"));
+    }
+
+    let mut apps = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let mut name = None;
+            let mut exec = None;
+            let mut categories = String::new();
+            let mut no_display = false;
+
+            for line in text.lines() {
+                let line = line.trim();
+                if line.starts_with('[') && line != "[Desktop Entry]" {
+                    break;
+                }
+                if line == "NoDisplay=true" || line == "Hidden=true" {
+                    no_display = true;
+                } else if name.is_none() && line.starts_with("Name=") {
+                    name = line.strip_prefix("Name=").map(|s| s.trim().to_string());
+                } else if exec.is_none() && line.starts_with("Exec=") {
+                    if let Some(raw_exec) = line.strip_prefix("Exec=") {
+                        // Strip `%u`, `%F`, etc. field codes
+                        let cleaned: Vec<&str> = raw_exec
+                            .split_whitespace()
+                            .filter(|tok| !tok.starts_with('%'))
+                            .collect();
+                        if !cleaned.is_empty() {
+                            exec = Some(cleaned.join(" "));
+                        }
+                    }
+                } else if line.starts_with("Categories=") {
+                    categories = line.strip_prefix("Categories=").unwrap_or("").to_string();
+                }
+            }
+
+            if no_display {
+                continue;
+            }
+            if let (Some(n), Some(e)) = (name, exec) {
+                if apps.iter().any(|a: &DesktopAppEntry| a.name == n) {
+                    continue;
+                }
+                let badge: String = n
+                    .chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .take(2)
+                    .collect::<String>()
+                    .to_uppercase();
+                let category = if categories.contains("Development") {
+                    "Dev".to_string()
+                } else if categories.contains("Network") {
+                    "Web".to_string()
+                } else if categories.contains("AudioVideo") {
+                    "Media".to_string()
+                } else if categories.contains("System") {
+                    "System".to_string()
+                } else {
+                    "App".to_string()
+                };
+                apps.push(DesktopAppEntry {
+                    name: n,
+                    exec: e,
+                    category,
+                    badge: if badge.is_empty() { "AP".to_string() } else { badge },
+                });
+            }
+        }
+    }
+    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps
+}
+
+/// Spawns the user's preferred terminal or the first available terminal emulator installed on the system.
 pub fn spawn_terminal(socket_name: &OsStr) {
     let candidates = [
         "foot",
@@ -233,7 +452,7 @@ pub fn spawn_terminal(socket_name: &OsStr) {
     spawn_first_available(&candidates, socket_name, "terminal");
 }
 
-fn spawn_first_available(candidates: &[&str], socket_name: &OsStr, kind: &str) {
+pub fn spawn_first_available(candidates: &[&str], socket_name: &OsStr, kind: &str) {
     for bin in candidates {
         match Command::new(bin).env("WAYLAND_DISPLAY", socket_name).spawn() {
             Ok(_) => {
@@ -268,37 +487,69 @@ fn spawn_system_monitor(socket_name: &OsStr) {
     }
 }
 
-fn execute_launcher_item(state: &mut OkayState, item: LauncherItem) {
+pub fn execute_launcher_item(state: &mut OkayState, item: LauncherItem) {
     state.panel.launcher_open = false;
+    state.panel.search_query.clear();
     match item {
-        LauncherItem::Terminal => spawn_terminal(&state.socket_name),
-        LauncherItem::FileManager => spawn_first_available(
-            &["pcmanfm", "thunar", "nemo", "dolphin", "nautilus"],
-            &state.socket_name,
-            "file-manager",
-        ),
-        LauncherItem::Browser => spawn_first_available(
-            &["firefox", "chromium", "brave", "floorp", "xdg-open"],
-            &state.socket_name,
-            "browser",
-        ),
+        LauncherItem::Terminal => {
+            let preferred = state.panel.default_terminal.clone();
+            let list = [
+                preferred.as_str(),
+                "foot",
+                "kitty",
+                "alacritty",
+                "wezterm",
+                "konsole",
+                "gnome-terminal",
+                "xterm",
+            ];
+            spawn_first_available(&list, &state.socket_name, "terminal");
+        }
+        LauncherItem::FileManager => {
+            let preferred = state.panel.default_file_manager.clone();
+            let list = [
+                preferred.as_str(),
+                "thunar",
+                "pcmanfm",
+                "nemo",
+                "dolphin",
+                "nautilus",
+            ];
+            spawn_first_available(&list, &state.socket_name, "file-manager");
+        }
+        LauncherItem::Browser => {
+            let preferred = state.panel.default_browser.clone();
+            let list = [
+                preferred.as_str(),
+                "firefox",
+                "chromium",
+                "brave",
+                "floorp",
+                "xdg-open",
+            ];
+            spawn_first_available(&list, &state.socket_name, "browser");
+        }
         LauncherItem::SystemMonitor => spawn_system_monitor(&state.socket_name),
+        LauncherItem::Screenshot => {
+            crate::overlays::take_screenshot(state);
+        }
         LauncherItem::OkaySettings => {
             state.settings.open = true;
             state.settings.refresh_system_info();
         }
         LauncherItem::ReloadConfig => {
-            let (spd, nat) = state.panel.load_config_file();
-            state.pointer_sensitivity = spd;
-            state.natural_scroll = nat;
+            let cfg = state.panel.load_config_file();
+            state.pointer_sensitivity = cfg.pointer_speed;
+            state.natural_scroll = cfg.natural_scroll;
+            state.animations.enabled = cfg.anim_enabled;
+            state.animations.speed = cfg.anim_speed;
+            state.animations.minimize_effect = cfg.minimize_effect;
             state.theme.active_border_color = state.panel.accent_f32();
             state.desktop.reload();
             state.retile_workspace();
-        }
-        LauncherItem::ExitSession => {
-            tracing::info!("Exit Session selected from taskbar menu");
-            state.running = false;
-            state.loop_signal.stop();
+            state
+                .overlays
+                .push_notification("Configuration Reloaded", "Applied ~/.config/okay-de/config.toml");
         }
     }
 }
@@ -311,11 +562,7 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
 
     let mut matched: Option<ClickTarget> = None;
     for (rect, target) in state.panel.hit_regions.iter().rev() {
-        if px >= rect.loc.x
-            && px < rect.loc.x + rect.size.w
-            && py >= rect.loc.y
-            && py < rect.loc.y + rect.size.h
-        {
+        if rect_contains(*rect, px, py) {
             matched = Some(target.clone());
             break;
         }
@@ -325,6 +572,9 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
         match target {
             ClickTarget::ToggleLauncher => {
                 state.panel.launcher_open = !state.panel.launcher_open;
+                if state.panel.launcher_open {
+                    state.panel.search_query.clear();
+                }
             }
             ClickTarget::ToggleSettings => {
                 state.panel.launcher_open = false;
@@ -333,9 +583,25 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                     state.settings.refresh_system_info();
                 }
             }
+            ClickTarget::ToggleCalendar => {
+                state.panel.launcher_open = false;
+                state.overlays.calendar_open = !state.overlays.calendar_open;
+                state.overlays.notif_drawer_open = false;
+            }
+            ClickTarget::ToggleNotifDrawer => {
+                state.panel.launcher_open = false;
+                state.overlays.notif_drawer_open = !state.overlays.notif_drawer_open;
+                state.overlays.calendar_open = false;
+            }
+            ClickTarget::ToggleMute => {
+                state.panel.toggle_mute();
+            }
             ClickTarget::ToggleTiling => {
                 state.panel.launcher_open = false;
                 state.toggle_tiling();
+            }
+            ClickTarget::PinnedApp(item) => {
+                execute_launcher_item(state, item);
             }
             ClickTarget::Workspace(ws) => {
                 state.panel.launcher_open = false;
@@ -362,12 +628,39 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
             ClickTarget::LaunchItem(item) => {
                 execute_launcher_item(state, item);
             }
+            ClickTarget::LaunchDesktopApp(cmd) => {
+                state.panel.launcher_open = false;
+                state.panel.search_query.clear();
+                let _ = Command::new("sh")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .env("WAYLAND_DISPLAY", &state.socket_name)
+                    .spawn();
+            }
+            ClickTarget::PowerLock => {
+                state.panel.launcher_open = false;
+                state.overlays.locked = true;
+                state.overlays.lock_input.clear();
+            }
+            ClickTarget::PowerSuspend => {
+                state.panel.launcher_open = false;
+                let _ = Command::new("systemctl").arg("suspend").spawn();
+            }
+            ClickTarget::PowerReboot => {
+                state.panel.launcher_open = false;
+                let _ = Command::new("systemctl").arg("reboot").spawn();
+            }
+            ClickTarget::PowerExit => {
+                state.running = false;
+                state.loop_signal.stop();
+            }
         }
         return true;
     }
 
     if state.panel.launcher_open {
         state.panel.launcher_open = false;
+        state.panel.search_query.clear();
     }
 
     false
@@ -408,18 +701,16 @@ pub fn render_panel_elements(
         .and_then(|k| k.current_focus())
         .map(|s| s.id());
 
-    let ws_windows: Vec<(String, bool, bool)> = state
+    let ws_windows: Vec<(Option<ObjectId>, String, bool, bool)> = state
         .space
         .elements()
         .filter(|w| state.workspaces.is_on_active_workspace(w))
         .map(|w| {
+            let id = w.toplevel().map(|t| t.wl_surface().id());
             let is_min = state.workspaces.is_minimized(w);
-            let is_focused = !is_min
-                && w.toplevel()
-                    .map(|t| Some(t.wl_surface().id()) == focused_id)
-                    .unwrap_or(false);
-            let title = window_title(w);
-            (title, is_focused, is_min)
+            let is_focused = !is_min && id.as_ref() == focused_id.as_ref();
+            let title = window_title_str(w);
+            (id, title, is_focused, is_min)
         })
         .collect();
 
@@ -433,15 +724,23 @@ pub fn render_panel_elements(
         })
         .collect();
 
-    let (bar_x_local, bar_y_local, bar_w, bar_h) = if state.panel.dock_mode {
-        let ws_section_w = if state.panel.show_workspaces { 9 * 28 + 10 } else { 0 };
-        let win_section_w = (ws_windows.len() as i32 * 148).clamp(120, 560);
-        let desired_w = (84 + ws_section_w + win_section_w + 190).clamp(420, (output_geo.size.w - 32).max(320));
-        let bx = (output_geo.size.w - desired_w) / 2;
-        let by = output_geo.size.h - PANEL_HEIGHT - 8;
-        (bx, by, desired_w, PANEL_HEIGHT)
+    let bar_y_local = if state.panel.panel_top {
+        if state.panel.dock_mode { 8 } else { 0 }
+    } else if state.panel.dock_mode {
+        output_geo.size.h - PANEL_HEIGHT - 8
     } else {
-        (0, output_geo.size.h - PANEL_HEIGHT, output_geo.size.w, PANEL_HEIGHT)
+        output_geo.size.h - PANEL_HEIGHT
+    };
+
+    let (bar_x_local, bar_w, bar_h) = if state.panel.dock_mode {
+        let ws_section_w = if state.panel.show_workspaces { 9 * 27 + 10 } else { 0 };
+        let win_section_w = (ws_windows.len() as i32 * 145).clamp(130, 560);
+        let desired_w = (195 + ws_section_w + win_section_w + 260)
+            .clamp(480, (output_geo.size.w - 32).max(360));
+        let bx = (output_geo.size.w - desired_w) / 2;
+        (bx, desired_w, PANEL_HEIGHT)
+    } else {
+        (0, output_geo.size.w, PANEL_HEIGHT)
     };
 
     let mut elements = Vec::new();
@@ -449,10 +748,11 @@ pub fn render_panel_elements(
 
     if state.panel.dock_mode {
         canvas.fill_rounded_rect(0, 0, bar_w, bar_h, 11, [20, 20, 32, 238]);
-        canvas.fill_rect(12, 0, bar_w - 24, 2, [accent[0], accent[1], accent[2], 180]);
+        canvas.fill_rect(12, 0, bar_w - 24, 2, [accent[0], accent[1], accent[2], 185]);
     } else {
         canvas.fill_rect(0, 0, bar_w, bar_h, [18, 18, 28, 244]);
-        canvas.fill_rect(0, 0, bar_w, 1, [accent[0], accent[1], accent[2], 140]);
+        let line_y = if state.panel.panel_top { bar_h - 1 } else { 0 };
+        canvas.fill_rect(0, line_y, bar_w, 1, [accent[0], accent[1], accent[2], 145]);
     }
 
     let mut cursor_x = 10;
@@ -478,13 +778,51 @@ pub fn render_panel_elements(
     };
     canvas.fill_rounded_rect(cursor_x, 6, start_w, bar_h - 12, 6, start_bg);
     canvas.draw_text_px(cursor_x + 15, 12, "OKay", 15.0, start_fg);
-    state.panel.hit_regions.push((start_global, ClickTarget::ToggleLauncher));
-    cursor_x += start_w + 10;
+    state
+        .panel
+        .hit_regions
+        .push((start_global, ClickTarget::ToggleLauncher));
+    cursor_x += start_w + 8;
 
-    // 2. Workspace Indicators (1..9) if enabled
+    // 2. Quick Pinned App Launchers (`>_` Terminal, `FM` Files, `WB` Browser)
+    let pinned = [
+        (LauncherItem::Terminal, ">_"),
+        (LauncherItem::FileManager, "FM"),
+        (LauncherItem::Browser, "WB"),
+    ];
+    for (item, icon) in pinned {
+        let pw = 30;
+        let pin_global = Rectangle::new(
+            (output_geo.loc.x + bar_x_local + cursor_x, output_geo.loc.y + bar_y_local + 6).into(),
+            (pw, bar_h - 12).into(),
+        );
+        let hovered = rect_contains(pin_global, pointer_x, pointer_y);
+        let bg = if hovered {
+            [58, 54, 82, 255]
+        } else {
+            [32, 32, 48, 235]
+        };
+        let y_off = if hovered { 4 } else { 6 };
+        canvas.fill_rounded_rect(cursor_x, y_off, pw, bar_h - 12, 6, bg);
+        canvas.draw_text_px(
+            cursor_x + 6,
+            y_off + 6,
+            icon,
+            13.0,
+            [accent[0], accent[1], accent[2], 255],
+        );
+        state
+            .panel
+            .hit_regions
+            .push((pin_global, ClickTarget::PinnedApp(item)));
+        cursor_x += pw + 4;
+    }
+    cursor_x += 6;
+
+    // 3. Workspace Indicators (1..9) if enabled
     if state.panel.show_workspaces {
         for ws in 1..=9 {
-            let ws_w = 24;
+            let ws_w = 23;
             let is_active = state.workspaces.active == ws;
             let is_occupied = occupied_workspaces[ws - 1];
             let ws_global = Rectangle::new(
@@ -512,23 +850,73 @@ pub fn render_panel_elements(
 
             canvas.fill_rounded_rect(cursor_x, 7, ws_w, bar_h - 14, 5, bg);
             let label = ws.to_string();
-            canvas.draw_text_px(cursor_x + 8, 12, &label, 14.0, fg);
-            state.panel.hit_regions.push((ws_global, ClickTarget::Workspace(ws)));
+            canvas.draw_text_px(cursor_x + 7, 12, &label, 13.5, fg);
+            state
+                .panel
+                .hit_regions
+                .push((ws_global, ClickTarget::Workspace(ws)));
             cursor_x += ws_w + 4;
         }
         cursor_x += 8;
     }
 
-    // 3. Right-side System Tray: Clock + Layout Mode + Settings button
+    // 4. Right-Side System Tray: Clock/Calendar + Notifications + Settings + Audio Volume + Battery + Layout
     let clock_str = current_hh_mm();
     let clock_w = 68;
     let clock_x = (bar_w - clock_w - 10).max(cursor_x);
-    canvas.fill_rounded_rect(clock_x, 6, clock_w, bar_h - 12, 6, [32, 32, 48, 235]);
-    canvas.draw_text_px(clock_x + 12, 12, &clock_str, 14.0, [235, 238, 250, 255]);
+    let clock_global = Rectangle::new(
+        (output_geo.loc.x + bar_x_local + clock_x, output_geo.loc.y + bar_y_local + 6).into(),
+        (clock_w, bar_h - 12).into(),
+    );
+    let clock_bg = if state.overlays.calendar_open {
+        [accent[0], accent[1], accent[2], 255]
+    } else if rect_contains(clock_global, pointer_x, pointer_y) {
+        [50, 50, 74, 255]
+    } else {
+        [32, 32, 48, 235]
+    };
+    let clock_fg = if state.overlays.calendar_open {
+        [16, 16, 24, 255]
+    } else {
+        [235, 238, 250, 255]
+    };
+    canvas.fill_rounded_rect(clock_x, 6, clock_w, bar_h - 12, 6, clock_bg);
+    canvas.draw_text_px(clock_x + 12, 12, &clock_str, 14.0, clock_fg);
+    state
+        .panel
+        .hit_regions
+        .push((clock_global, ClickTarget::ToggleCalendar));
 
+    // Notification Center Bell [N]
+    let notif_w = 32;
+    let notif_x = (clock_x - notif_w - 6).max(cursor_x);
+    if notif_x + notif_w <= clock_x - 4 {
+        let notif_global = Rectangle::new(
+            (output_geo.loc.x + bar_x_local + notif_x, output_geo.loc.y + bar_y_local + 6).into(),
+            (notif_w, bar_h - 12).into(),
+        );
+        let n_bg = if state.overlays.notif_drawer_open {
+            [accent[0], accent[1], accent[2], 255]
+        } else {
+            [34, 34, 50, 235]
+        };
+        let n_fg = if state.overlays.notif_drawer_open {
+            [16, 16, 24, 255]
+        } else {
+            [225, 228, 245, 255]
+        };
+        canvas.fill_rounded_rect(notif_x, 6, notif_w, bar_h - 12, 6, n_bg);
+        canvas.draw_text_px(notif_x + 10, 12, "N", 13.0, n_fg);
+        state
+            .panel
+            .hit_regions
+            .push((notif_global, ClickTarget::ToggleNotifDrawer));
+    }
+
+    // Settings [OS]
     let settings_w = 34;
-    let settings_x = (clock_x - settings_w - 6).max(cursor_x);
-    if settings_x + settings_w <= clock_x - 4 {
+    let settings_x = (notif_x - settings_w - 6).max(cursor_x);
+    if settings_x + settings_w <= notif_x - 4 {
         let set_global = Rectangle::new(
             (output_geo.loc.x + bar_x_local + settings_x, output_geo.loc.y + bar_y_local + 6).into(),
             (settings_w, bar_h - 12).into(),
@@ -547,33 +935,69 @@ pub fn render_panel_elements(
         };
         canvas.fill_rounded_rect(settings_x, 6, settings_w, bar_h - 12, 6, set_bg);
         canvas.draw_text_px(settings_x + 8, 12, "OS", 13.0, set_fg);
-        state.panel.hit_regions.push((set_global, ClickTarget::ToggleSettings));
+        state
+            .panel
+            .hit_regions
+            .push((set_global, ClickTarget::ToggleSettings));
     }
 
-    let mode_label = if state.workspaces.tiling_enabled { "TILE" } else { "FLT" };
+    // Volume indicator
+    let vol_w = 54;
+    let vol_x = (settings_x - vol_w - 6).max(cursor_x);
+    if vol_x + vol_w <= settings_x - 4 {
+        let vol_global = Rectangle::new(
+            (output_geo.loc.x + bar_x_local + vol_x, output_geo.loc.y + bar_y_local + 6).into(),
+            (vol_w, bar_h - 12).into(),
+        );
+        let vol_txt = if state.panel.volume_muted {
+            "MUTE".to_string()
+        } else if let Some(bat) = state.panel.battery_percent {
+            format!("{}% B{}", state.panel.volume_percent, bat)
+        } else {
+            format!("V:{}%", state.panel.volume_percent)
+        };
+        canvas.fill_rounded_rect(vol_x, 6, vol_w, bar_h - 12, 6, [34, 34, 50, 235]);
+        canvas.draw_text_px(vol_x + 7, 12, &vol_txt, 12.5, [215, 220, 240, 255]);
+        state
+            .panel
+            .hit_regions
+            .push((vol_global, ClickTarget::ToggleMute));
+    }
+
+    // Layout mode badge (`TILE` / `DWND` / `FLT`)
+    let mode_label = state.workspaces.layout_mode.short_label();
     let status_w = 52;
-    let status_x = (settings_x - status_w - 6).max(cursor_x);
-    if status_x + status_w <= settings_x - 4 {
+    let status_x = (vol_x - status_w - 6).max(cursor_x);
+    if status_x + status_w <= vol_x - 4 {
         let status_global = Rectangle::new(
             (output_geo.loc.x + bar_x_local + status_x, output_geo.loc.y + bar_y_local + 6).into(),
             (status_w, bar_h - 12).into(),
         );
-        let status_bg = if state.workspaces.tiling_enabled {
+        let status_bg = if state.workspaces.tiling_enabled() {
             [56, 46, 78, 245]
         } else {
             [34, 34, 50, 235]
         };
         canvas.fill_rounded_rect(status_x, 6, status_w, bar_h - 12, 6, status_bg);
-        canvas.draw_text_px(status_x + 9, 12, mode_label, 13.0, [accent[0], accent[1], accent[2], 255]);
-        state.panel.hit_regions.push((status_global, ClickTarget::ToggleTiling));
+        canvas.draw_text_px(
+            status_x + 9,
+            12,
+            mode_label,
+            12.5,
+            [accent[0], accent[1], accent[2], 255],
+        );
+        state
+            .panel
+            .hit_regions
+            .push((status_global, ClickTarget::ToggleTiling));
     }
 
-    // 4. Open Window Task Buttons
+    // 5. Open Window Task Buttons (with exact button rect registration for Magic Lamp Genie!)
     let avail_w = (status_x - cursor_x - 8).max(0);
     if !ws_windows.is_empty() && avail_w > 48 {
-        let max_btn_w = 175;
-        let btn_w = ((avail_w / ws_windows.len() as i32) - 6).clamp(54, max_btn_w);
-        for (idx, (title, is_focused, is_min)) in ws_windows.iter().enumerate() {
+        let max_btn_w = 170;
+        let btn_w = ((avail_w / ws_windows.len() as i32) - 6).clamp(52, max_btn_w);
+        for (idx, (win_id, title, is_focused, is_min)) in ws_windows.iter().enumerate() {
             let bx = cursor_x + idx as i32 * (btn_w + 6);
             if bx + btn_w > status_x - 4 {
                 break;
@@ -582,6 +1006,13 @@ pub fn render_panel_elements(
                 (output_geo.loc.x + bar_x_local + bx, output_geo.loc.y + bar_y_local + 6).into(),
                 (btn_w, bar_h - 12).into(),
             );
+            if let Some(id) = win_id {
+                state
+                    .animations
+                    .taskbar_button_rects
+                    .insert(id.clone(), win_global);
+            }
+
             let hovered = rect_contains(win_global, pointer_x, pointer_y);
             let bg = if *is_focused {
                 [56, 50, 78, 255]
@@ -597,14 +1028,24 @@ pub fn render_panel_elements(
             } else {
                 [238, 240, 252, 255]
             };
-            canvas.fill_rounded_rect(bx, 6, btn_w, bar_h - 12, 6, bg);
+            let y_top = if hovered { 4 } else { 6 };
+            canvas.fill_rounded_rect(bx, y_top, btn_w, bar_h - 12, 6, bg);
             if *is_focused {
-                canvas.fill_rect(bx + 6, bar_h - 8, btn_w - 12, 2, [accent[0], accent[1], accent[2], 255]);
+                canvas.fill_rect(
+                    bx + 6,
+                    bar_h - 8,
+                    btn_w - 12,
+                    2,
+                    [accent[0], accent[1], accent[2], 255],
+                );
             }
             let max_chars = ((btn_w - 18) / 8).max(2) as usize;
             let short: String = title.chars().take(max_chars).collect();
-            canvas.draw_text_px(bx + 10, 12, &short, 13.5, fg);
-            state.panel.hit_regions.push((win_global, ClickTarget::FocusWindow(idx)));
+            canvas.draw_text_px(bx + 10, y_top + 6, &short, 13.5, fg);
+            state
+                .panel
+                .hit_regions
+                .push((win_global, ClickTarget::FocusWindow(idx)));
         }
     }
 
@@ -632,26 +1073,74 @@ pub fn render_panel_elements(
         elements.push(OkayRenderElements::Memory(elem));
     }
 
-    // 5. Render Expanded Start Menu Popup
-    if state.panel.launcher_open && is_primary {
+    // 6. Render Expanded Searchable Start Menu Popup (with smooth slide animation)
+    let menu_anim = state.animations.launcher_open_anim;
+    if (state.panel.launcher_open || menu_anim > 0.02) && is_primary {
+        let query_lower = state.panel.search_query.to_lowercase();
+        let matching_desktop: Vec<DesktopAppEntry> = state
+            .panel
+            .desktop_apps
+            .iter()
+            .filter(|a| query_lower.is_empty() || a.name.to_lowercase().contains(&query_lower))
+            .take(4)
+            .cloned()
+            .collect();
+
+        let total_rows = LauncherItem::BUILTIN.len() + matching_desktop.len();
         let menu_h = MENU_HEADER_HEIGHT
             + MENU_PADDING * 2
-            + LauncherItem::ALL.len() as i32 * MENU_ITEM_HEIGHT;
+            + total_rows as i32 * MENU_ITEM_HEIGHT
+            + MENU_FOOTER_HEIGHT;
         let menu_x = bar_x_local + 8;
-        let menu_y = (bar_y_local - menu_h - 8).max(8);
+        let slide_px = ((1.0 - menu_anim) * 18.0).round() as i32;
+        let menu_y = if state.panel.panel_top {
+            bar_y_local + PANEL_HEIGHT + 8 - slide_px
+        } else {
+            (bar_y_local - menu_h - 8 + slide_px).max(8)
+        };
 
         let mut menu_canvas = Canvas::new(MENU_WIDTH, menu_h);
         menu_canvas.fill_rounded_rect(0, 0, MENU_WIDTH, menu_h, 10, [20, 20, 32, 250]);
-        menu_canvas.stroke_rect(0, 0, MENU_WIDTH, menu_h, [accent[0], accent[1], accent[2], 190]);
+        menu_canvas.stroke_rect(0, 0, MENU_WIDTH, menu_h, [accent[0], accent[1], accent[2], 195]);
 
-        // Header
+        // Header + Search Box
         menu_canvas.fill_rect(2, 2, MENU_WIDTH - 4, MENU_HEADER_HEIGHT - 2, [28, 28, 44, 255]);
-        menu_canvas.draw_text_px(14, 10, "OKay DE", 15.5, [accent[0], accent[1], accent[2], 255]);
-        menu_canvas.draw_text_px(96, 12, "Application Launcher", 12.5, [160, 165, 190, 255]);
-        menu_canvas.fill_rect(8, MENU_HEADER_HEIGHT - 1, MENU_WIDTH - 16, 1, [50, 50, 72, 220]);
+        menu_canvas.draw_text_px(
+            14,
+            8,
+            "OKay DE",
+            15.5,
+            [accent[0], accent[1], accent[2], 255],
+        );
+        menu_canvas.draw_text_px(
+            96,
+            10,
+            "Application Launcher",
+            12.5,
+            [160, 165, 190, 255],
+        );
 
-        for (idx, item) in LauncherItem::ALL.iter().enumerate() {
-            let iy = MENU_HEADER_HEIGHT + MENU_PADDING + idx as i32 * MENU_ITEM_HEIGHT;
+        menu_canvas.fill_rounded_rect(12, 36, MENU_WIDTH - 24, 28, 6, [16, 16, 26, 255]);
+        let search_txt = if state.panel.search_query.is_empty() {
+            "Type to search applications...".to_string()
+        } else {
+            format!("Search: {}_", state.panel.search_query)
+        };
+        let search_fg = if state.panel.search_query.is_empty() {
+            [130, 135, 160, 255]
+        } else {
+            [240, 242, 252, 255]
+        };
+        menu_canvas.draw_text_px(22, 42, &search_txt, 12.5, search_fg);
+
+        let mut row_idx = 0;
+
+        // Built-in items
+        for item in LauncherItem::BUILTIN {
+            if !query_lower.is_empty() && !item.label().to_lowercase().contains(&query_lower) {
+                continue;
+            }
+            let iy = MENU_HEADER_HEIGHT + MENU_PADDING + row_idx * MENU_ITEM_HEIGHT;
             let item_global = Rectangle::new(
                 (
                     output_geo.loc.x + menu_x + MENU_PADDING,
@@ -661,23 +1150,10 @@ pub fn render_panel_elements(
                 (MENU_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT - 4).into(),
             );
             let hovered = rect_contains(item_global, pointer_x, pointer_y);
-            let is_exit = *item == LauncherItem::ExitSession;
-
             let item_bg = if hovered {
-                if is_exit {
-                    [92, 38, 56, 255]
-                } else {
-                    [54, 50, 78, 255]
-                }
-            } else if is_exit {
-                [46, 26, 38, 235]
+                [54, 50, 78, 255]
             } else {
                 [30, 30, 46, 235]
-            };
-            let item_fg = if is_exit {
-                [245, 148, 174, 255]
-            } else {
-                [238, 240, 252, 255]
             };
 
             menu_canvas.fill_rounded_rect(
@@ -688,32 +1164,126 @@ pub fn render_panel_elements(
                 6,
                 item_bg,
             );
-
-            // Icon badge
-            let badge_bg = if is_exit {
-                [120, 44, 66, 255]
-            } else {
-                [44, 44, 68, 255]
-            };
-            menu_canvas.fill_rounded_rect(MENU_PADDING + 6, iy + 6, 28, MENU_ITEM_HEIGHT - 12, 5, badge_bg);
+            menu_canvas.fill_rounded_rect(
+                MENU_PADDING + 6,
+                iy + 5,
+                26,
+                MENU_ITEM_HEIGHT - 10,
+                5,
+                [44, 44, 68, 255],
+            );
             menu_canvas.draw_text_px(
-                MENU_PADDING + 11,
-                iy + 9,
+                MENU_PADDING + 10,
+                iy + 8,
                 item.badge(),
-                12.0,
+                11.5,
                 [accent[0], accent[1], accent[2], 255],
             );
-
-            menu_canvas.draw_text_px(MENU_PADDING + 42, iy + 9, item.label(), 14.0, item_fg);
+            menu_canvas.draw_text_px(
+                MENU_PADDING + 40,
+                iy + 8,
+                item.label(),
+                13.5,
+                [238, 240, 252, 255],
+            );
             menu_canvas.draw_text_px(
                 MENU_WIDTH - MENU_PADDING - 72,
-                iy + 10,
+                iy + 9,
                 item.hint(),
                 11.5,
                 [145, 150, 175, 255],
             );
 
-            state.panel.hit_regions.push((item_global, ClickTarget::LaunchItem(*item)));
+            state
+                .panel
+                .hit_regions
+                .push((item_global, ClickTarget::LaunchItem(item)));
+            row_idx += 1;
+        }
+
+        // Scanned `.desktop` system applications
+        for app in &matching_desktop {
+            let iy = MENU_HEADER_HEIGHT + MENU_PADDING + row_idx * MENU_ITEM_HEIGHT;
+            let item_global = Rectangle::new(
+                (
+                    output_geo.loc.x + menu_x + MENU_PADDING,
+                    output_geo.loc.y + menu_y + iy + 2,
+                )
+                    .into(),
+                (MENU_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT - 4).into(),
+            );
+            let hovered = rect_contains(item_global, pointer_x, pointer_y);
+            let item_bg = if hovered {
+                [54, 50, 78, 255]
+            } else {
+                [28, 28, 42, 235]
+            };
+
+            menu_canvas.fill_rounded_rect(
+                MENU_PADDING,
+                iy + 2,
+                MENU_WIDTH - MENU_PADDING * 2,
+                MENU_ITEM_HEIGHT - 4,
+                6,
+                item_bg,
+            );
+            menu_canvas.fill_rounded_rect(
+                MENU_PADDING + 6,
+                iy + 5,
+                26,
+                MENU_ITEM_HEIGHT - 10,
+                5,
+                [40, 44, 66, 255],
+            );
+            menu_canvas.draw_text_px(
+                MENU_PADDING + 10,
+                iy + 8,
+                &app.badge,
+                11.5,
+                [accent[0], accent[1], accent[2], 255],
+            );
+            let short_name: String = app.name.chars().take(24).collect();
+            menu_canvas.draw_text_px(
+                MENU_PADDING + 40,
+                iy + 8,
+                &short_name,
+                13.5,
+                [235, 238, 250, 255],
+            );
+            menu_canvas.draw_text_px(
+                MENU_WIDTH - MENU_PADDING - 52,
+                iy + 9,
+                &app.category,
+                11.5,
+                [145, 150, 175, 255],
+            );
+
+            state.panel.hit_regions.push((
+                item_global,
+                ClickTarget::LaunchDesktopApp(app.exec.clone()),
+            ));
+            row_idx += 1;
+        }
+
+        // Power Footer Bar (`Lock`, `Suspend`, `Reboot`, `Exit`)
+        let fy = menu_h - MENU_FOOTER_HEIGHT + 4;
+        menu_canvas.fill_rect(8, fy - 4, MENU_WIDTH - 16, 1, [48, 48, 70, 220]);
+        let power_btns: [(&str, ClickTarget, [u8; 4]); 4] = [
+            ("Lock", ClickTarget::PowerLock, [40, 40, 60, 255]),
+            ("Sleep", ClickTarget::PowerSuspend, [40, 40, 60, 255]),
+            ("Reboot", ClickTarget::PowerReboot, [48, 40, 60, 255]),
+            ("Exit", ClickTarget::PowerExit, [145, 48, 72, 255]),
+        ];
+        for (pi, (plabel, ptarget, pbg)) in power_btns.into_iter().enumerate() {
+            let pw = 68;
+            let px = 12 + pi as i32 * 75;
+            let p_global = Rectangle::new(
+                (output_geo.loc.x + menu_x + px, output_geo.loc.y + menu_y + fy).into(),
+                (pw, 30).into(),
+            );
+            menu_canvas.fill_rounded_rect(px, fy, pw, 30, 6, pbg);
+            menu_canvas.draw_text_px(px + 14, fy + 7, plabel, 12.5, [242, 244, 252, 255]);
+            state.panel.hit_regions.push((p_global, ptarget));
         }
 
         let menu_buf = MemoryRenderBuffer::from_slice(
@@ -750,6 +1320,8 @@ pub fn render_titlebar_element(
     window: &Window,
     local_win_loc: Point<i32, Logical>,
     is_focused: bool,
+    is_pinned: bool,
+    accent: [u8; 3],
     renderer: &mut GlesRenderer,
     scale: Scale<f64>,
 ) -> Option<OkayRenderElements<GlesRenderer>> {
@@ -766,14 +1338,17 @@ pub fn render_titlebar_element(
         [22, 22, 34, 240]
     };
     let top_accent = if is_focused {
-        [201, 160, 220, 255]
+        [accent[0], accent[1], accent[2], 255]
     } else {
         [56, 56, 78, 255]
     };
     canvas.fill_rect(0, 0, tb_w, tb_h, bg);
     canvas.fill_rect(0, 0, tb_w, 2, top_accent);
 
-    let title = window_title(window);
+    let mut title = window_title_str(window);
+    if is_pinned {
+        title = format!("[PIN] {}", title);
+    }
     let max_chars = ((tb_w - 96) / 8).max(1) as usize;
     let short_title: String = title.chars().take(max_chars).collect();
     let title_fg = if is_focused {
@@ -829,7 +1404,7 @@ pub fn rect_contains(rect: Rectangle<i32, Logical>, px: i32, py: i32) -> bool {
         && py < rect.loc.y + rect.size.h
 }
 
-fn window_title(window: &Window) -> String {
+pub fn window_title_str(window: &Window) -> String {
     if let Some(toplevel) = window.toplevel() {
         let title = with_states(toplevel.wl_surface(), |states| {
             states
@@ -847,6 +1422,18 @@ fn window_title(window: &Window) -> String {
         }
     }
     "Window".to_string()
+}
+
+fn read_battery_percent() -> Option<i32> {
+    let entries = fs::read_dir("/sys/class/power_supply").ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with("BAT") {
+            let cap = fs::read_to_string(entry.path().join("capacity")).ok()?;
+            return cap.trim().parse::<i32>().ok();
+        }
+    }
+    None
 }
 
 fn current_hh_mm() -> String {
@@ -876,7 +1463,6 @@ fn with_font_engine<R>(f: impl FnOnce(&mut FontEngine) -> R) -> R {
     f(&mut guard)
 }
 
-/// Returns the human-readable name of the active TrueType font.
 pub fn active_font_name() -> String {
     with_font_engine(|eng| eng.font_name.clone())
 }
@@ -896,10 +1482,6 @@ impl FontEngine {
             collect_font_files(dir, 0, &mut all_fonts);
         }
 
-        // Priority tiers:
-        // 1. Maple Mono (Regular preferred)
-        // 2. JetBrains Mono (Regular preferred)
-        // 3. Noto Sans / DejaVu Sans / Liberation Sans
         let tiers: [(&str, fn(&str) -> bool); 4] = [
             ("Maple Mono", |name| {
                 name.contains("maplemono") || (name.contains("maple") && name.contains("mono"))
@@ -925,7 +1507,6 @@ impl FontEngine {
                 })
                 .collect();
 
-            // Prefer Regular over Italic/Bold variants
             candidates.sort_by_key(|p| {
                 let s = p
                     .file_name()
@@ -960,7 +1541,6 @@ impl FontEngine {
             }
         }
 
-        tracing::warn!("No system TrueType font found; using embedded fallback rasterizer");
         Self {
             font: None,
             font_name: "Built-in Sans".to_string(),
@@ -1109,7 +1689,6 @@ impl Canvas {
         self.fill_rect(x + w - 1, y, 1, h, color);
     }
 
-    /// Renders smooth anti-aliased TrueType text using `fontdue` (with cached glyphs).
     pub fn draw_text_px(&mut self, start_x: i32, start_y: i32, text: &str, px_size: f32, color: [u8; 4]) {
         let baseline_y = start_y + (px_size * 0.85).round() as i32;
         let mut cursor_x = start_x as f32;

@@ -114,6 +114,7 @@ impl XdgShellHandler for OkayState {
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let window = Window::new_wayland_window(surface.clone());
         let id = surface.wl_surface().id();
+        self.animations.on_window_opened(id.clone(), self.panel.accent_rgb());
         self.workspaces.assign_window(id, self.workspaces.active);
 
         let initial_pos = self.next_window_position((800, 600).into());

@@ -49,6 +49,14 @@ pub fn collect_output_elements(
         return elements;
     };
 
+    // Advance 60+ FPS animations once per output frame
+    state.animations.tick(
+        state.panel.launcher_open,
+        state.overlays.calendar_open,
+        state.overlays.notif_drawer_open,
+        state.overlays.clipboard_open,
+    );
+
     // 0. Pointer cursor (topmost element on whichever output contains the pointer)
     if output_geo.to_f64().contains(state.pointer_location) {
         let local_cursor = state.pointer_location - output_geo.loc.to_f64();
@@ -59,6 +67,11 @@ pub fn collect_output_elements(
             scale,
         ));
     }
+
+    // 0b. Topmost desktop overlays (Lockscreen, Alt+Tab, Toasts, Notification Drawer, Calendar, Clipboard, Context Menu)
+    elements.extend(crate::overlays::render_top_overlays(
+        state, renderer, output, scale,
+    ));
 
     let layer_map = layer_map_for_output(output);
 
@@ -89,14 +102,39 @@ pub fn collect_output_elements(
         state, renderer, output, scale,
     ));
 
-    // 3. Visible XDG windows on the active workspace (top-to-bottom)
+    // 2b. Active Magic Lamp (Genie) minimize / restore animations
+    for window in state.space.elements().rev() {
+        if !state.workspaces.is_on_active_workspace(window) {
+            continue;
+        }
+        if let Some(toplevel) = window.toplevel() {
+            let id = toplevel.wl_surface().id();
+            if state.animations.is_animating_minimize(&id) {
+                elements.extend(state.animations.render_minimize_effect(&id, scale));
+            }
+        }
+    }
+
+    // 3. Visible XDG windows on the active workspace (Always-on-Top first, then normal top-to-bottom)
     let focused_id = state
         .seat
         .get_keyboard()
         .and_then(|k| k.current_focus())
         .map(|s| s.id());
+    let accent = state.panel.accent_rgb();
+    let ws_slide_x = state.animations.workspace_slide_x.round() as i32;
 
-    for window in state.space.elements().rev() {
+    let mut ordered_windows: Vec<_> = state.space.elements().rev().cloned().collect();
+    ordered_windows.sort_by_key(|w| if state.workspaces.is_pinned(w) { 0 } else { 1 });
+
+    for window in &ordered_windows {
+        let win_id = window.toplevel().map(|t| t.wl_surface().id());
+        if let Some(ref id) = win_id {
+            if state.animations.is_animating_minimize(id) {
+                // Window is currently mid-Magic-Lamp funnel animation
+                continue;
+            }
+        }
         if !state.workspaces.is_visible(window) {
             continue;
         }
@@ -104,26 +142,38 @@ pub fn collect_output_elements(
             continue;
         };
 
-        // Translate global space coordinates into output-local coordinates
-        let local_loc = win_loc - output_geo.loc;
+        let (move_dx, move_dy, alpha) = win_id
+            .as_ref()
+            .and_then(|id| state.animations.windows.get(id))
+            .map(|a| {
+                (
+                    a.move_offset.x.round() as i32,
+                    a.move_offset.y.round() as i32,
+                    a.open_progress.clamp(0.15, 1.0),
+                )
+            })
+            .unwrap_or((0, 0, 1.0));
+
+        // Translate global space coordinates into output-local coordinates + smooth animation offsets
+        let local_loc = win_loc - output_geo.loc + Point::from((ws_slide_x + move_dx, move_dy));
         let phys_loc: Point<i32, Physical> = local_loc.to_physical_precise_round(scale);
 
         // Window surfaces (toplevel + subsurfaces + popups)
         let win_elements: Vec<OkayRenderElements<GlesRenderer>> =
-            window.render_elements(renderer, phys_loc, scale, 1.0);
+            window.render_elements(renderer, phys_loc, scale, alpha);
         elements.extend(win_elements);
 
         // Server-side titlebar & border decoration around non-fullscreen windows
         if !state.workspaces.is_fullscreen(window) {
-            let is_focused = window
-                .toplevel()
-                .map(|t| Some(t.wl_surface().id()) == focused_id)
-                .unwrap_or(false);
+            let is_focused = win_id.as_ref() == focused_id.as_ref();
+            let is_pinned = state.workspaces.is_pinned(window);
 
             if let Some(tb_elem) = crate::panel::render_titlebar_element(
                 window,
                 local_loc,
                 is_focused,
+                is_pinned,
+                accent,
                 renderer,
                 scale,
             ) {
@@ -180,6 +230,11 @@ pub fn collect_output_elements(
             }
         }
     }
+
+    // 4b. Desktop Icons Grid (right above wallpaper, underneath all windows)
+    elements.extend(crate::overlays::render_desktop_icons(
+        state, renderer, output, scale,
+    ));
 
     // 5. Native OKay DE desktop wallpaper / gradient (bottommost)
     if let Some(bg) = state.desktop.background_element(renderer, output, scale) {

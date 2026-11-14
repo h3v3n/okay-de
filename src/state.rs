@@ -64,6 +64,45 @@ impl Default for CompositorTheme {
     }
 }
 
+/// Per-workspace or global window layout mode (`Super + T` cycles through these).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutMode {
+    Floating,
+    MasterStack,
+    Dwindle,
+}
+
+impl LayoutMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Floating => Self::MasterStack,
+            Self::MasterStack => Self::Dwindle,
+            Self::Dwindle => Self::Floating,
+        }
+    }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Floating => "FLT",
+            Self::MasterStack => "TILE",
+            Self::Dwindle => "DWND",
+        }
+    }
+}
+
+/// Edge / corner snap target when dragging windows to screen edges or pressing `Super + Arrows`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapZone {
+    LeftHalf,
+    RightHalf,
+    BottomHalf,
+    TopLeftQuarter,
+    TopRightQuarter,
+    BottomLeftQuarter,
+    BottomRightQuarter,
+    Maximize,
+}
+
 /// Manages virtual workspaces (1..=9), per-window states, and tiling/floating layout.
 #[derive(Debug)]
 pub struct WorkspaceManager {
@@ -73,8 +112,9 @@ pub struct WorkspaceManager {
     pub minimized: HashSet<ObjectId>,
     pub fullscreen: HashSet<ObjectId>,
     pub maximized: HashSet<ObjectId>,
+    pub always_on_top: HashSet<ObjectId>,
     pub saved_geometries: HashMap<ObjectId, Rectangle<i32, Logical>>,
-    pub tiling_enabled: bool,
+    pub layout_mode: LayoutMode,
 }
 
 impl Default for WorkspaceManager {
@@ -86,13 +126,18 @@ impl Default for WorkspaceManager {
             minimized: HashSet::new(),
             fullscreen: HashSet::new(),
             maximized: HashSet::new(),
+            always_on_top: HashSet::new(),
             saved_geometries: HashMap::new(),
-            tiling_enabled: false,
+            layout_mode: LayoutMode::Floating,
         }
     }
 }
 
 impl WorkspaceManager {
+    pub fn tiling_enabled(&self) -> bool {
+        self.layout_mode != LayoutMode::Floating
+    }
+
     pub fn assign_window(&mut self, surface_id: ObjectId, workspace: usize) {
         let ws = workspace.clamp(1, self.count);
         self.window_map.insert(surface_id, ws);
@@ -103,6 +148,7 @@ impl WorkspaceManager {
         self.minimized.remove(surface_id);
         self.fullscreen.remove(surface_id);
         self.maximized.remove(surface_id);
+        self.always_on_top.remove(surface_id);
         self.saved_geometries.remove(surface_id);
     }
 
@@ -129,6 +175,13 @@ impl WorkspaceManager {
         window
             .toplevel()
             .map(|t| self.fullscreen.contains(&t.wl_surface().id()))
+            .unwrap_or(false)
+    }
+
+    pub fn is_pinned(&self, window: &Window) -> bool {
+        window
+            .toplevel()
+            .map(|t| self.always_on_top.contains(&t.wl_surface().id()))
             .unwrap_or(false)
     }
 
@@ -202,10 +255,12 @@ pub struct OkayState {
     // Visual theme & future shader/animation hooks
     pub theme: CompositorTheme,
 
-    // Native desktop wallpaper, taskbar/launcher panel & settings window
+    // Native desktop wallpaper, taskbar/launcher panel, settings window, animations & overlays
     pub desktop: crate::desktop::DesktopState,
     pub panel: crate::panel::PanelState,
     pub settings: crate::settings::SettingsState,
+    pub animations: crate::animation::AnimationManager,
+    pub overlays: crate::overlays::OverlaysState,
 }
 
 impl OkayState {
@@ -232,9 +287,17 @@ impl OkayState {
         seat.add_pointer();
 
         let mut panel = crate::panel::PanelState::new();
-        let (pointer_sensitivity, natural_scroll) = panel.load_config_file();
+        let cfg = panel.load_config_file();
         let mut theme = CompositorTheme::default();
         theme.active_border_color = panel.accent_f32();
+
+        let mut animations = crate::animation::AnimationManager::new();
+        animations.enabled = cfg.anim_enabled;
+        animations.speed = cfg.anim_speed;
+        animations.minimize_effect = cfg.minimize_effect;
+
+        let mut settings = crate::settings::SettingsState::new();
+        settings.xkb_layout = cfg.xkb_layout;
 
         Self {
             display_handle,
@@ -255,8 +318,8 @@ impl OkayState {
             cursor_status: CursorImageStatus::default_named(),
             pointer_grab: None,
             super_pressed: false,
-            pointer_sensitivity,
-            natural_scroll,
+            pointer_sensitivity: cfg.pointer_speed,
+            natural_scroll: cfg.natural_scroll,
             space: Space::default(),
             popups: PopupManager::default(),
             workspaces: WorkspaceManager::default(),
@@ -265,7 +328,9 @@ impl OkayState {
             theme,
             desktop: crate::desktop::DesktopState::new(),
             panel,
-            settings: crate::settings::SettingsState::new(),
+            settings,
+            animations,
+            overlays: crate::overlays::OverlaysState::new(),
         }
     }
 
@@ -315,13 +380,20 @@ impl OkayState {
         }
     }
 
-    /// Switches the active workspace (1..=9) and updates keyboard focus.
+    /// Switches the active workspace (1..=9) with a smooth horizontal slide animation.
     pub fn switch_workspace(&mut self, index: usize) {
         let target = index.clamp(1, self.workspaces.count);
-        if self.workspaces.active == target {
+        let old = self.workspaces.active;
+        if old == target {
             return;
         }
+        let out_w = self
+            .output_under_pointer()
+            .and_then(|o| self.space.output_geometry(&o))
+            .map(|g| g.size.w)
+            .unwrap_or(1280);
         self.workspaces.active = target;
+        self.animations.on_workspace_switched(old, target, out_w);
         tracing::info!(workspace = target, "Switched workspace");
         self.retile_workspace();
         self.refocus_topmost_visible();
@@ -438,33 +510,124 @@ impl OkayState {
         }
     }
 
-    /// Toggles minimized state for `window` (used by titlebar `[-]` and taskbar buttons).
+    /// Toggles minimized state for `window` with **Magic Lamp (Genie)** or ScaleGlide animation!
     pub fn toggle_minimize_window(&mut self, window: &Window) {
         let Some(toplevel) = window.toplevel() else {
             return;
         };
         let id = toplevel.wl_surface().id();
+        let output_geo = self
+            .output_under_pointer()
+            .and_then(|o| self.space.output_geometry(&o))
+            .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
+        let win_loc = self
+            .space
+            .element_location(window)
+            .unwrap_or_else(|| Point::from((output_geo.loc.x + 120, output_geo.loc.y + 80)));
+        let win_geo = window.geometry();
+        let local_rect = Rectangle::new(
+            win_loc - output_geo.loc + win_geo.loc - Point::from((0, TITLEBAR_HEIGHT)),
+            (win_geo.size.w.max(120), win_geo.size.h + TITLEBAR_HEIGHT).into(),
+        );
+        let accent = self.panel.accent_rgb();
+
         if self.workspaces.minimized.remove(&id) {
+            self.animations.start_unminimize(
+                id,
+                local_rect,
+                output_geo.loc,
+                output_geo.size,
+                accent,
+            );
             self.focus_window(window);
             self.retile_workspace();
         } else {
+            self.animations.start_minimize(
+                id.clone(),
+                local_rect,
+                output_geo.loc,
+                output_geo.size,
+                accent,
+            );
             self.workspaces.minimized.insert(id);
             self.retile_workspace();
             self.refocus_topmost_visible();
         }
     }
 
-    /// Toggles automatic master-stack tiling vs floating placement (`Super + T`).
+    /// Toggles Always-on-Top (`Super + A`) for the currently focused window.
+    pub fn toggle_always_on_top_focused(&mut self) {
+        if let Some(win) = self.focused_window() {
+            if let Some(toplevel) = win.toplevel() {
+                let id = toplevel.wl_surface().id();
+                if !self.workspaces.always_on_top.remove(&id) {
+                    self.workspaces.always_on_top.insert(id);
+                    self.space.raise_element(&win, true);
+                }
+            }
+        }
+    }
+
+    /// Snaps `window` to screen halves, quarters, or full maximized work area.
+    pub fn snap_window(&mut self, window: &Window, zone: SnapZone) {
+        if zone == SnapZone::Maximize {
+            self.toggle_maximize_window(window);
+            return;
+        }
+        let Some(toplevel) = window.toplevel().cloned() else {
+            return;
+        };
+        let id = toplevel.wl_surface().id();
+        let output_geo = self
+            .output_under_pointer()
+            .and_then(|o| self.space.output_geometry(&o))
+            .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
+
+        let gap = self.panel.window_gaps;
+        let top_bar_pad = if self.panel.panel_top { crate::panel::PANEL_HEIGHT } else { 0 };
+        let bot_bar_pad = if self.panel.panel_top { 0 } else { crate::panel::PANEL_HEIGHT };
+        let ax = output_geo.loc.x + gap;
+        let ay = output_geo.loc.y + top_bar_pad + gap + TITLEBAR_HEIGHT;
+        let aw = (output_geo.size.w - gap * 2).max(200);
+        let ah = (output_geo.size.h - top_bar_pad - bot_bar_pad - gap * 2 - TITLEBAR_HEIGHT).max(200);
+        let half_w = (aw - gap) / 2;
+        let half_h = (ah - gap - TITLEBAR_HEIGHT) / 2;
+
+        let (nx, ny, nw, nh) = match zone {
+            SnapZone::LeftHalf => (ax, ay, half_w, ah),
+            SnapZone::RightHalf => (ax + half_w + gap, ay, half_w, ah),
+            SnapZone::BottomHalf => (ax, ay + half_h + gap + TITLEBAR_HEIGHT, aw, half_h),
+            SnapZone::TopLeftQuarter => (ax, ay, half_w, half_h),
+            SnapZone::TopRightQuarter => (ax + half_w + gap, ay, half_w, half_h),
+            SnapZone::BottomLeftQuarter => (ax, ay + half_h + gap + TITLEBAR_HEIGHT, half_w, half_h),
+            SnapZone::BottomRightQuarter => {
+                (ax + half_w + gap, ay + half_h + gap + TITLEBAR_HEIGHT, half_w, half_h)
+            }
+            SnapZone::Maximize => unreachable!(),
+        };
+
+        if let Some(old_loc) = self.space.element_location(window) {
+            self.animations
+                .on_window_moved(id, old_loc, Point::from((nx, ny)));
+        }
+        self.space.map_element(window.clone(), (nx, ny), true);
+        toplevel.with_pending_state(|s| {
+            s.size = Some((nw.max(120), nh.max(90)).into());
+        });
+        toplevel.send_configure();
+    }
+
+    /// Cycles layout mode (`Floating -> MasterStack -> Dwindle -> Floating`) (`Super + T`).
     pub fn toggle_tiling(&mut self) {
-        self.workspaces.tiling_enabled = !self.workspaces.tiling_enabled;
-        tracing::info!(tiling = self.workspaces.tiling_enabled, "Toggled workspace tiling mode");
+        self.workspaces.layout_mode = self.workspaces.layout_mode.next();
+        tracing::info!(mode = ?self.workspaces.layout_mode, "Cycled workspace layout mode");
         self.retile_workspace();
     }
 
-    /// Arranges visible non-fullscreen windows on the active workspace in a master-stack layout
-    /// when `tiling_enabled` is active.
+    /// Arranges visible non-fullscreen windows on the active workspace in Master-Stack or Dwindle
+    /// spiral layout when tiling is active.
     pub fn retile_workspace(&mut self) {
-        if !self.workspaces.tiling_enabled {
+        if !self.workspaces.tiling_enabled() {
             return;
         }
         let Some(output) = self.output_under_pointer() else {
@@ -486,14 +649,25 @@ impl OkayState {
             return;
         }
 
-        let gap = 8;
+        let gap = self.panel.window_gaps;
+        let top_bar_pad = if self.panel.panel_top { crate::panel::PANEL_HEIGHT } else { 0 };
+        let bot_bar_pad = if self.panel.panel_top { 0 } else { crate::panel::PANEL_HEIGHT };
         let area_x = output_geo.loc.x + gap;
-        let area_y = output_geo.loc.y + gap + TITLEBAR_HEIGHT;
+        let area_y = output_geo.loc.y + top_bar_pad + gap + TITLEBAR_HEIGHT;
         let area_w = (output_geo.size.w - gap * 2).max(200);
-        let area_h = (output_geo.size.h - crate::panel::PANEL_HEIGHT - gap * 2 - TITLEBAR_HEIGHT).max(200);
+        let area_h = (output_geo.size.h - top_bar_pad - bot_bar_pad - gap * 2 - TITLEBAR_HEIGHT).max(200);
 
         if n == 1 {
             let win = &windows[0];
+            if let Some(old_loc) = self.space.element_location(win) {
+                if let Some(t) = win.toplevel() {
+                    self.animations.on_window_moved(
+                        t.wl_surface().id(),
+                        old_loc,
+                        Point::from((area_x, area_y)),
+                    );
+                }
+            }
             self.space.map_element(win.clone(), (area_x, area_y), false);
             if let Some(toplevel) = win.toplevel() {
                 toplevel.with_pending_state(|s| {
@@ -504,6 +678,52 @@ impl OkayState {
             return;
         }
 
+        if self.workspaces.layout_mode == LayoutMode::Dwindle {
+            // Spiral / Dwindle binary split layout
+            let mut rx = area_x;
+            let mut ry = area_y;
+            let mut rw = area_w;
+            let mut rh = area_h;
+
+            for (i, win) in windows.iter().enumerate() {
+                let is_last = i + 1 == n;
+                let (wx, wy, ww, wh) = if is_last {
+                    (rx, ry, rw, rh)
+                } else if i % 2 == 0 {
+                    let w_half = (rw - gap) / 2;
+                    let res = (rx, ry, w_half, rh);
+                    rx += w_half + gap;
+                    rw -= w_half + gap;
+                    res
+                } else {
+                    let h_half = (rh - gap - TITLEBAR_HEIGHT).max(80) / 2;
+                    let res = (rx, ry, rw, h_half);
+                    ry += h_half + gap + TITLEBAR_HEIGHT;
+                    rh = (rh - h_half - gap - TITLEBAR_HEIGHT).max(80);
+                    res
+                };
+
+                if let Some(old_loc) = self.space.element_location(win) {
+                    if let Some(t) = win.toplevel() {
+                        self.animations.on_window_moved(
+                            t.wl_surface().id(),
+                            old_loc,
+                            Point::from((wx, wy)),
+                        );
+                    }
+                }
+                self.space.map_element(win.clone(), (wx, wy), false);
+                if let Some(toplevel) = win.toplevel() {
+                    toplevel.with_pending_state(|s| {
+                        s.size = Some((ww.max(100), wh.max(80)).into());
+                    });
+                    toplevel.send_configure();
+                }
+            }
+            return;
+        }
+
+        // Master-Stack layout
         let master_w = (area_w - gap) / 2;
         let stack_w = area_w - master_w - gap;
         let stack_count = (n - 1) as i32;
@@ -519,6 +739,15 @@ impl OkayState {
                 (area_x + master_w + gap, actual_y, stack_w, ch)
             };
 
+            if let Some(old_loc) = self.space.element_location(win) {
+                if let Some(t) = win.toplevel() {
+                    self.animations.on_window_moved(
+                        t.wl_surface().id(),
+                        old_loc,
+                        Point::from((wx, wy)),
+                    );
+                }
+            }
             self.space.map_element(win.clone(), (wx, wy), false);
             if let Some(toplevel) = win.toplevel() {
                 toplevel.with_pending_state(|s| {

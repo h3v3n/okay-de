@@ -1,5 +1,7 @@
+mod animation;
 mod desktop;
 mod input;
+mod overlays;
 mod panel;
 mod render;
 mod settings;
