@@ -81,8 +81,11 @@ pub fn collect_output_elements(
         }
     }
 
-    // 2. Native OKay DE taskbar & launcher popup
+    // 2. Native OKay DE taskbar, launcher popup & OKay Settings window
     elements.extend(crate::panel::render_panel_elements(
+        state, renderer, output, scale,
+    ));
+    elements.extend(crate::settings::render_settings_elements(
         state, renderer, output, scale,
     ));
 

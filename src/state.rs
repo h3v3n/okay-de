@@ -189,6 +189,8 @@ pub struct OkayState {
     pub cursor_status: CursorImageStatus,
     pub pointer_grab: Option<PointerGrabMode>,
     pub super_pressed: bool,
+    pub pointer_sensitivity: f64,
+    pub natural_scroll: bool,
 
     // Desktop, window registry & workspaces
     pub space: Space<Window>,
@@ -200,9 +202,10 @@ pub struct OkayState {
     // Visual theme & future shader/animation hooks
     pub theme: CompositorTheme,
 
-    // Native desktop wallpaper & taskbar/launcher panel
+    // Native desktop wallpaper, taskbar/launcher panel & settings window
     pub desktop: crate::desktop::DesktopState,
     pub panel: crate::panel::PanelState,
+    pub settings: crate::settings::SettingsState,
 }
 
 impl OkayState {
@@ -228,6 +231,11 @@ impl OkayState {
         }
         seat.add_pointer();
 
+        let mut panel = crate::panel::PanelState::new();
+        let (pointer_sensitivity, natural_scroll) = panel.load_config_file();
+        let mut theme = CompositorTheme::default();
+        theme.active_border_color = panel.accent_f32();
+
         Self {
             display_handle,
             loop_signal,
@@ -247,14 +255,17 @@ impl OkayState {
             cursor_status: CursorImageStatus::default_named(),
             pointer_grab: None,
             super_pressed: false,
+            pointer_sensitivity,
+            natural_scroll,
             space: Space::default(),
             popups: PopupManager::default(),
             workspaces: WorkspaceManager::default(),
             focus_stack: Vec::new(),
             next_spawn_offset: 0,
-            theme: CompositorTheme::default(),
+            theme,
             desktop: crate::desktop::DesktopState::new(),
-            panel: crate::panel::PanelState::new(),
+            panel,
+            settings: crate::settings::SettingsState::new(),
         }
     }
 

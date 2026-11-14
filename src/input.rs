@@ -22,6 +22,7 @@ use crate::state::{OkayState, PointerGrabMode};
 enum KeyAction {
     SpawnTerminal,
     ToggleLauncher,
+    ToggleSettings,
     CloseFocused,
     ToggleFullscreen,
     ToggleTiling,
@@ -81,6 +82,11 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
             // Super + D -> Toggle native app launcher menu
             if modifiers.logo && (raw_u32 == keysyms::KEY_d || raw_u32 == keysyms::KEY_D) {
                 return FilterResult::Intercept(KeyAction::ToggleLauncher);
+            }
+
+            // Super + I -> Toggle native OKay Settings window
+            if modifiers.logo && (raw_u32 == keysyms::KEY_i || raw_u32 == keysyms::KEY_I) {
+                return FilterResult::Intercept(KeyAction::ToggleSettings);
             }
 
             // Super + Q -> Close focused window
@@ -144,6 +150,12 @@ fn execute_key_action(state: &mut OkayState, action: KeyAction) {
         KeyAction::ToggleLauncher => {
             state.panel.launcher_open = !state.panel.launcher_open;
         }
+        KeyAction::ToggleSettings => {
+            state.settings.open = !state.settings.open;
+            if state.settings.open {
+                state.settings.refresh_system_info();
+            }
+        }
         KeyAction::CloseFocused => state.close_focused_window(),
         KeyAction::ToggleFullscreen => state.toggle_fullscreen_focused(),
         KeyAction::ToggleTiling => state.toggle_tiling(),
@@ -163,8 +175,12 @@ fn spawn_terminal(socket_name: &std::ffi::OsStr) {
 }
 
 fn handle_pointer_motion<I: InputBackend>(state: &mut OkayState, event: I::PointerMotionEvent) {
-    let delta = event.delta();
-    let new_pos = clamp_pointer_to_outputs(state, state.pointer_location + delta);
+    let raw_delta = event.delta();
+    let scaled_delta = Point::from((
+        raw_delta.x * state.pointer_sensitivity,
+        raw_delta.y * state.pointer_sensitivity,
+    ));
+    let new_pos = clamp_pointer_to_outputs(state, state.pointer_location + scaled_delta);
     move_pointer_to(state, new_pos, Event::time_msec(&event));
 }
 
@@ -187,6 +203,10 @@ fn handle_pointer_motion_absolute<I: InputBackend>(
 
 fn move_pointer_to(state: &mut OkayState, pos: Point<f64, Logical>, time_msec: u32) {
     state.pointer_location = pos;
+
+    if crate::settings::handle_settings_motion(state, pos) {
+        return;
+    }
 
     // Handle active window drag-to-move / drag-to-resize grab
     if let Some(grab) = state.pointer_grab.clone() {
@@ -280,8 +300,11 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
 
     if btn_state == ButtonState::Pressed {
         let pos = state.pointer_location;
-        // BTN_LEFT (0x110 = 272): check native taskbar & launcher popup first
+        // BTN_LEFT (0x110 = 272): check native taskbar, launcher popup & OKay Settings first
         if button == 0x110 && crate::panel::handle_panel_click(state, pos) {
+            return;
+        }
+        if button == 0x110 && crate::settings::handle_settings_click(state, pos) {
             return;
         }
 
@@ -335,6 +358,9 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
             }
         }
     } else if btn_state == ButtonState::Released {
+        if crate::settings::handle_settings_release(state) {
+            return;
+        }
         if let Some(grab) = state.pointer_grab.take() {
             if let PointerGrabMode::Resize { window, .. } = grab {
                 if let Some(toplevel) = window.toplevel() {
@@ -364,14 +390,15 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
 
 fn handle_pointer_axis<I: InputBackend>(state: &mut OkayState, event: I::PointerAxisEvent) {
     let source = event.source();
+    let dir = if state.natural_scroll { -1.0 } else { 1.0 };
     let horizontal_amount = event.amount(Axis::Horizontal).unwrap_or_else(|| {
         event.amount_v120(Axis::Horizontal).unwrap_or(0.0) * 15.0 / 120.0
-    });
+    }) * dir;
     let vertical_amount = event.amount(Axis::Vertical).unwrap_or_else(|| {
         event.amount_v120(Axis::Vertical).unwrap_or(0.0) * 15.0 / 120.0
-    });
-    let horizontal_discrete = event.amount_v120(Axis::Horizontal);
-    let vertical_discrete = event.amount_v120(Axis::Vertical);
+    }) * dir;
+    let horizontal_discrete = event.amount_v120(Axis::Horizontal).map(|v| v * dir);
+    let vertical_discrete = event.amount_v120(Axis::Vertical).map(|v| v * dir);
 
     let mut frame = AxisFrame::new(Event::time_msec(&event)).source(source);
     if horizontal_amount != 0.0 {

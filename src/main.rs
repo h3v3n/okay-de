@@ -2,6 +2,7 @@ mod desktop;
 mod input;
 mod panel;
 mod render;
+mod settings;
 mod shell;
 mod state;
 
