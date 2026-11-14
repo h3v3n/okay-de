@@ -211,7 +211,7 @@ fn scale_cover_rgba(wp: &RawWallpaper, dst_w: u32, dst_h: u32) -> Vec<u8> {
     out
 }
 
-/// Generates a modern dark obsidian-to-lavender gradient with a subtle ambient glow.
+/// Generates a macOS Sonoma/Sequoia-inspired multi-stop aurora gradient with subtle dithering.
 fn generate_dark_gradient_rgba(w: u32, h: u32) -> Vec<u8> {
     let mut out = vec![0u8; (w * h * 4) as usize];
     let wf = w.max(1) as f32;
@@ -221,22 +221,44 @@ fn generate_dark_gradient_rgba(w: u32, h: u32) -> Vec<u8> {
         let ny = y as f32 / hf;
         for x in 0..w {
             let nx = x as f32 / wf;
-            let diag = 0.55 * ny + 0.45 * nx;
 
-            // Subtle radial lavender glow near center-top
-            let dx = nx - 0.52;
-            let dy = ny - 0.36;
-            let dist2 = dx * dx + dy * dy;
-            let glow = (-dist2 * 6.5).exp();
+            // Deep midnight base gradient (top-left obsidian to bottom-right deep indigo)
+            let base_t = 0.55 * ny + 0.45 * nx;
+            let mut r = 11.0 + 14.0 * base_t;
+            let mut g = 14.0 + 12.0 * base_t;
+            let mut b = 26.0 + 28.0 * base_t;
 
-            let r = (13.0 + 18.0 * diag + 28.0 * glow).clamp(0.0, 255.0) as u8;
-            let g = (13.0 + 14.0 * diag + 16.0 * glow).clamp(0.0, 255.0) as u8;
-            let b = (22.0 + 28.0 * diag + 46.0 * glow).clamp(0.0, 255.0) as u8;
+            // Primary Sonoma/Sequoia sweeping teal-blue aurora wave
+            let wave_y = 0.46 + 0.12 * (nx * 4.2 - 0.8).sin() + 0.05 * (nx * 8.5).cos();
+            let d_wave = ((ny - wave_y) * 3.1).abs();
+            let teal_band = (-d_wave * d_wave * 3.8).exp() * (0.45 + 0.55 * (1.0 - nx * 0.4));
+            r += 14.0 * teal_band;
+            g += 68.0 * teal_band;
+            b += 108.0 * teal_band;
+
+            // Warm magenta-rose & violet aurora ribbon
+            let rose_y = 0.34 - 0.10 * (nx * 3.4 + 0.6).cos();
+            let d_rose = ((ny - rose_y) * 3.5).abs();
+            let rose_band = (-d_rose * d_rose * 4.2).exp() * (0.35 + 0.65 * nx);
+            r += 96.0 * rose_band;
+            g += 28.0 * rose_band;
+            b += 86.0 * rose_band;
+
+            // Soft horizon amber/coral glow near lower-left
+            let dx_a = nx - 0.22;
+            let dy_a = ny - 0.78;
+            let warm_glow = (-(dx_a * dx_a * 3.2 + dy_a * dy_a * 5.0)).exp();
+            r += 48.0 * warm_glow;
+            g += 24.0 * warm_glow;
+            b += 36.0 * warm_glow;
+
+            // Subtle ordered dither to prevent 8-bit gradient banding
+            let dither = (((x.wrapping_mul(374761393) ^ y.wrapping_mul(668265263)) & 3) as f32 - 1.5) * 0.45;
 
             let idx = ((y * w + x) * 4) as usize;
-            out[idx] = r;
-            out[idx + 1] = g;
-            out[idx + 2] = b;
+            out[idx] = (r + dither).clamp(0.0, 255.0) as u8;
+            out[idx + 1] = (g + dither).clamp(0.0, 255.0) as u8;
+            out[idx + 2] = (b + dither).clamp(0.0, 255.0) as u8;
             out[idx + 3] = 255;
         }
     }

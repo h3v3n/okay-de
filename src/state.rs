@@ -33,7 +33,7 @@ use smithay::{
     },
 };
 
-pub const TITLEBAR_HEIGHT: i32 = 26;
+pub const TITLEBAR_HEIGHT: i32 = 28;
 
 /// Visual theme and rendering configuration for OKay DE.
 /// Decoupled from the renderer so custom GLSL shaders, animations, and
@@ -496,10 +496,22 @@ impl OkayState {
                     .insert(id.clone(), Rectangle::new(loc, window.geometry().size));
             }
             self.workspaces.maximized.insert(id);
-            let target_loc = Point::from((output_geo.loc.x, output_geo.loc.y + TITLEBAR_HEIGHT));
+            let top_pad = if self.panel.dock_mode || self.panel.panel_top {
+                crate::panel::PANEL_HEIGHT
+            } else {
+                0
+            };
+            let bot_pad = if self.panel.dock_mode {
+                crate::panel::DOCK_HEIGHT + crate::panel::DOCK_MARGIN + 4
+            } else if !self.panel.panel_top {
+                36
+            } else {
+                0
+            };
+            let target_loc = Point::from((output_geo.loc.x, output_geo.loc.y + top_pad + TITLEBAR_HEIGHT));
             let target_size = Size::from((
                 output_geo.size.w,
-                (output_geo.size.h - crate::panel::PANEL_HEIGHT - TITLEBAR_HEIGHT).max(120),
+                (output_geo.size.h - top_pad - bot_pad - TITLEBAR_HEIGHT).max(120),
             ));
             self.space.map_element(window.clone(), target_loc, true);
             toplevel.with_pending_state(|state| {
@@ -584,8 +596,18 @@ impl OkayState {
             .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
 
         let gap = self.panel.window_gaps;
-        let top_bar_pad = if self.panel.panel_top { crate::panel::PANEL_HEIGHT } else { 0 };
-        let bot_bar_pad = if self.panel.panel_top { 0 } else { crate::panel::PANEL_HEIGHT };
+        let top_bar_pad = if self.panel.dock_mode || self.panel.panel_top {
+            crate::panel::PANEL_HEIGHT
+        } else {
+            0
+        };
+        let bot_bar_pad = if self.panel.dock_mode {
+            crate::panel::DOCK_HEIGHT + crate::panel::DOCK_MARGIN + 4
+        } else if !self.panel.panel_top {
+            36
+        } else {
+            0
+        };
         let ax = output_geo.loc.x + gap;
         let ay = output_geo.loc.y + top_bar_pad + gap + TITLEBAR_HEIGHT;
         let aw = (output_geo.size.w - gap * 2).max(200);
@@ -650,8 +672,18 @@ impl OkayState {
         }
 
         let gap = self.panel.window_gaps;
-        let top_bar_pad = if self.panel.panel_top { crate::panel::PANEL_HEIGHT } else { 0 };
-        let bot_bar_pad = if self.panel.panel_top { 0 } else { crate::panel::PANEL_HEIGHT };
+        let top_bar_pad = if self.panel.dock_mode || self.panel.panel_top {
+            crate::panel::PANEL_HEIGHT
+        } else {
+            0
+        };
+        let bot_bar_pad = if self.panel.dock_mode {
+            crate::panel::DOCK_HEIGHT + crate::panel::DOCK_MARGIN + 4
+        } else if !self.panel.panel_top {
+            36
+        } else {
+            0
+        };
         let area_x = output_geo.loc.x + gap;
         let area_y = output_geo.loc.y + top_bar_pad + gap + TITLEBAR_HEIGHT;
         let area_w = (output_geo.size.w - gap * 2).max(200);
@@ -817,23 +849,20 @@ impl OkayState {
 
         self.focus_window(&window);
         let rel_x = px - tb_rect.loc.x;
-        let w = tb_rect.size.w;
 
-        // Close button [X]: [w - 28 .. w - 6]
-        if rel_x >= w - 28 && rel_x < w - 6 {
+        // Top-left macOS Traffic Light buttons: Close (#ff5f57), Minimize (#febc2e), Maximize (#28c840)
+        if (8..=24).contains(&rel_x) {
             if let Some(toplevel) = window.toplevel() {
                 toplevel.send_close();
             }
             return true;
         }
-        // Maximize button [+]: [w - 54 .. w - 32]
-        if rel_x >= w - 54 && rel_x < w - 32 {
-            self.toggle_maximize_window(&window);
+        if (28..=44).contains(&rel_x) {
+            self.toggle_minimize_window(&window);
             return true;
         }
-        // Minimize button [-]: [w - 80 .. w - 58]
-        if rel_x >= w - 80 && rel_x < w - 58 {
-            self.toggle_minimize_window(&window);
+        if (48..=64).contains(&rel_x) {
+            self.toggle_maximize_window(&window);
             return true;
         }
 

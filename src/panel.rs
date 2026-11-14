@@ -28,12 +28,14 @@ use smithay::{
 
 use crate::{animation::MinimizeEffect, render::OkayRenderElements, state::OkayState};
 
-pub const PANEL_HEIGHT: i32 = 42;
-const MENU_WIDTH: i32 = 320;
-const MENU_HEADER_HEIGHT: i32 = 74;
+pub const PANEL_HEIGHT: i32 = 28;
+pub const DOCK_HEIGHT: i32 = 62;
+pub const DOCK_MARGIN: i32 = 10;
+const MENU_WIDTH: i32 = 340;
+const MENU_HEADER_HEIGHT: i32 = 76;
 const MENU_ITEM_HEIGHT: i32 = 34;
-const MENU_FOOTER_HEIGHT: i32 = 42;
-const MENU_PADDING: i32 = 8;
+const MENU_FOOTER_HEIGHT: i32 = 44;
+const MENU_PADDING: i32 = 10;
 
 /// Accent color presets: `(Name, [R, G, B], linear [f32; 4])`.
 pub const ACCENT_PRESETS: [(&str, [u8; 3], [f32; 4]); 6] = [
@@ -118,8 +120,11 @@ enum ClickTarget {
     ToggleSettings,
     ToggleCalendar,
     ToggleNotifDrawer,
+    ToggleControlCenter,
     ToggleMute,
     ToggleTiling,
+    MenuFile,
+    MenuWindow,
     PinnedApp(LauncherItem),
     Workspace(usize),
     FocusWindow(usize),
@@ -155,10 +160,10 @@ impl Default for PanelState {
         Self {
             launcher_open: false,
             show_workspaces: true,
-            dock_mode: false,
-            panel_top: false,
-            accent_preset: 0,
-            window_gaps: 8,
+            dock_mode: true,
+            panel_top: true,
+            accent_preset: 1,
+            window_gaps: 10,
             search_query: String::new(),
             desktop_apps: scan_desktop_applications(),
             default_terminal: "foot".to_string(),
@@ -592,6 +597,21 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                 state.panel.launcher_open = false;
                 state.overlays.notif_drawer_open = !state.overlays.notif_drawer_open;
                 state.overlays.calendar_open = false;
+                state.overlays.control_center_open = false;
+            }
+            ClickTarget::ToggleControlCenter => {
+                state.panel.launcher_open = false;
+                state.overlays.control_center_open = !state.overlays.control_center_open;
+                state.overlays.calendar_open = false;
+                state.overlays.notif_drawer_open = false;
+            }
+            ClickTarget::MenuFile => {
+                state.panel.launcher_open = false;
+                execute_launcher_item(state, LauncherItem::Terminal);
+            }
+            ClickTarget::MenuWindow => {
+                state.panel.launcher_open = false;
+                state.cycle_focus();
             }
             ClickTarget::ToggleMute => {
                 state.panel.toggle_mute();
@@ -601,6 +621,8 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                 state.toggle_tiling();
             }
             ClickTarget::PinnedApp(item) => {
+                let bounce_key = format!("pin_{}", item.badge());
+                state.animations.trigger_dock_bounce(&bounce_key);
                 execute_launcher_item(state, item);
             }
             ClickTarget::Workspace(ws) => {
@@ -724,353 +746,599 @@ pub fn render_panel_elements(
         })
         .collect();
 
-    let bar_y_local = if state.panel.panel_top {
-        if state.panel.dock_mode { 8 } else { 0 }
-    } else if state.panel.dock_mode {
-        output_geo.size.h - PANEL_HEIGHT - 8
-    } else {
-        output_geo.size.h - PANEL_HEIGHT
-    };
-
-    let (bar_x_local, bar_w, bar_h) = if state.panel.dock_mode {
-        let ws_section_w = if state.panel.show_workspaces { 9 * 27 + 10 } else { 0 };
-        let win_section_w = (ws_windows.len() as i32 * 145).clamp(130, 560);
-        let desired_w = (195 + ws_section_w + win_section_w + 260)
-            .clamp(480, (output_geo.size.w - 32).max(360));
-        let bx = (output_geo.size.w - desired_w) / 2;
-        (bx, desired_w, PANEL_HEIGHT)
-    } else {
-        (0, output_geo.size.w, PANEL_HEIGHT)
-    };
-
     let mut elements = Vec::new();
-    let mut canvas = Canvas::new(bar_w, bar_h);
+    let focused_app_name = ws_windows
+        .iter()
+        .find(|(_, _, f, _)| *f)
+        .map(|(_, t, _, _)| {
+            let short: String = t.chars().take(20).collect();
+            short
+        })
+        .unwrap_or_else(|| "OKay Desktop".to_string());
 
     if state.panel.dock_mode {
-        canvas.fill_rounded_rect(0, 0, bar_w, bar_h, 11, [20, 20, 32, 238]);
-        canvas.fill_rect(12, 0, bar_w - 24, 2, [accent[0], accent[1], accent[2], 185]);
-    } else {
-        canvas.fill_rect(0, 0, bar_w, bar_h, [18, 18, 28, 244]);
-        let line_y = if state.panel.panel_top { bar_h - 1 } else { 0 };
-        canvas.fill_rect(0, line_y, bar_w, 1, [accent[0], accent[1], accent[2], 145]);
-    }
+        // ====================================================================
+        // 1:1 macOS Sequoia / Sonoma Layout:
+        //   A. Top Menu Bar (28px height, full width, translucent dark glass)
+        //   B. Bottom Floating Dock (18px rounded glass pill + squircles + parabolic zoom)
+        // ====================================================================
+        let mb_w = output_geo.size.w;
+        let mb_h = PANEL_HEIGHT;
+        let mut mb = Canvas::new(mb_w, mb_h);
 
-    let mut cursor_x = 10;
+        // Translucent dark glass: rgba(24, 26, 36, 0.86) + subtle 1px bottom border
+        mb.fill_rect(0, 0, mb_w, mb_h, [24, 26, 36, 219]);
+        mb.fill_rect_blend(0, 0, mb_w, 1, [255, 255, 255, 26]);
+        mb.fill_rect_blend(0, mb_h - 1, mb_w, 1, [255, 255, 255, 18]);
 
-    // 1. "OKay" Start Button
-    let start_w = 72;
-    let start_global = Rectangle::new(
-        (output_geo.loc.x + bar_x_local + cursor_x, output_geo.loc.y + bar_y_local + 6).into(),
-        (start_w, bar_h - 12).into(),
-    );
-    let start_hovered = rect_contains(start_global, pointer_x, pointer_y);
-    let start_bg = if state.panel.launcher_open {
-        [accent[0], accent[1], accent[2], 255]
-    } else if start_hovered {
-        [62, 58, 86, 255]
-    } else {
-        [40, 40, 58, 255]
-    };
-    let start_fg = if state.panel.launcher_open {
-        [16, 16, 24, 255]
-    } else {
-        [240, 242, 252, 255]
-    };
-    canvas.fill_rounded_rect(cursor_x, 6, start_w, bar_h - 12, 6, start_bg);
-    canvas.draw_text_px(cursor_x + 15, 12, "OKay", 15.0, start_fg);
-    state
-        .panel
-        .hit_regions
-        .push((start_global, ClickTarget::ToggleLauncher));
-    cursor_x += start_w + 8;
+        let mut mx = 12;
 
-    // 2. Quick Pinned App Launchers (`>_` Terminal, `FM` Files, `WB` Browser)
-    let pinned = [
-        (LauncherItem::Terminal, ">_"),
-        (LauncherItem::FileManager, "FM"),
-        (LauncherItem::Browser, "WB"),
-    ];
-    for (item, icon) in pinned {
-        let pw = 30;
-        let pin_global = Rectangle::new(
-            (output_geo.loc.x + bar_x_local + cursor_x, output_geo.loc.y + bar_y_local + 6).into(),
-            (pw, bar_h - 12).into(),
+        // Crisp `OKay` logo button (toggles Spotlight / Launcher)
+        let logo_w = 50;
+        let logo_global = Rectangle::new(
+            (output_geo.loc.x + mx, output_geo.loc.y + 2).into(),
+            (logo_w, mb_h - 4).into(),
         );
-        let hovered = rect_contains(pin_global, pointer_x, pointer_y);
-        let bg = if hovered {
-            [58, 54, 82, 255]
-        } else {
-            [32, 32, 48, 235]
-        };
-        let y_off = if hovered { 4 } else { 6 };
-        canvas.fill_rounded_rect(cursor_x, y_off, pw, bar_h - 12, 6, bg);
-        canvas.draw_text_px(
-            cursor_x + 6,
-            y_off + 6,
-            icon,
-            13.0,
-            [accent[0], accent[1], accent[2], 255],
-        );
+        if state.panel.launcher_open || rect_contains(logo_global, pointer_x, pointer_y) {
+            mb.fill_rounded_rect_aa(mx, 3, logo_w, mb_h - 6, 6, [255, 255, 255, 32]);
+        }
+        mb.draw_text_px(mx + 8, 6, "OKay", 13.5, [246, 248, 255, 255]);
         state
             .panel
             .hit_regions
-            .push((pin_global, ClickTarget::PinnedApp(item)));
-        cursor_x += pw + 4;
-    }
-    cursor_x += 6;
+            .push((logo_global, ClickTarget::ToggleLauncher));
+        mx += logo_w + 10;
 
-    // 3. Workspace Indicators (1..9) if enabled
-    if state.panel.show_workspaces {
-        for ws in 1..=9 {
-            let ws_w = 23;
-            let is_active = state.workspaces.active == ws;
-            let is_occupied = occupied_workspaces[ws - 1];
-            let ws_global = Rectangle::new(
-                (output_geo.loc.x + bar_x_local + cursor_x, output_geo.loc.y + bar_y_local + 7).into(),
-                (ws_w, bar_h - 14).into(),
+        // Focused App Name (bold-style bright white)
+        let app_w = (mb.measure_text_px(&focused_app_name, 13.5) + 12).clamp(64, 180);
+        mb.draw_text_px(mx, 6, &focused_app_name, 13.5, [255, 255, 255, 255]);
+        mx += app_w + 8;
+
+        // Clean macOS Menu Items: File, Edit, View, Window, Help
+        let menu_items: [(&str, Option<ClickTarget>); 5] = [
+            ("File", Some(ClickTarget::MenuFile)),
+            ("Edit", None),
+            ("View", Some(ClickTarget::ToggleTiling)),
+            ("Window", Some(ClickTarget::MenuWindow)),
+            ("Help", Some(ClickTarget::ToggleSettings)),
+        ];
+        for (label, target) in menu_items {
+            let iw = mb.measure_text_px(label, 12.5) + 14;
+            if mx + iw > mb_w - 380 {
+                break;
+            }
+            let item_rect = Rectangle::new(
+                (output_geo.loc.x + mx, output_geo.loc.y + 2).into(),
+                (iw, mb_h - 4).into(),
             );
-            let hovered = rect_contains(ws_global, pointer_x, pointer_y);
-
-            let bg = if is_active {
-                [accent[0], accent[1], accent[2], 255]
-            } else if hovered {
-                [58, 58, 82, 255]
-            } else if is_occupied {
-                [42, 42, 62, 255]
-            } else {
-                [28, 28, 42, 220]
-            };
-            let fg = if is_active {
-                [16, 16, 24, 255]
-            } else if is_occupied || hovered {
-                [235, 236, 248, 255]
-            } else {
-                [130, 134, 160, 255]
-            };
-
-            canvas.fill_rounded_rect(cursor_x, 7, ws_w, bar_h - 14, 5, bg);
-            let label = ws.to_string();
-            canvas.draw_text_px(cursor_x + 7, 12, &label, 13.5, fg);
-            state
-                .panel
-                .hit_regions
-                .push((ws_global, ClickTarget::Workspace(ws)));
-            cursor_x += ws_w + 4;
+            if rect_contains(item_rect, pointer_x, pointer_y) {
+                mb.fill_rounded_rect_aa(mx, 3, iw, mb_h - 6, 5, [255, 255, 255, 26]);
+            }
+            mb.draw_text_px(mx + 7, 7, label, 12.5, [224, 228, 240, 245]);
+            if let Some(t) = target {
+                state.panel.hit_regions.push((item_rect, t));
+            }
+            mx += iw + 2;
         }
-        cursor_x += 8;
-    }
 
-    // 4. Right-Side System Tray: Clock/Calendar + Notifications + Settings + Audio Volume + Battery + Layout
-    let clock_str = current_hh_mm();
-    let clock_w = 68;
-    let clock_x = (bar_w - clock_w - 10).max(cursor_x);
-    let clock_global = Rectangle::new(
-        (output_geo.loc.x + bar_x_local + clock_x, output_geo.loc.y + bar_y_local + 6).into(),
-        (clock_w, bar_h - 12).into(),
-    );
-    let clock_bg = if state.overlays.calendar_open {
-        [accent[0], accent[1], accent[2], 255]
-    } else if rect_contains(clock_global, pointer_x, pointer_y) {
-        [50, 50, 74, 255]
-    } else {
-        [32, 32, 48, 235]
-    };
-    let clock_fg = if state.overlays.calendar_open {
-        [16, 16, 24, 255]
-    } else {
-        [235, 238, 250, 255]
-    };
-    canvas.fill_rounded_rect(clock_x, 6, clock_w, bar_h - 12, 6, clock_bg);
-    canvas.draw_text_px(clock_x + 12, 12, &clock_str, 14.0, clock_fg);
-    state
-        .panel
-        .hit_regions
-        .push((clock_global, ClickTarget::ToggleCalendar));
+        // Optional compact Workspace pills in menu bar (1..9) if enabled
+        if state.panel.show_workspaces && mx + 200 < mb_w - 340 {
+            mx += 10;
+            for ws in 1..=9 {
+                let ww = 18;
+                let is_active = state.workspaces.active == ws;
+                let is_occ = occupied_workspaces[ws - 1];
+                let ws_rect = Rectangle::new(
+                    (output_geo.loc.x + mx, output_geo.loc.y + 4).into(),
+                    (ww, mb_h - 8).into(),
+                );
+                if is_active {
+                    mb.fill_rounded_rect_aa(mx, 5, ww, mb_h - 10, 5, [255, 255, 255, 42]);
+                } else if rect_contains(ws_rect, pointer_x, pointer_y) {
+                    mb.fill_rounded_rect_aa(mx, 5, ww, mb_h - 10, 5, [255, 255, 255, 20]);
+                }
+                let wfg = if is_active {
+                    [255, 255, 255, 255]
+                } else if is_occ {
+                    [198, 204, 224, 235]
+                } else {
+                    [118, 124, 146, 180]
+                };
+                mb.draw_text_px(mx + 5, 7, &ws.to_string(), 11.5, wfg);
+                state.panel.hit_regions.push((ws_rect, ClickTarget::Workspace(ws)));
+                mx += ww + 2;
+            }
+        }
 
-    // Notification Center Bell [N]
-    let notif_w = 32;
-    let notif_x = (clock_x - notif_w - 6).max(cursor_x);
-    if notif_x + notif_w <= clock_x - 4 {
-        let notif_global = Rectangle::new(
-            (output_geo.loc.x + bar_x_local + notif_x, output_geo.loc.y + bar_y_local + 6).into(),
-            (notif_w, bar_h - 12).into(),
+        // Right-side macOS Status Icons & Live Clock (`Day DD Mon HH:MM`)
+        let clock_str = current_macos_clock();
+        let clock_w = (mb.measure_text_px(&clock_str, 12.5) + 16).max(118);
+        let clock_x = (mb_w - clock_w - 10).max(mx + 8);
+        let clock_global = Rectangle::new(
+            (output_geo.loc.x + clock_x, output_geo.loc.y + 2).into(),
+            (clock_w, mb_h - 4).into(),
         );
-        let n_bg = if state.overlays.notif_drawer_open {
-            [accent[0], accent[1], accent[2], 255]
-        } else {
-            [34, 34, 50, 235]
-        };
-        let n_fg = if state.overlays.notif_drawer_open {
-            [16, 16, 24, 255]
-        } else {
-            [225, 228, 245, 255]
-        };
-        canvas.fill_rounded_rect(notif_x, 6, notif_w, bar_h - 12, 6, n_bg);
-        canvas.draw_text_px(notif_x + 10, 12, "N", 13.0, n_fg);
+        if state.overlays.calendar_open || rect_contains(clock_global, pointer_x, pointer_y) {
+            mb.fill_rounded_rect_aa(clock_x, 3, clock_w, mb_h - 6, 5, [255, 255, 255, 32]);
+        }
+        mb.draw_text_px(clock_x + 8, 7, &clock_str, 12.5, [242, 244, 252, 255]);
+        state
+            .panel
+            .hit_regions
+            .push((clock_global, ClickTarget::ToggleCalendar));
+
+        // Notification Bell (`N`)
+        let notif_w = 24;
+        let notif_x = clock_x - notif_w - 4;
+        let notif_global = Rectangle::new(
+            (output_geo.loc.x + notif_x, output_geo.loc.y + 2).into(),
+            (notif_w, mb_h - 4).into(),
+        );
+        if state.overlays.notif_drawer_open || rect_contains(notif_global, pointer_x, pointer_y) {
+            mb.fill_rounded_rect_aa(notif_x, 3, notif_w, mb_h - 6, 5, [255, 255, 255, 32]);
+        }
+        mb.draw_text_px(notif_x + 7, 7, "N", 12.0, [224, 228, 242, 245]);
         state
             .panel
             .hit_regions
             .push((notif_global, ClickTarget::ToggleNotifDrawer));
-    }
 
-    // Settings [OS]
-    let settings_w = 34;
-    let settings_x = (notif_x - settings_w - 6).max(cursor_x);
-    if settings_x + settings_w <= notif_x - 4 {
-        let set_global = Rectangle::new(
-            (output_geo.loc.x + bar_x_local + settings_x, output_geo.loc.y + bar_y_local + 6).into(),
-            (settings_w, bar_h - 12).into(),
+        // Control Center Icon (`CC`)
+        let cc_w = 28;
+        let cc_x = notif_x - cc_w - 4;
+        let cc_global = Rectangle::new(
+            (output_geo.loc.x + cc_x, output_geo.loc.y + 2).into(),
+            (cc_w, mb_h - 4).into(),
         );
-        let set_bg = if state.settings.open {
-            [accent[0], accent[1], accent[2], 255]
-        } else if rect_contains(set_global, pointer_x, pointer_y) {
-            [56, 56, 80, 255]
-        } else {
-            [34, 34, 50, 235]
-        };
-        let set_fg = if state.settings.open {
-            [16, 16, 24, 255]
-        } else {
-            [225, 228, 245, 255]
-        };
-        canvas.fill_rounded_rect(settings_x, 6, settings_w, bar_h - 12, 6, set_bg);
-        canvas.draw_text_px(settings_x + 8, 12, "OS", 13.0, set_fg);
+        if state.overlays.control_center_open || rect_contains(cc_global, pointer_x, pointer_y) {
+            mb.fill_rounded_rect_aa(cc_x, 3, cc_w, mb_h - 6, 5, [255, 255, 255, 34]);
+        }
+        // Two mini pill-switch glyphs representing macOS Control Center
+        mb.fill_rounded_rect_aa(cc_x + 6, 8, 16, 5, 2, [232, 236, 248, 235]);
+        mb.fill_rounded_rect_aa(cc_x + 6, 15, 16, 5, 2, [180, 188, 212, 210]);
         state
             .panel
             .hit_regions
-            .push((set_global, ClickTarget::ToggleSettings));
-    }
+            .push((cc_global, ClickTarget::ToggleControlCenter));
 
-    // Volume indicator
-    let vol_w = 54;
-    let vol_x = (settings_x - vol_w - 6).max(cursor_x);
-    if vol_x + vol_w <= settings_x - 4 {
-        let vol_global = Rectangle::new(
-            (output_geo.loc.x + bar_x_local + vol_x, output_geo.loc.y + bar_y_local + 6).into(),
-            (vol_w, bar_h - 12).into(),
-        );
-        let vol_txt = if state.panel.volume_muted {
-            "MUTE".to_string()
+        // Volume / Battery status pill
+        let vol_lbl = if state.panel.volume_muted {
+            "Mute".to_string()
         } else if let Some(bat) = state.panel.battery_percent {
             format!("{}% B{}", state.panel.volume_percent, bat)
         } else {
-            format!("V:{}%", state.panel.volume_percent)
+            format!("{}%", state.panel.volume_percent)
         };
-        canvas.fill_rounded_rect(vol_x, 6, vol_w, bar_h - 12, 6, [34, 34, 50, 235]);
-        canvas.draw_text_px(vol_x + 7, 12, &vol_txt, 12.5, [215, 220, 240, 255]);
+        let vol_w = mb.measure_text_px(&vol_lbl, 11.5) + 14;
+        let vol_x = cc_x - vol_w - 4;
+        let vol_global = Rectangle::new(
+            (output_geo.loc.x + vol_x, output_geo.loc.y + 2).into(),
+            (vol_w, mb_h - 4).into(),
+        );
+        if rect_contains(vol_global, pointer_x, pointer_y) {
+            mb.fill_rounded_rect_aa(vol_x, 3, vol_w, mb_h - 6, 5, [255, 255, 255, 28]);
+        }
+        mb.draw_text_px(vol_x + 7, 7, &vol_lbl, 11.5, [215, 220, 236, 240]);
         state
             .panel
             .hit_regions
             .push((vol_global, ClickTarget::ToggleMute));
-    }
 
-    // Layout mode badge (`TILE` / `DWND` / `FLT`)
-    let mode_label = state.workspaces.layout_mode.short_label();
-    let status_w = 52;
-    let status_x = (vol_x - status_w - 6).max(cursor_x);
-    if status_x + status_w <= vol_x - 4 {
-        let status_global = Rectangle::new(
-            (output_geo.loc.x + bar_x_local + status_x, output_geo.loc.y + bar_y_local + 6).into(),
-            (status_w, bar_h - 12).into(),
+        let wifi_w = 34;
+        let wifi_x = vol_x - wifi_w - 4;
+        let wifi_global = Rectangle::new(
+            (output_geo.loc.x + wifi_x, output_geo.loc.y + 2).into(),
+            (wifi_w, mb_h - 4).into(),
         );
-        let status_bg = if state.workspaces.tiling_enabled() {
-            [56, 46, 78, 245]
-        } else {
-            [34, 34, 50, 235]
-        };
-        canvas.fill_rounded_rect(status_x, 6, status_w, bar_h - 12, 6, status_bg);
-        canvas.draw_text_px(
-            status_x + 9,
-            12,
-            mode_label,
-            12.5,
-            [accent[0], accent[1], accent[2], 255],
-        );
+        if rect_contains(wifi_global, pointer_x, pointer_y) {
+            mb.fill_rounded_rect_aa(wifi_x, 3, wifi_w, mb_h - 6, 5, [255, 255, 255, 28]);
+        }
+        mb.draw_text_px(wifi_x + 5, 7, "WiFi", 11.5, [215, 220, 236, 240]);
         state
             .panel
             .hit_regions
-            .push((status_global, ClickTarget::ToggleTiling));
-    }
+            .push((wifi_global, ClickTarget::ToggleControlCenter));
 
-    // 5. Open Window Task Buttons (with exact button rect registration for Magic Lamp Genie!)
-    let avail_w = (status_x - cursor_x - 8).max(0);
-    if !ws_windows.is_empty() && avail_w > 48 {
-        let max_btn_w = 170;
-        let btn_w = ((avail_w / ws_windows.len() as i32) - 6).clamp(52, max_btn_w);
-        for (idx, (win_id, title, is_focused, is_min)) in ws_windows.iter().enumerate() {
-            let bx = cursor_x + idx as i32 * (btn_w + 6);
-            if bx + btn_w > status_x - 4 {
-                break;
-            }
-            let win_global = Rectangle::new(
-                (output_geo.loc.x + bar_x_local + bx, output_geo.loc.y + bar_y_local + 6).into(),
-                (btn_w, bar_h - 12).into(),
+        let mb_buf = MemoryRenderBuffer::from_slice(
+            &mb.pixels,
+            Fourcc::Abgr8888,
+            (mb_w, mb_h),
+            1,
+            Transform::Normal,
+            None,
+        );
+        if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            Point::<f64, Physical>::from((0.0, 0.0)),
+            &mb_buf,
+            None,
+            None,
+            Some((mb_w, mb_h).into()),
+            Kind::Unspecified,
+        ) {
+            elements.push(OkayRenderElements::Memory(elem));
+        }
+
+        // ====================================================================
+        // B. Bottom Floating Dock (Centered 18px Glass Pill + Squircle Icons + Zoom)
+        // ====================================================================
+        let pinned_apps: [(LauncherItem, &str, [u8; 3], [u8; 3]); 5] = [
+            (LauncherItem::FileManager, "FM", [62, 168, 252], [28, 108, 218]),
+            (LauncherItem::Terminal, ">_", [48, 54, 70], [22, 26, 36]),
+            (LauncherItem::Browser, "WB", [52, 184, 246], [42, 110, 235]),
+            (LauncherItem::OkaySettings, "OS", [132, 138, 156], [76, 82, 98]),
+            (LauncherItem::SystemMonitor, "SM", [138, 108, 240], [84, 58, 192]),
+        ];
+
+        let base_icon = 42;
+        let icon_gap = 10;
+        let divider_w = if ws_windows.is_empty() { 0 } else { 18 };
+        let dock_pad_x = 16;
+        let total_icons = pinned_apps.len() + ws_windows.len();
+        let dock_pill_w = (dock_pad_x * 2
+            + total_icons as i32 * base_icon
+            + (total_icons as i32 - 1).max(0) * icon_gap
+            + divider_w)
+            .clamp(280, output_geo.size.w - 32);
+
+        // Extra canvas headroom above the pill so parabolic hover magnification & bounce never clip
+        let dock_headroom = 26;
+        let dock_canvas_w = dock_pill_w + 40;
+        let dock_canvas_h = DOCK_HEIGHT + dock_headroom;
+        let dock_pill_x_in_canvas = 20;
+        let dock_pill_y_in_canvas = dock_headroom;
+
+        let dock_canvas_x_local = (output_geo.size.w - dock_canvas_w) / 2;
+        let dock_pill_y_local = output_geo.size.h - DOCK_HEIGHT - DOCK_MARGIN;
+        let dock_canvas_y_local = dock_pill_y_local - dock_headroom;
+
+        let mut dock = Canvas::new(dock_canvas_w, dock_canvas_h);
+        dock.fill_glass_panel(
+            dock_pill_x_in_canvas,
+            dock_pill_y_in_canvas,
+            dock_pill_w,
+            DOCK_HEIGHT,
+            18,
+        );
+
+        let dock_zone_y = output_geo.loc.y + dock_pill_y_local - 24;
+        let pointer_near_dock = pointer_y >= dock_zone_y
+            && pointer_x >= output_geo.loc.x + dock_canvas_x_local
+            && pointer_x <= output_geo.loc.x + dock_canvas_x_local + dock_canvas_w;
+
+        let mut dx = dock_pill_x_in_canvas + dock_pad_x;
+
+        for (item, glyph, top_rgb, bot_rgb) in pinned_apps {
+            let center_global_x = output_geo.loc.x + dock_canvas_x_local + dx + base_icon / 2;
+            let zoom = if pointer_near_dock {
+                let dist = ((pointer_x - center_global_x) as f32).abs();
+                if dist < 96.0 {
+                    let norm = 1.0 - dist / 96.0;
+                    1.0 + 0.38 * norm * norm * (3.0 - 2.0 * norm)
+                } else {
+                    1.0
+                }
+            } else {
+                1.0
+            };
+            let sz = (base_icon as f32 * zoom).round() as i32;
+            let bounce_key = format!("pin_{}", glyph);
+            let bounce_y = state.animations.dock_bounce_offset(&bounce_key);
+            let draw_x = dx - (sz - base_icon) / 2;
+            let draw_y = dock_pill_y_in_canvas + 8 - (sz - base_icon) - bounce_y;
+
+            dock.fill_squircle_gradient(draw_x, draw_y, sz, top_rgb, bot_rgb);
+            let text_px = (14.0 * zoom).round();
+            let gw = dock.measure_text_px(glyph, text_px);
+            let g_col = if glyph == ">_" {
+                [140, 245, 185, 255]
+            } else {
+                [250, 252, 255, 255]
+            };
+            dock.draw_text_shadowed(
+                draw_x + (sz - gw) / 2,
+                draw_y + (sz - text_px as i32) / 2 - 1,
+                glyph,
+                text_px,
+                g_col,
             );
-            if let Some(id) = win_id {
-                state
-                    .animations
-                    .taskbar_button_rects
-                    .insert(id.clone(), win_global);
-            }
 
-            let hovered = rect_contains(win_global, pointer_x, pointer_y);
-            let bg = if *is_focused {
-                [56, 50, 78, 255]
-            } else if hovered {
-                [46, 46, 68, 245]
-            } else if *is_min {
-                [24, 24, 36, 200]
-            } else {
-                [32, 32, 48, 235]
-            };
-            let fg = if *is_min {
-                [145, 148, 172, 255]
-            } else {
-                [238, 240, 252, 255]
-            };
-            let y_top = if hovered { 4 } else { 6 };
-            canvas.fill_rounded_rect(bx, y_top, btn_w, bar_h - 12, 6, bg);
-            if *is_focused {
-                canvas.fill_rect(
-                    bx + 6,
-                    bar_h - 8,
-                    btn_w - 12,
-                    2,
-                    [accent[0], accent[1], accent[2], 255],
+            // Active indicator dot underneath Settings if open
+            if item == LauncherItem::OkaySettings && state.settings.open {
+                dock.fill_circle_aa(
+                    (dx + base_icon / 2) as f32,
+                    (dock_pill_y_in_canvas + DOCK_HEIGHT - 6) as f32,
+                    2.5,
+                    [235, 240, 255, 235],
                 );
             }
-            let max_chars = ((btn_w - 18) / 8).max(2) as usize;
-            let short: String = title.chars().take(max_chars).collect();
-            canvas.draw_text_px(bx + 10, y_top + 6, &short, 13.5, fg);
+
+            let hit_global = Rectangle::new(
+                (
+                    output_geo.loc.x + dock_canvas_x_local + draw_x,
+                    output_geo.loc.y + dock_canvas_y_local + draw_y,
+                )
+                    .into(),
+                (sz, sz + 10).into(),
+            );
             state
                 .panel
                 .hit_regions
-                .push((win_global, ClickTarget::FocusWindow(idx)));
-        }
-    }
+                .push((hit_global, ClickTarget::PinnedApp(item)));
 
-    let bar_buf = MemoryRenderBuffer::from_slice(
-        &canvas.pixels,
-        Fourcc::Abgr8888,
-        (bar_w, bar_h),
-        1,
-        Transform::Normal,
-        None,
-    );
-    let bar_phys_loc: Point<f64, Physical> =
-        Point::<i32, Logical>::from((bar_x_local, bar_y_local))
-            .to_f64()
-            .to_physical(scale);
-    if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
-        renderer,
-        bar_phys_loc,
-        &bar_buf,
-        None,
-        None,
-        Some((bar_w, bar_h).into()),
-        Kind::Unspecified,
-    ) {
-        elements.push(OkayRenderElements::Memory(elem));
+            dx += base_icon + icon_gap;
+        }
+
+        // Vertical glass divider before open windows
+        if !ws_windows.is_empty() {
+            dock.fill_rect_blend(
+                dx + 2,
+                dock_pill_y_in_canvas + 12,
+                1,
+                DOCK_HEIGHT - 24,
+                [255, 255, 255, 42],
+            );
+            dx += divider_w;
+
+            for (idx, (win_id, title, is_focused, is_min)) in ws_windows.iter().enumerate() {
+                if dx + base_icon > dock_pill_x_in_canvas + dock_pill_w - 8 {
+                    break;
+                }
+                let center_global_x = output_geo.loc.x + dock_canvas_x_local + dx + base_icon / 2;
+                let zoom = if pointer_near_dock {
+                    let dist = ((pointer_x - center_global_x) as f32).abs();
+                    if dist < 96.0 {
+                        let norm = 1.0 - dist / 96.0;
+                        1.0 + 0.36 * norm * norm * (3.0 - 2.0 * norm)
+                    } else {
+                        1.0
+                    }
+                } else {
+                    1.0
+                };
+                let sz = (base_icon as f32 * zoom).round() as i32;
+                let draw_x = dx - (sz - base_icon) / 2;
+                let draw_y = dock_pill_y_in_canvas + 8 - (sz - base_icon);
+
+                let win_global = Rectangle::new(
+                    (
+                        output_geo.loc.x + dock_canvas_x_local + draw_x,
+                        output_geo.loc.y + dock_canvas_y_local + draw_y,
+                    )
+                        .into(),
+                    (sz, sz + 10).into(),
+                );
+                if let Some(id) = win_id {
+                    state
+                        .animations
+                        .taskbar_button_rects
+                        .insert(id.clone(), win_global);
+                }
+
+                let (top_rgb, bot_rgb) = if *is_focused {
+                    (accent, [
+                        (accent[0] as u16 * 68 / 100) as u8,
+                        (accent[1] as u16 * 68 / 100) as u8,
+                        (accent[2] as u16 * 68 / 100) as u8,
+                    ])
+                } else if *is_min {
+                    ([52, 56, 72], [32, 34, 46])
+                } else {
+                    ([74, 80, 102], [44, 48, 66])
+                };
+
+                dock.fill_squircle_gradient(draw_x, draw_y, sz, top_rgb, bot_rgb);
+                let initials: String = title
+                    .split_whitespace()
+                    .take(2)
+                    .filter_map(|w| w.chars().next())
+                    .collect::<String>()
+                    .to_uppercase();
+                let badge = if initials.is_empty() {
+                    "WN".to_string()
+                } else {
+                    initials
+                };
+                let text_px = (13.0 * zoom).round();
+                let bw = dock.measure_text_px(&badge, text_px);
+                dock.draw_text_shadowed(
+                    draw_x + (sz - bw) / 2,
+                    draw_y + (sz - text_px as i32) / 2 - 1,
+                    &badge,
+                    text_px,
+                    [248, 250, 255, 255],
+                );
+
+                // Glowing active indicator dot beneath every open window in the Dock
+                let dot_col = if *is_focused {
+                    [255, 255, 255, 250]
+                } else if *is_min {
+                    [160, 168, 192, 160]
+                } else {
+                    [210, 218, 238, 215]
+                };
+                dock.fill_circle_aa(
+                    (dx + base_icon / 2) as f32,
+                    (dock_pill_y_in_canvas + DOCK_HEIGHT - 6) as f32,
+                    if *is_focused { 2.8 } else { 2.2 },
+                    dot_col,
+                );
+
+                state
+                    .panel
+                    .hit_regions
+                    .push((win_global, ClickTarget::FocusWindow(idx)));
+                dx += base_icon + icon_gap;
+            }
+        }
+
+        let dock_buf = MemoryRenderBuffer::from_slice(
+            &dock.pixels,
+            Fourcc::Abgr8888,
+            (dock_canvas_w, dock_canvas_h),
+            1,
+            Transform::Normal,
+            None,
+        );
+        let dock_phys: Point<f64, Physical> =
+            Point::<i32, Logical>::from((dock_canvas_x_local, dock_canvas_y_local))
+                .to_f64()
+                .to_physical(scale);
+        if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            dock_phys,
+            &dock_buf,
+            None,
+            None,
+            Some((dock_canvas_w, dock_canvas_h).into()),
+            Kind::Unspecified,
+        ) {
+            elements.push(OkayRenderElements::Memory(elem));
+        }
+    } else {
+        // ====================================================================
+        // Classic Full-Width Taskbar (when Dock Mode is toggled OFF in Settings)
+        // ====================================================================
+        let bar_y_local = if state.panel.panel_top {
+            0
+        } else {
+            output_geo.size.h - 36
+        };
+        let bar_w = output_geo.size.w;
+        let bar_h = 36;
+        let mut canvas = Canvas::new(bar_w, bar_h);
+        canvas.fill_rect(0, 0, bar_w, bar_h, [24, 26, 36, 219]);
+        let line_y = if state.panel.panel_top { bar_h - 1 } else { 0 };
+        canvas.fill_rect_blend(0, line_y, bar_w, 1, [255, 255, 255, 36]);
+
+        let mut cursor_x = 10;
+        let start_w = 66;
+        let start_global = Rectangle::new(
+            (output_geo.loc.x + cursor_x, output_geo.loc.y + bar_y_local + 4).into(),
+            (start_w, bar_h - 8).into(),
+        );
+        let start_bg = if state.panel.launcher_open {
+            [accent[0], accent[1], accent[2], 255]
+        } else if rect_contains(start_global, pointer_x, pointer_y) {
+            [62, 64, 84, 255]
+        } else {
+            [42, 44, 60, 235]
+        };
+        let start_fg = if state.panel.launcher_open {
+            contrast_fg(accent)
+        } else {
+            [244, 246, 254, 255]
+        };
+        canvas.fill_rounded_rect_aa(cursor_x, 4, start_w, bar_h - 8, 7, start_bg);
+        canvas.draw_text_px(cursor_x + 14, 9, "OKay", 13.5, start_fg);
+        state
+            .panel
+            .hit_regions
+            .push((start_global, ClickTarget::ToggleLauncher));
+        cursor_x += start_w + 10;
+
+        if state.panel.show_workspaces {
+            for ws in 1..=9 {
+                let ws_w = 22;
+                let is_active = state.workspaces.active == ws;
+                let ws_global = Rectangle::new(
+                    (output_geo.loc.x + cursor_x, output_geo.loc.y + bar_y_local + 5).into(),
+                    (ws_w, bar_h - 10).into(),
+                );
+                let bg = if is_active {
+                    [accent[0], accent[1], accent[2], 255]
+                } else if occupied_workspaces[ws - 1] {
+                    [48, 50, 68, 235]
+                } else {
+                    [32, 34, 48, 200]
+                };
+                let fg = if is_active {
+                    contrast_fg(accent)
+                } else {
+                    [225, 228, 242, 245]
+                };
+                canvas.fill_rounded_rect_aa(cursor_x, 5, ws_w, bar_h - 10, 5, bg);
+                canvas.draw_text_px(cursor_x + 7, 9, &ws.to_string(), 12.5, fg);
+                state
+                    .panel
+                    .hit_regions
+                    .push((ws_global, ClickTarget::Workspace(ws)));
+                cursor_x += ws_w + 4;
+            }
+            cursor_x += 8;
+        }
+
+        let clock_str = current_macos_clock();
+        let clock_w = (canvas.measure_text_px(&clock_str, 12.5) + 16).max(118);
+        let clock_x = (bar_w - clock_w - 10).max(cursor_x);
+        let clock_global = Rectangle::new(
+            (output_geo.loc.x + clock_x, output_geo.loc.y + bar_y_local + 4).into(),
+            (clock_w, bar_h - 8).into(),
+        );
+        canvas.fill_rounded_rect_aa(clock_x, 4, clock_w, bar_h - 8, 6, [38, 40, 56, 235]);
+        canvas.draw_text_px(clock_x + 8, 9, &clock_str, 12.5, [240, 242, 252, 255]);
+        state
+            .panel
+            .hit_regions
+            .push((clock_global, ClickTarget::ToggleCalendar));
+
+        let avail_w = (clock_x - cursor_x - 10).max(0);
+        if !ws_windows.is_empty() && avail_w > 56 {
+            let btn_w = ((avail_w / ws_windows.len() as i32) - 6).clamp(52, 165);
+            for (idx, (win_id, title, is_focused, _is_min)) in ws_windows.iter().enumerate() {
+                let bx = cursor_x + idx as i32 * (btn_w + 6);
+                if bx + btn_w > clock_x - 6 {
+                    break;
+                }
+                let win_global = Rectangle::new(
+                    (output_geo.loc.x + bx, output_geo.loc.y + bar_y_local + 4).into(),
+                    (btn_w, bar_h - 8).into(),
+                );
+                if let Some(id) = win_id {
+                    state
+                        .animations
+                        .taskbar_button_rects
+                        .insert(id.clone(), win_global);
+                }
+                let bg = if *is_focused {
+                    [58, 62, 84, 245]
+                } else {
+                    [36, 38, 52, 225]
+                };
+                canvas.fill_rounded_rect_aa(bx, 4, btn_w, bar_h - 8, 6, bg);
+                let max_chars = ((btn_w - 16) / 8).max(2) as usize;
+                let short: String = title.chars().take(max_chars).collect();
+                canvas.draw_text_px(bx + 8, 9, &short, 12.5, [238, 240, 252, 255]);
+                state
+                    .panel
+                    .hit_regions
+                    .push((win_global, ClickTarget::FocusWindow(idx)));
+            }
+        }
+
+        let bar_buf = MemoryRenderBuffer::from_slice(
+            &canvas.pixels,
+            Fourcc::Abgr8888,
+            (bar_w, bar_h),
+            1,
+            Transform::Normal,
+            None,
+        );
+        let bar_phys: Point<f64, Physical> =
+            Point::<i32, Logical>::from((0, bar_y_local))
+                .to_f64()
+                .to_physical(scale);
+        if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            bar_phys,
+            &bar_buf,
+            None,
+            None,
+            Some((bar_w, bar_h).into()),
+            Kind::Unspecified,
+        ) {
+            elements.push(OkayRenderElements::Memory(elem));
+        }
     }
 
     // 6. Render Expanded Searchable Start Menu Popup (with smooth slide animation)
@@ -1091,47 +1359,33 @@ pub fn render_panel_elements(
             + MENU_PADDING * 2
             + total_rows as i32 * MENU_ITEM_HEIGHT
             + MENU_FOOTER_HEIGHT;
-        let menu_x = bar_x_local + 8;
-        let slide_px = ((1.0 - menu_anim) * 18.0).round() as i32;
-        let menu_y = if state.panel.panel_top {
-            bar_y_local + PANEL_HEIGHT + 8 - slide_px
+        let menu_x = 12;
+        let slide_px = ((1.0 - menu_anim) * 14.0).round() as i32;
+        let menu_y = if state.panel.dock_mode || state.panel.panel_top {
+            PANEL_HEIGHT + 8 - slide_px
         } else {
-            (bar_y_local - menu_h - 8 + slide_px).max(8)
+            (output_geo.size.h - 36 - menu_h - 8 + slide_px).max(8)
         };
 
         let mut menu_canvas = Canvas::new(MENU_WIDTH, menu_h);
-        menu_canvas.fill_rounded_rect(0, 0, MENU_WIDTH, menu_h, 10, [20, 20, 32, 250]);
-        menu_canvas.stroke_rect(0, 0, MENU_WIDTH, menu_h, [accent[0], accent[1], accent[2], 195]);
+        menu_canvas.fill_glass_panel(0, 0, MENU_WIDTH, menu_h, 14);
 
         // Header + Search Box
-        menu_canvas.fill_rect(2, 2, MENU_WIDTH - 4, MENU_HEADER_HEIGHT - 2, [28, 28, 44, 255]);
-        menu_canvas.draw_text_px(
-            14,
-            8,
-            "OKay DE",
-            15.5,
-            [accent[0], accent[1], accent[2], 255],
-        );
-        menu_canvas.draw_text_px(
-            96,
-            10,
-            "Application Launcher",
-            12.5,
-            [160, 165, 190, 255],
-        );
+        menu_canvas.draw_text_px(14, 10, "OKay Spotlight", 14.5, [246, 248, 255, 255]);
+        menu_canvas.draw_text_px(142, 11, &focused_app_name, 12.0, [156, 164, 188, 230]);
 
-        menu_canvas.fill_rounded_rect(12, 36, MENU_WIDTH - 24, 28, 6, [16, 16, 26, 255]);
+        menu_canvas.fill_rounded_rect_aa(12, 38, MENU_WIDTH - 24, 28, 8, [255, 255, 255, 18]);
         let search_txt = if state.panel.search_query.is_empty() {
-            "Type to search applications...".to_string()
+            "Search apps & commands...".to_string()
         } else {
-            format!("Search: {}_", state.panel.search_query)
+            format!("{}|", state.panel.search_query)
         };
         let search_fg = if state.panel.search_query.is_empty() {
-            [130, 135, 160, 255]
+            [142, 148, 172, 235]
         } else {
-            [240, 242, 252, 255]
+            [248, 250, 255, 255]
         };
-        menu_canvas.draw_text_px(22, 42, &search_txt, 12.5, search_fg);
+        menu_canvas.draw_text_px(22, 44, &search_txt, 12.5, search_fg);
 
         let mut row_idx = 0;
 
@@ -1314,14 +1568,16 @@ pub fn render_panel_elements(
     elements
 }
 
-/// Renders a server-side titlebar (with smooth Maple Mono title text and `[-]`, `[+]`, `[X]` buttons)
-/// directly above `window` at output-local coordinates.
+/// Renders a 1:1 macOS-style server-side titlebar with SDF rounded top corners (`12px`),
+/// top-left Traffic Light buttons (`#ff5f57`, `#febc2e`, `#28c840` with `x`, `-`, `+` on hover),
+/// and centered Maple Mono window title.
 pub fn render_titlebar_element(
     window: &Window,
     local_win_loc: Point<i32, Logical>,
+    pointer_local: Point<f64, Logical>,
     is_focused: bool,
     is_pinned: bool,
-    accent: [u8; 3],
+    _accent: [u8; 3],
     renderer: &mut GlesRenderer,
     scale: Scale<f64>,
 ) -> Option<OkayRenderElements<GlesRenderer>> {
@@ -1333,44 +1589,59 @@ pub fn render_titlebar_element(
 
     let mut canvas = Canvas::new(tb_w, tb_h);
     let bg = if is_focused {
-        [32, 28, 48, 250]
+        [30, 32, 44, 240]
     } else {
-        [22, 22, 34, 240]
+        [22, 24, 34, 224]
     };
-    let top_accent = if is_focused {
-        [accent[0], accent[1], accent[2], 255]
-    } else {
-        [56, 56, 78, 255]
-    };
-    canvas.fill_rect(0, 0, tb_w, tb_h, bg);
-    canvas.fill_rect(0, 0, tb_w, 2, top_accent);
+    // SDF anti-aliased rounded top corners (12px radius), square bottom edge meeting the client surface
+    canvas.fill_rounded_rect_aa(0, 0, tb_w, tb_h + 12, 12, bg);
+    // Subtle 1px rgba(255, 255, 255, 0.14) inner top highlight
+    if tb_w > 24 {
+        canvas.fill_rect_blend(12, 1, tb_w - 24, 1, [255, 255, 255, 36]);
+    }
+    // Subtle 1px separator line at bottom of titlebar
+    canvas.fill_rect_blend(0, tb_h - 1, tb_w, 1, [255, 255, 255, 18]);
 
+    // Check if pointer is hovering over the Traffic Lights cluster on the top-left
+    let rel_px = pointer_local.x.round() as i32 - tb_x;
+    let rel_py = pointer_local.y.round() as i32 - tb_y;
+    let lights_hovered = (6..=66).contains(&rel_px) && (4..=tb_h - 4).contains(&rel_py);
+
+    // Top-left macOS Traffic Light buttons: Close (#ff5f57), Minimize (#febc2e), Maximize (#28c840)
+    let cy = tb_h as f32 * 0.5;
+    let lights = [
+        (16.0f32, [255, 95, 87, 255], "x"),
+        (36.0f32, [254, 188, 46, 255], "-"),
+        (56.0f32, [40, 200, 64, 255], "+"),
+    ];
+    for (cx, active_col, sym) in lights {
+        let col = if is_focused || lights_hovered {
+            active_col
+        } else {
+            [72, 74, 88, 220]
+        };
+        canvas.fill_circle_aa(cx, cy, 6.0, col);
+        if lights_hovered {
+            canvas.draw_text_px((cx - 3.5).round() as i32, (cy - 6.5).round() as i32, sym, 11.0, [24, 18, 18, 220]);
+        }
+    }
+
+    // Centered window title
     let mut title = window_title_str(window);
     if is_pinned {
         title = format!("[PIN] {}", title);
     }
-    let max_chars = ((tb_w - 96) / 8).max(1) as usize;
+    let avail_title_w = (tb_w - 144).max(32);
+    let max_chars = (avail_title_w / 8).max(1) as usize;
     let short_title: String = title.chars().take(max_chars).collect();
+    let title_w = canvas.measure_text_px(&short_title, 13.0);
+    let title_x = ((tb_w - title_w) / 2).max(74);
     let title_fg = if is_focused {
-        [238, 240, 252, 255]
+        [238, 240, 250, 255]
     } else {
-        [165, 168, 190, 255]
+        [152, 156, 174, 255]
     };
-    canvas.draw_text_px(10, 5, &short_title, 13.0, title_fg);
-
-    if tb_w >= 120 {
-        // Minimize button [-]: [tb_w - 80 .. tb_w - 58]
-        canvas.fill_rounded_rect(tb_w - 80, 4, 22, tb_h - 8, 4, [48, 48, 68, 255]);
-        canvas.draw_text_px(tb_w - 72, 4, "-", 13.0, [225, 228, 245, 255]);
-
-        // Maximize button [+]: [tb_w - 54 .. tb_w - 32]
-        canvas.fill_rounded_rect(tb_w - 54, 4, 22, tb_h - 8, 4, [48, 48, 68, 255]);
-        canvas.draw_text_px(tb_w - 46, 4, "+", 13.0, [225, 228, 245, 255]);
-
-        // Close button [X]: [tb_w - 28 .. tb_w - 6]
-        canvas.fill_rounded_rect(tb_w - 28, 4, 22, tb_h - 8, 4, [190, 66, 92, 255]);
-        canvas.draw_text_px(tb_w - 21, 4, "x", 13.0, [255, 245, 248, 255]);
-    }
+    canvas.draw_text_px(title_x, 7, &short_title, 13.0, title_fg);
 
     let buf = MemoryRenderBuffer::from_slice(
         &canvas.pixels,
@@ -1434,15 +1705,6 @@ fn read_battery_percent() -> Option<i32> {
         }
     }
     None
-}
-
-fn current_hh_mm() -> String {
-    unsafe {
-        let now = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&now, &mut tm);
-        format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
-    }
 }
 
 // ============================================================================
@@ -1583,6 +1845,36 @@ fn collect_font_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 // Software RGBA Canvas with Anti-Aliased Font & Rounded Rectangles
 // ============================================================================
 
+/// Formats local time as macOS-style `Day DD Mon HH:MM` (e.g. `Sat 14 Nov 22:14`).
+pub fn current_macos_clock() -> String {
+    unsafe {
+        let mut t: libc::time_t = 0;
+        libc::time(&mut t);
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&t, &mut tm);
+        const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const MONTHS: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        let day = DAYS[(tm.tm_wday as usize).min(6)];
+        let mon = MONTHS[(tm.tm_mon as usize).min(11)];
+        format!(
+            "{} {:02} {} {:02}:{:02}",
+            day, tm.tm_mday, mon, tm.tm_hour, tm.tm_min
+        )
+    }
+}
+
+/// Returns high-contrast foreground text color (`dark` or `white`) for any background RGB.
+pub fn contrast_fg(bg: [u8; 3]) -> [u8; 4] {
+    let luma = 0.2126 * bg[0] as f32 + 0.7152 * bg[1] as f32 + 0.0722 * bg[2] as f32;
+    if luma > 152.0 {
+        [18, 20, 28, 255]
+    } else {
+        [244, 246, 252, 255]
+    }
+}
+
 pub struct Canvas {
     pub width: i32,
     pub height: i32,
@@ -1682,11 +1974,153 @@ impl Canvas {
         }
     }
 
+    /// Smooth SDF anti-aliased rounded rectangle.
+    pub fn fill_rounded_rect_aa(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: [u8; 4]) {
+        if w <= 0 || h <= 0 || color[3] == 0 {
+            return;
+        }
+        let r = (radius as f32).clamp(0.0, (w.min(h) as f32) * 0.5);
+        let x0 = (x - 1).clamp(0, self.width);
+        let y0 = (y - 1).clamp(0, self.height);
+        let x1 = (x + w + 1).clamp(0, self.width);
+        let y1 = (y + h + 1).clamp(0, self.height);
+        let cx = x as f32 + w as f32 * 0.5;
+        let cy = y as f32 + h as f32 * 0.5;
+        let hw = w as f32 * 0.5 - r;
+        let hh = h as f32 * 0.5 - r;
+
+        for py in y0..y1 {
+            for px in x0..x1 {
+                let dx = (px as f32 + 0.5 - cx).abs() - hw;
+                let dy = (py as f32 + 0.5 - cy).abs() - hh;
+                let dist = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt() + dx.max(dy).min(0.0) - r;
+                let cov = (0.5 - dist).clamp(0.0, 1.0);
+                if cov > 0.01 {
+                    let a = ((color[3] as f32 * cov).round() as u32).min(255) as u8;
+                    self.blend_pixel(px, py, [color[0], color[1], color[2], a]);
+                }
+            }
+        }
+    }
+
+    /// Smooth SDF anti-aliased filled circle.
+    pub fn fill_circle_aa(&mut self, cx: f32, cy: f32, radius: f32, color: [u8; 4]) {
+        if radius <= 0.0 || color[3] == 0 {
+            return;
+        }
+        let x0 = ((cx - radius - 1.5).floor() as i32).clamp(0, self.width);
+        let y0 = ((cy - radius - 1.5).floor() as i32).clamp(0, self.height);
+        let x1 = ((cx + radius + 1.5).ceil() as i32).clamp(0, self.width);
+        let y1 = ((cy + radius + 1.5).ceil() as i32).clamp(0, self.height);
+
+        for py in y0..y1 {
+            for px in x0..x1 {
+                let dx = px as f32 + 0.5 - cx;
+                let dy = py as f32 + 0.5 - cy;
+                let dist = (dx * dx + dy * dy).sqrt() - radius;
+                let cov = (0.5 - dist).clamp(0.0, 1.0);
+                if cov > 0.01 {
+                    let a = ((color[3] as f32 * cov).round() as u32).min(255) as u8;
+                    self.blend_pixel(px, py, [color[0], color[1], color[2], a]);
+                }
+            }
+        }
+    }
+
+    /// Draws a macOS-style gradient squircle icon with subtle top specular highlight.
+    pub fn fill_squircle_gradient(
+        &mut self,
+        x: i32,
+        y: i32,
+        size: i32,
+        top_rgb: [u8; 3],
+        bot_rgb: [u8; 3],
+    ) {
+        if size <= 4 {
+            return;
+        }
+        let r = (size as f32 * 0.24).max(4.0);
+        let x0 = (x - 1).clamp(0, self.width);
+        let y0 = (y - 1).clamp(0, self.height);
+        let x1 = (x + size + 1).clamp(0, self.width);
+        let y1 = (y + size + 1).clamp(0, self.height);
+        let cx = x as f32 + size as f32 * 0.5;
+        let cy = y as f32 + size as f32 * 0.5;
+        let half = size as f32 * 0.5 - r;
+
+        for py in y0..y1 {
+            let t = ((py - y) as f32 / size as f32).clamp(0.0, 1.0);
+            let cr = (top_rgb[0] as f32 * (1.0 - t) + bot_rgb[0] as f32 * t).round() as u8;
+            let cg = (top_rgb[1] as f32 * (1.0 - t) + bot_rgb[1] as f32 * t).round() as u8;
+            let cb = (top_rgb[2] as f32 * (1.0 - t) + bot_rgb[2] as f32 * t).round() as u8;
+            for px in x0..x1 {
+                let dx = (px as f32 + 0.5 - cx).abs() - half;
+                let dy = (py as f32 + 0.5 - cy).abs() - half;
+                let dist = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt() + dx.max(dy).min(0.0) - r;
+                let cov = (0.5 - dist).clamp(0.0, 1.0);
+                if cov > 0.01 {
+                    let a = (255.0 * cov).round() as u8;
+                    self.blend_pixel(px, py, [cr, cg, cb, a]);
+                    // Subtle 1px specular top rim
+                    if py == y + 1 && dist < -0.5 {
+                        self.blend_pixel(px, py, [255, 255, 255, (48.0 * cov) as u8]);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Draws a sleek macOS translucent dark glass panel (`rgba(24, 26, 36, 0.86)`)
+    /// with a soft drop shadow and `1px rgba(255, 255, 255, 0.14)` inner top highlight.
+    pub fn fill_glass_panel(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32) {
+        // Soft drop shadow
+        self.fill_rounded_rect_aa(x - 2, y + 3, w + 4, h + 4, radius + 2, [0, 0, 0, 56]);
+        self.fill_rounded_rect_aa(x - 1, y + 1, w + 2, h + 2, radius + 1, [0, 0, 0, 72]);
+        // Translucent dark glass body: rgba(24, 26, 36, 0.86) -> alpha 219
+        self.fill_rounded_rect_aa(x, y, w, h, radius, [24, 26, 36, 219]);
+        // Subtle 1px inner top highlight: rgba(255, 255, 255, 0.14) -> alpha 36
+        let inset = (radius / 2).max(4);
+        if w > inset * 2 {
+            self.fill_rect_blend(x + inset, y + 1, w - inset * 2, 1, [255, 255, 255, 36]);
+        }
+    }
+
+    pub fn fill_rect_blend(&mut self, x: i32, y: i32, w: i32, h: i32, color: [u8; 4]) {
+        let x0 = x.clamp(0, self.width);
+        let y0 = y.clamp(0, self.height);
+        let x1 = (x + w).clamp(0, self.width);
+        let y1 = (y + h).clamp(0, self.height);
+        for py in y0..y1 {
+            for px in x0..x1 {
+                self.blend_pixel(px, py, color);
+            }
+        }
+    }
+
     pub fn stroke_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: [u8; 4]) {
         self.fill_rect(x, y, w, 1, color);
         self.fill_rect(x, y + h - 1, w, 1, color);
         self.fill_rect(x, y, 1, h, color);
         self.fill_rect(x + w - 1, y, 1, h, color);
+    }
+
+    pub fn draw_text_shadowed(&mut self, start_x: i32, start_y: i32, text: &str, px_size: f32, color: [u8; 4]) {
+        self.draw_text_px(start_x, start_y + 1, text, px_size, [0, 0, 0, 145]);
+        self.draw_text_px(start_x, start_y, text, px_size, color);
+    }
+
+    pub fn measure_text_px(&self, text: &str, px_size: f32) -> i32 {
+        let mut width = 0.0f32;
+        with_font_engine(|engine| {
+            if engine.font.is_some() {
+                for ch in text.chars() {
+                    if let Some((metrics, _)) = engine.rasterize_cached(ch, px_size) {
+                        width += metrics.advance_width;
+                    }
+                }
+            }
+        });
+        width.ceil() as i32
     }
 
     pub fn draw_text_px(&mut self, start_x: i32, start_y: i32, text: &str, px_size: f32, color: [u8; 4]) {

@@ -163,14 +163,16 @@ pub fn collect_output_elements(
             window.render_elements(renderer, phys_loc, scale, alpha);
         elements.extend(win_elements);
 
-        // Server-side titlebar & border decoration around non-fullscreen windows
+        // Server-side titlebar & subtle 1px macOS border around non-fullscreen windows
         if !state.workspaces.is_fullscreen(window) {
             let is_focused = win_id.as_ref() == focused_id.as_ref();
             let is_pinned = state.workspaces.is_pinned(window);
+            let pointer_local = state.pointer_location - output_geo.loc.to_f64();
 
             if let Some(tb_elem) = crate::panel::render_titlebar_element(
                 window,
                 local_loc,
+                pointer_local,
                 is_focused,
                 is_pinned,
                 accent,
@@ -181,34 +183,33 @@ pub fn collect_output_elements(
             }
 
             let border_color = if is_focused {
-                state.theme.active_border_color
+                [1.0f32, 1.0, 1.0, 0.18]
             } else {
                 state.theme.inactive_border_color
             };
+            let bw = state.theme.border_width.min(1);
+            if bw > 0 {
+                let win_geo = window.geometry();
+                let tb_h = crate::state::TITLEBAR_HEIGHT;
+                let border_geo = Rectangle::new(
+                    local_loc
+                        + win_geo.loc
+                        - Point::from((bw, bw + tb_h)),
+                    (
+                        win_geo.size.w.max(120) + bw * 2,
+                        win_geo.size.h + tb_h + bw * 2,
+                    )
+                        .into(),
+                );
 
-            let win_geo = window.geometry();
-            let tb_h = crate::state::TITLEBAR_HEIGHT;
-            let border_geo = Rectangle::new(
-                local_loc
-                    + win_geo.loc
-                    - Point::from((
-                        state.theme.border_width,
-                        state.theme.border_width + tb_h,
-                    )),
-                (
-                    win_geo.size.w.max(120) + state.theme.border_width * 2,
-                    win_geo.size.h + tb_h + state.theme.border_width * 2,
-                )
-                    .into(),
-            );
-
-            let border_elems = build_border_elements(
-                border_geo,
-                state.theme.border_width,
-                Color32F::from(border_color),
-                scale,
-            );
-            elements.extend(border_elems);
+                let border_elems = build_border_elements(
+                    border_geo,
+                    bw,
+                    Color32F::from(border_color),
+                    scale,
+                );
+                elements.extend(border_elems);
+            }
         }
     }
 

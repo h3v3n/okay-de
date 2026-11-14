@@ -113,6 +113,8 @@ pub struct AnimationManager {
     pub calendar_open_anim: f32,
     pub notif_open_anim: f32,
     pub clipboard_open_anim: f32,
+    /// Active dock icon bounce timestamps (`key -> started_at`).
+    pub dock_bounces: HashMap<String, Instant>,
 }
 
 impl Default for AnimationManager {
@@ -129,6 +131,7 @@ impl Default for AnimationManager {
             calendar_open_anim: 0.0,
             notif_open_anim: 0.0,
             clipboard_open_anim: 0.0,
+            dock_bounces: HashMap::new(),
         }
     }
 }
@@ -136,6 +139,28 @@ impl Default for AnimationManager {
 impl AnimationManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Triggers a macOS-style parabolic bounce on a Dock icon when launching an app.
+    pub fn trigger_dock_bounce(&mut self, key: &str) {
+        if self.enabled {
+            self.dock_bounces.insert(key.to_string(), Instant::now());
+        }
+    }
+
+    /// Returns the upward Y bounce offset (in logical px, >= 0) for a Dock icon.
+    pub fn dock_bounce_offset(&self, key: &str) -> i32 {
+        let Some(started) = self.dock_bounces.get(key) else {
+            return 0;
+        };
+        let elapsed = started.elapsed().as_secs_f32() * self.speed.clamp(0.4, 2.5);
+        if elapsed >= 0.72 {
+            return 0;
+        }
+        // Two decaying parabolic hops
+        let decay = (1.0 - elapsed / 0.72).max(0.0);
+        let hop = (elapsed * std::f32::consts::PI * 2.8).sin().abs();
+        (hop * 14.0 * decay).round() as i32
     }
 
     /// Registers a newly mapped window so it plays a smooth open transition.
@@ -266,6 +291,9 @@ impl AnimationManager {
             return;
         }
 
+        self.dock_bounces
+            .retain(|_, started| started.elapsed().as_secs_f32() < 0.85);
+
         let dt = raw_dt * self.speed.clamp(0.35, 3.0);
 
         // Exponential spring decay for workspace slide
@@ -344,29 +372,48 @@ impl AnimationManager {
             let cur_y = lerp(src.loc.y as f32, dst.loc.y as f32, t).round() as i32;
             let cur_w = lerp(src.size.w as f32, dst.size.w as f32, t).round().max(16.0) as i32;
             let cur_h = lerp(src.size.h as f32, dst.size.h as f32, t).round().max(12.0) as i32;
-            let alpha = (1.0 - t * 0.65).clamp(0.15, 0.92);
+            let alpha = (1.0 - t * 0.65).clamp(0.15, 0.88);
+            let blur_pad = (6.0 + 18.0 * (t * (1.0 - t) * 4.0)).round() as i32;
 
+            let mut out = Vec::with_capacity(3);
+            // Soft-focus blur halo pass during minimize/unminimize
+            for (pad, a_mul) in [(blur_pad, 0.16), (blur_pad / 2, 0.24)] {
+                let halo_buf = SolidColorBuffer::new(
+                    (cur_w + pad * 2, cur_h + pad * 2),
+                    Color32F::new(0.18, 0.22, 0.34, alpha * a_mul),
+                );
+                let halo_loc: Point<i32, Physical> =
+                    Point::<i32, Logical>::from((cur_x - pad, cur_y - pad)).to_physical_precise_round(scale);
+                out.push(OkayRenderElements::Solid(
+                    SolidColorRenderElement::from_buffer(&halo_buf, halo_loc, scale, alpha * a_mul, Kind::Unspecified),
+                ));
+            }
             let buf = SolidColorBuffer::new(
                 (cur_w, cur_h),
                 Color32F::new(
-                    (accent[0] as f32 / 255.0) * 0.35,
-                    (accent[1] as f32 / 255.0) * 0.35,
-                    (accent[2] as f32 / 255.0) * 0.42,
+                    0.12 + (accent[0] as f32 / 255.0) * 0.25,
+                    0.14 + (accent[1] as f32 / 255.0) * 0.25,
+                    0.20 + (accent[2] as f32 / 255.0) * 0.30,
                     alpha,
                 ),
             );
             let phys_loc: Point<i32, Physical> =
                 Point::<i32, Logical>::from((cur_x, cur_y)).to_physical_precise_round(scale);
-            return vec![OkayRenderElements::Solid(
+            out.push(OkayRenderElements::Solid(
                 SolidColorRenderElement::from_buffer(&buf, phys_loc, scale, alpha, Kind::Unspecified),
-            )];
+            ));
+            return out;
         }
 
-        // Magic Lamp (Genie) multi-slice S-curve funnel deformation!
+        // Magic Lamp (Genie) multi-slice S-curve funnel deformation + lightweight soft-focus blur pass!
         // Divides the window into 28 horizontal slices. Lower slices get pulled horizontally
-        // into the taskbar button neck first, while upper slices cascade down the Genie funnel.
+        // into the dock icon neck first, while upper slices cascade down the Genie funnel.
         const SLICES: usize = 28;
         let mut elems = Vec::with_capacity(SLICES * 2);
+
+        // Soft-focus blur intensity peaks mid-flight (`t * (1 - t) * 4`)
+        let blur_intensity = (t * (1.0 - t) * 4.0).clamp(0.0, 1.0);
+        let blur_spread_x = (4.0 + 16.0 * blur_intensity).round() as i32;
 
         let top_y = lerp(src.loc.y as f32, dst.loc.y as f32, (t * 1.15 - 0.15).clamp(0.0, 1.0));
         let bot_y = lerp((src.loc.y + src.size.h) as f32, (dst.loc.y + dst.size.h) as f32, (t * 1.35).clamp(0.0, 1.0));
@@ -374,11 +421,11 @@ impl AnimationManager {
         let slice_h = (total_h / SLICES as f32).ceil().max(2.0) as i32;
 
         for i in 0..SLICES {
-            // `v` goes from 0.0 (top of window) to 1.0 (bottom of window nearest the taskbar)
+            // `v` goes from 0.0 (top of window) to 1.0 (bottom of window nearest the dock)
             let v = i as f32 / (SLICES - 1) as f32;
             let sy = (top_y + v * total_h).round() as i32;
 
-            // Genie funnel factor: bottom slices pinch toward the button immediately (`v` high),
+            // Genie funnel factor: bottom slices pinch toward the dock icon immediately (`v` high),
             // while top slices retain window width early and then funnel smoothly in the second half of `t`.
             let pinch_phase = ((t * 1.45) + v * 0.75 - 0.25).clamp(0.0, 1.0);
             let s_curve = smoothstep(pinch_phase);
@@ -394,22 +441,42 @@ impl AnimationManager {
 
             let is_title_slice = i <= 1;
             let r = if is_title_slice {
-                accent[0] as f32 / 255.0
+                0.24 + (accent[0] as f32 / 255.0) * 0.35
             } else {
-                lerp(0.14, accent[0] as f32 / 255.0 * 0.55, v * 0.6)
+                lerp(0.11, 0.18 + (accent[0] as f32 / 255.0) * 0.24, v * 0.7 + blur_intensity * 0.3)
             };
             let g = if is_title_slice {
-                accent[1] as f32 / 255.0
+                0.26 + (accent[1] as f32 / 255.0) * 0.35
             } else {
-                lerp(0.14, accent[1] as f32 / 255.0 * 0.55, v * 0.6)
+                lerp(0.12, 0.20 + (accent[1] as f32 / 255.0) * 0.24, v * 0.7 + blur_intensity * 0.3)
             };
             let b = if is_title_slice {
-                accent[2] as f32 / 255.0
+                0.34 + (accent[2] as f32 / 255.0) * 0.40
             } else {
-                lerp(0.22, accent[2] as f32 / 255.0 * 0.65, v * 0.6)
+                lerp(0.18, 0.28 + (accent[2] as f32 / 255.0) * 0.30, v * 0.7 + blur_intensity * 0.3)
             };
-            let alpha = (0.92 - t * 0.35).clamp(0.25, 0.92);
+            let alpha = (0.86 - t * 0.34).clamp(0.22, 0.88);
 
+            // Fast GPU soft-focus blur halo pass behind each deforming slice
+            let blur_alpha = alpha * (0.14 + 0.16 * blur_intensity);
+            let blur_buf = SolidColorBuffer::new(
+                (sw + blur_spread_x * 2, slice_h + 4),
+                Color32F::new(r * 1.15, g * 1.15, b * 1.20, blur_alpha),
+            );
+            let blur_phys: Point<i32, Physical> =
+                Point::<i32, Logical>::from((left_x - blur_spread_x, sy - 2))
+                    .to_physical_precise_round(scale);
+            elems.push(OkayRenderElements::Solid(
+                SolidColorRenderElement::from_buffer(
+                    &blur_buf,
+                    blur_phys,
+                    scale,
+                    blur_alpha,
+                    Kind::Unspecified,
+                ),
+            ));
+
+            // Core frosted slice
             let slice_buf = SolidColorBuffer::new((sw, slice_h), Color32F::new(r, g, b, alpha));
             let phys_loc: Point<i32, Physical> =
                 Point::<i32, Logical>::from((left_x, sy)).to_physical_precise_round(scale);

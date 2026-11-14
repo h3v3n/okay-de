@@ -21,7 +21,7 @@ use smithay::{
 };
 
 use crate::{
-    panel::{active_font_name, rect_contains, Canvas, ACCENT_PRESETS},
+    panel::{active_font_name, contrast_fg, rect_contains, Canvas, ACCENT_PRESETS},
     render::OkayRenderElements,
     state::OkayState,
 };
@@ -616,72 +616,54 @@ pub fn render_settings_elements(
     let pointer_y = state.pointer_location.y.round() as i32;
 
     let mut canvas = Canvas::new(SETTINGS_WIDTH, SETTINGS_HEIGHT);
-    canvas.fill_rounded_rect(0, 0, SETTINGS_WIDTH, SETTINGS_HEIGHT, 10, [18, 18, 28, 250]);
-    canvas.stroke_rect(0, 0, SETTINGS_WIDTH, SETTINGS_HEIGHT, [accent[0], accent[1], accent[2], 215]);
+    canvas.fill_glass_panel(0, 0, SETTINGS_WIDTH, SETTINGS_HEIGHT, 14);
 
-    // Header Bar
-    canvas.fill_rect(2, 2, SETTINGS_WIDTH - 4, HEADER_HEIGHT - 2, [28, 26, 44, 255]);
-    canvas.fill_rect(0, 0, SETTINGS_WIDTH, 2, [accent[0], accent[1], accent[2], 255]);
-    canvas.draw_text_px(
-        14,
-        10,
-        "OKay Settings  —  Control Center (Super+I)",
-        14.5,
-        [240, 242, 252, 255],
+    // Left macOS System Settings Sidebar (translucent tinted panel + 1px divider)
+    canvas.fill_rounded_rect_aa(2, 2, SIDEBAR_WIDTH, SETTINGS_HEIGHT - 4, 12, [255, 255, 255, 10]);
+    canvas.fill_rect_blend(
+        SIDEBAR_WIDTH + 2,
+        8,
+        1,
+        SETTINGS_HEIGHT - 16,
+        [255, 255, 255, 22],
     );
 
-    // Close [X] button
-    let close_rect = Rectangle::new((wx + SETTINGS_WIDTH - 34, wy + 7).into(), (24, 24).into());
-    let close_bg = if rect_contains(close_rect, pointer_x, pointer_y) {
-        [220, 76, 104, 255]
-    } else {
-        [185, 62, 88, 255]
-    };
-    canvas.fill_rounded_rect(SETTINGS_WIDTH - 34, 7, 24, 24, 5, close_bg);
-    canvas.draw_text_px(SETTINGS_WIDTH - 26, 10, "x", 14.0, [255, 245, 248, 255]);
+    // Top-left macOS Traffic Light Close button (#ff5f57)
+    let close_rect = Rectangle::new((wx + 10, wy + 10).into(), (20, 20).into());
+    let close_hovered = rect_contains(close_rect, pointer_x, pointer_y);
+    canvas.fill_circle_aa(20.0, 20.0, 6.5, [255, 95, 87, 255]);
+    if close_hovered {
+        canvas.draw_text_px(17, 13, "x", 11.0, [24, 18, 18, 220]);
+    }
     state
         .settings
         .hit_regions
         .push((close_rect, SettingsAction::CloseWindow));
 
-    // Left Sidebar (8 Tabs)
-    canvas.fill_rect(
-        2,
-        HEADER_HEIGHT,
-        SIDEBAR_WIDTH,
-        SETTINGS_HEIGHT - HEADER_HEIGHT - 2,
-        [24, 24, 36, 255],
-    );
-    canvas.fill_rect(
-        SIDEBAR_WIDTH + 2,
-        HEADER_HEIGHT,
-        1,
-        SETTINGS_HEIGHT - HEADER_HEIGHT - 2,
-        [46, 46, 68, 255],
-    );
+    canvas.draw_text_px(38, 13, "System Settings", 14.0, [242, 244, 252, 255]);
 
     for (i, tab) in SettingsTab::ALL.iter().enumerate() {
         let ty = HEADER_HEIGHT + 10 + i as i32 * 40;
         let tab_rect = Rectangle::new(
-            (wx + 8, wy + ty).into(),
-            (SIDEBAR_WIDTH - 14, 34).into(),
+            (wx + 10, wy + ty).into(),
+            (SIDEBAR_WIDTH - 16, 34).into(),
         );
         let is_selected = state.settings.active_tab == *tab;
         let hovered = rect_contains(tab_rect, pointer_x, pointer_y);
         let bg = if is_selected {
-            [accent[0], accent[1], accent[2], 255]
+            [accent[0], accent[1], accent[2], 235]
         } else if hovered {
-            [46, 46, 68, 255]
+            [255, 255, 255, 24]
         } else {
-            [32, 32, 48, 240]
+            [255, 255, 255, 8]
         };
         let fg = if is_selected {
-            [16, 16, 24, 255]
+            contrast_fg(accent)
         } else {
-            [230, 232, 246, 255]
+            [232, 234, 246, 255]
         };
-        canvas.fill_rounded_rect(8, ty, SIDEBAR_WIDTH - 14, 34, 6, bg);
-        canvas.draw_text_px(16, ty + 9, tab.title(), 13.0, fg);
+        canvas.fill_rounded_rect_aa(10, ty, SIDEBAR_WIDTH - 16, 34, 8, bg);
+        canvas.draw_text_px(20, ty + 9, tab.title(), 13.0, fg);
         state
             .settings
             .hit_regions
@@ -793,20 +775,24 @@ pub fn render_settings_elements(
             state.settings.hit_regions.push((b_inc, SettingsAction::AdjustBorderWidth(1)));
             cy += 40;
 
-            // Row 6: Accent Color Presets
-            canvas.draw_text_px(content_x, cy, "Accent Color Presets:", 13.0, [205, 210, 232, 255]);
+            // Row 6: Circular Accent Color Swatch Dots with Active Ring
+            canvas.draw_text_px(content_x, cy, "Accent Color", 13.0, [215, 220, 238, 255]);
             cy += 22;
+            canvas.fill_rounded_rect_aa(content_x, cy - 4, 506, 40, 10, [255, 255, 255, 16]);
             for (idx, (name, rgb, _)) in ACCENT_PRESETS.iter().enumerate() {
-                let bx = content_x + idx as i32 * 84;
-                let preset_rect = Rectangle::new((wx + bx, wy + cy).into(), (78, 30).into());
-                canvas.fill_rounded_rect(bx, cy, 78, 30, 6, [rgb[0], rgb[1], rgb[2], 255]);
+                let bx = content_x + 14 + idx as i32 * 82;
+                let preset_rect = Rectangle::new((wx + bx - 4, wy + cy).into(), (78, 32).into());
+                let dot_cx = (bx + 12) as f32;
+                let dot_cy = (cy + 16) as f32;
                 if state.panel.accent_preset == idx {
-                    canvas.stroke_rect(bx - 1, cy - 1, 80, 32, [255, 255, 255, 255]);
+                    canvas.fill_circle_aa(dot_cx, dot_cy, 11.5, [255, 255, 255, 235]);
+                    canvas.fill_circle_aa(dot_cx, dot_cy, 9.5, [24, 26, 36, 255]);
                 }
-                canvas.draw_text_px(bx + 8, cy + 7, name, 12.0, [16, 16, 24, 255]);
+                canvas.fill_circle_aa(dot_cx, dot_cy, 8.0, [rgb[0], rgb[1], rgb[2], 255]);
+                canvas.draw_text_px(bx + 26, cy + 8, name, 11.5, [232, 236, 248, 255]);
                 state.settings.hit_regions.push((preset_rect, SettingsAction::SelectAccent(idx)));
             }
-            cy += 40;
+            cy += 44;
 
             // Row 7: Reload Wallpaper + Font Info
             let wp_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 32).into());
@@ -1439,25 +1425,25 @@ fn draw_setting_button(
     active: bool,
     accent: [u8; 3],
 ) {
-    let bg = if active {
-        [44, 42, 66, 255]
+    // macOS grouped card: rgba(255, 255, 255, 0.06)
+    canvas.fill_rounded_rect_aa(x, y, w, h, 10, [255, 255, 255, 16]);
+    // Pill-shaped macOS toggle switch (40x20)
+    let pill_w = 40;
+    let pill_h = 20;
+    let pill_x = x + w - pill_w - 10;
+    let pill_y = y + (h - pill_h) / 2;
+    let pill_bg = if active {
+        [accent[0], accent[1], accent[2], 245]
     } else {
-        [30, 30, 46, 245]
+        [255, 255, 255, 42]
     };
-    canvas.fill_rounded_rect(x, y, w, h, 6, bg);
-    let badge_bg = if active {
-        [accent[0], accent[1], accent[2], 255]
+    canvas.fill_rounded_rect_aa(pill_x, pill_y, pill_w, pill_h, 10, pill_bg);
+    let knob_cx = if active {
+        (pill_x + pill_w - 10) as f32
     } else {
-        [64, 64, 88, 255]
+        (pill_x + 10) as f32
     };
-    canvas.fill_rounded_rect(x + w - 48, y + 6, 38, h - 12, 5, badge_bg);
-    let badge_txt = if active { "ON" } else { "OFF" };
-    let badge_fg = if active {
-        [16, 16, 24, 255]
-    } else {
-        [220, 224, 240, 255]
-    };
-    canvas.draw_text_px(x + w - 39, y + (h - 14) / 2, badge_txt, 11.5, badge_fg);
+    canvas.fill_circle_aa(knob_cx, (pill_y + pill_h / 2) as f32, 7.5, [250, 252, 255, 255]);
     canvas.draw_text_px(x + 12, y + (h - 14) / 2, label, 12.5, [238, 240, 252, 255]);
 }
 
