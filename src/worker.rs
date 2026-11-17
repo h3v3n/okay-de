@@ -51,6 +51,7 @@ pub enum WorkerRequest {
     },
     RefreshSystemInfo,
     ScanDesktopApps,
+    CheckSystemUpdates,
     PollExternalClipboard,
     SetExternalClipboard {
         text: String,
@@ -95,6 +96,7 @@ pub enum WorkerResponse {
     },
     SystemInfoRefreshed(SystemInfoSnapshot),
     DesktopAppsScanned(Vec<crate::panel::DesktopAppEntry>),
+    UpdatesChecked(String),
     ClipboardText {
         text: String,
     },
@@ -173,6 +175,9 @@ pub fn handle_response(state: &mut OkayState, resp: WorkerResponse) {
         }
         WorkerResponse::DesktopAppsScanned(apps) => {
             state.panel.desktop_apps = apps;
+        }
+        WorkerResponse::UpdatesChecked(status) => {
+            state.settings.update_status = status;
         }
         WorkerResponse::ClipboardText { text } => {
             state.overlays.push_clipboard_text(text);
@@ -302,6 +307,10 @@ fn worker_loop(req_rx: mpsc::Receiver<WorkerRequest>, resp_tx: CalloopSender<Wor
             WorkerRequest::ScanDesktopApps => {
                 let apps = crate::panel::scan_desktop_applications();
                 let _ = resp_tx.send(WorkerResponse::DesktopAppsScanned(apps));
+            }
+            WorkerRequest::CheckSystemUpdates => {
+                let status = crate::system_backends::check_system_updates();
+                let _ = resp_tx.send(WorkerResponse::UpdatesChecked(status));
             }
             WorkerRequest::PollExternalClipboard => {
                 if let Ok(out) = Command::new("wl-paste").arg("--no-newline").output() {

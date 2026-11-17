@@ -659,24 +659,66 @@ pub fn handle_overlays_motion(state: &mut OkayState, pos: Point<f64, Logical>) -
         } else {
             20
         };
-        let col = ((pos.x.round() as i32 - 20).max(0) / 98).clamp(0, 14);
-        let row = ((pos.y.round() as i32 - top_margin).max(0) / 94).clamp(0, 8);
-        let occupied = state
+        let target_col = ((pos.x.round() as i32 - 20).max(0) / 98).clamp(0, 14);
+        let target_row = ((pos.y.round() as i32 - top_margin).max(0) / 94).clamp(0, 8);
+        let Some((anchor_col, anchor_row)) = state
             .overlays
             .desktop_icons
-            .iter()
-            .enumerate()
-            .any(|(i, ic)| i != idx && ic.grid_col == col && ic.grid_row == row)
-            || state
+            .get(idx)
+            .map(|ic| (ic.grid_col, ic.grid_row))
+        else {
+            return true;
+        };
+        let dcol = target_col - anchor_col;
+        let drow = target_row - anchor_row;
+        if dcol == 0 && drow == 0 {
+            return true;
+        }
+
+        let moving: Vec<usize> = if state.overlays.selected_icons.contains(&idx)
+            && !state.overlays.selected_icons.is_empty()
+        {
+            state.overlays.selected_icons.clone()
+        } else {
+            vec![idx]
+        };
+
+        let mut can_move = true;
+        for &m_idx in &moving {
+            let Some(ic) = state.overlays.desktop_icons.get(m_idx) else {
+                can_move = false;
+                break;
+            };
+            let nc = ic.grid_col + dcol;
+            let nr = ic.grid_row + drow;
+            if !(0..=14).contains(&nc) || !(0..=8).contains(&nr) {
+                can_move = false;
+                break;
+            }
+            let hits_other = state
                 .overlays
-                .creating_folder
-                .as_ref()
-                .map(|cf| cf.grid_col == col && cf.grid_row == row)
-                .unwrap_or(false);
-        if !occupied {
-            if let Some(icon) = state.overlays.desktop_icons.get_mut(idx) {
-                icon.grid_col = col;
-                icon.grid_row = row;
+                .desktop_icons
+                .iter()
+                .enumerate()
+                .any(|(i, other)| !moving.contains(&i) && other.grid_col == nc && other.grid_row == nr)
+                || state
+                    .overlays
+                    .creating_folder
+                    .as_ref()
+                    .map(|cf| cf.grid_col == nc && cf.grid_row == nr)
+                    .unwrap_or(false);
+            if hits_other {
+                can_move = false;
+                break;
+            }
+        }
+
+        if can_move {
+            for m_idx in moving {
+                if let Some(icon) = state.overlays.desktop_icons.get_mut(m_idx) {
+                    icon.grid_col += dcol;
+                    icon.grid_row += drow;
+                }
             }
         }
         return true;
@@ -1045,8 +1087,10 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
                 }
                 state.overlays.context_menu_pos = None;
                 state.overlays.icon_context_menu = None;
-                state.overlays.selected_icons.clear();
-                state.overlays.selected_icons.push(idx);
+                if !state.overlays.selected_icons.contains(&idx) {
+                    state.overlays.selected_icons.clear();
+                    state.overlays.selected_icons.push(idx);
+                }
                 state.overlays.dragging_icon = Some(idx);
 
                 let now = std::time::Instant::now();
@@ -2475,21 +2519,37 @@ pub fn render_desktop_icons(
 
         let mut canvas = Canvas::new(iw, ih);
         let is_selected = state.overlays.selected_icons.contains(&idx);
+        let is_dragged = state.overlays.dragging_icon.is_some()
+            && (state.overlays.dragging_icon == Some(idx) || is_selected);
         if is_selected {
             canvas.fill_rounded_rect_aa(2, 0, iw - 4, ih - 2, 10, [100, 160, 255, 68]);
             canvas.stroke_rect(2, 0, iw - 4, ih - 2, [130, 185, 255, 195]);
         }
 
-        // Soft drop shadow behind icon
-        canvas.fill_rounded_rect_aa(20, 7, 50, 50, 12, [0, 0, 0, 72]);
-        crate::icons::draw_app_icon(
-            &mut canvas,
-            21,
-            5,
-            48,
-            icon.icon_name.as_deref(),
-            icon.kind,
-        );
+        if is_dragged {
+            // Stronger multi-layer drop shadow + subtle enlargement while dragging
+            canvas.fill_rounded_rect_aa(14, 9, 62, 58, 15, [0, 0, 0, 78]);
+            canvas.fill_rounded_rect_aa(17, 6, 56, 54, 14, [0, 0, 0, 128]);
+            crate::icons::draw_app_icon(
+                &mut canvas,
+                18,
+                2,
+                54,
+                icon.icon_name.as_deref(),
+                icon.kind,
+            );
+        } else {
+            // Soft drop shadow behind icon
+            canvas.fill_rounded_rect_aa(20, 7, 50, 50, 12, [0, 0, 0, 72]);
+            crate::icons::draw_app_icon(
+                &mut canvas,
+                21,
+                5,
+                48,
+                icon.icon_name.as_deref(),
+                icon.kind,
+            );
+        }
 
         let short: String = icon.label.chars().take(11).collect();
         let is_renaming = state

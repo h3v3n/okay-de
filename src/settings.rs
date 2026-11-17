@@ -141,6 +141,8 @@ enum SettingsAction {
     CycleDefaultBrowser,
     CycleDefaultFileManager,
     OpenAutostartFile,
+    CheckUpdates,
+    InstallUpdates,
 }
 
 #[derive(Debug)]
@@ -171,6 +173,7 @@ pub struct SettingsState {
     pub ram_summary: String,
     pub disk_summary: String,
     pub input_devices: Vec<String>,
+    pub update_status: String,
     hit_regions: Vec<(Rectangle<i32, Logical>, SettingsAction)>,
 }
 
@@ -203,6 +206,7 @@ impl Default for SettingsState {
             ram_summary: String::new(),
             disk_summary: String::new(),
             input_devices: Vec::new(),
+            update_status: "Ready to check for system updates".to_string(),
             hit_regions: Vec::new(),
         };
         s
@@ -686,6 +690,49 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                         .overlays
                         .push_notification("Autostart Script", &format!("Opened {}", path.display()));
                 }
+            }
+            SettingsAction::CheckUpdates => {
+                state.settings.update_status = "Checking for system updates...".to_string();
+                crate::worker::dispatch(crate::worker::WorkerRequest::CheckSystemUpdates);
+            }
+            SettingsAction::InstallUpdates => {
+                let cmd = crate::system_backends::install_system_updates_cmd();
+                let preferred = state.panel.default_terminal.clone();
+                let terms = [
+                    preferred.as_str(),
+                    "foot",
+                    "kitty",
+                    "alacritty",
+                    "wezterm",
+                    "konsole",
+                    "gnome-terminal",
+                    "xterm",
+                ];
+                let mut launched = false;
+                for term in terms {
+                    let ok = if term == "gnome-terminal" {
+                        Command::new(term)
+                            .args(["--", "sh", "-c", cmd])
+                            .env("WAYLAND_DISPLAY", &state.socket_name)
+                            .spawn()
+                            .is_ok()
+                    } else {
+                        Command::new(term)
+                            .args(["-e", "sh", "-c", cmd])
+                            .env("WAYLAND_DISPLAY", &state.socket_name)
+                            .spawn()
+                            .is_ok()
+                    };
+                    if ok {
+                        launched = true;
+                        break;
+                    }
+                }
+                state.settings.update_status = if launched {
+                    "System updater launched in terminal".to_string()
+                } else {
+                    "Could not open terminal for system update".to_string()
+                };
             }
         }
         return true;
@@ -1622,11 +1669,11 @@ pub fn render_settings_elements(
 
             for (label, val) in rows {
                 let lines = wrap_text_two_lines(&canvas, val, 12.0, 336);
-                let row_h = if lines.len() > 1 { 42 } else { 31 };
+                let row_h = if lines.len() > 1 { 38 } else { 29 };
                 canvas.fill_rounded_rect_aa(content_x, cy, 506, row_h, 6, [28, 28, 42, 240]);
                 canvas.draw_text_px(
                     content_x + 12,
-                    cy + 8,
+                    cy + 7,
                     label,
                     12.0,
                     [160, 165, 190, 255],
@@ -1634,14 +1681,49 @@ pub fn render_settings_elements(
                 for (li, line_txt) in lines.iter().enumerate() {
                     canvas.draw_text_px(
                         content_x + 158,
-                        cy + 7 + li as i32 * 16,
+                        cy + 6 + li as i32 * 15,
                         line_txt,
                         12.0,
                         [238, 240, 252, 255],
                     );
                 }
-                cy += row_h + 4;
+                cy += row_h + 3;
             }
+
+            // System Updates bar
+            cy += 4;
+            canvas.fill_rounded_rect_aa(content_x, cy, 506, 42, 8, [34, 38, 54, 245]);
+            let upd_txt = truncate_with_ellipsis(&canvas, &state.settings.update_status, 12.0, 260);
+            canvas.draw_text_px(content_x + 12, cy + 14, &upd_txt, 12.0, [226, 232, 248, 255]);
+
+            let chk_rect = Rectangle::new((wx + content_x + 280, wy + cy + 7).into(), (104, 28).into());
+            canvas.fill_rounded_rect_aa(content_x + 280, cy + 7, 104, 28, 6, [52, 56, 78, 255]);
+            canvas.draw_text_px(content_x + 291, cy + 14, "Check Updates", 11.5, [238, 240, 252, 255]);
+            state
+                .settings
+                .hit_regions
+                .push((chk_rect, SettingsAction::CheckUpdates));
+
+            let inst_rect = Rectangle::new((wx + content_x + 392, wy + cy + 7).into(), (104, 28).into());
+            canvas.fill_rounded_rect_aa(
+                content_x + 392,
+                cy + 7,
+                104,
+                28,
+                6,
+                [accent[0], accent[1], accent[2], 235],
+            );
+            canvas.draw_text_px(
+                content_x + 402,
+                cy + 14,
+                "Install Updates",
+                11.5,
+                contrast_fg(accent),
+            );
+            state
+                .settings
+                .hit_regions
+                .push((inst_rect, SettingsAction::InstallUpdates));
         }
 
         SettingsTab::Shortcuts => {
