@@ -759,7 +759,7 @@ impl OkayState {
             SnapZone::BottomRightQuarter => {
                 (ax + half_w + gap, ay + half_h + gap + TITLEBAR_HEIGHT, half_w, half_h)
             }
-            SnapZone::Maximize => unreachable!(),
+            SnapZone::Maximize => (output_geo.loc.x, output_geo.loc.y + top_bar_pad + TITLEBAR_HEIGHT, output_geo.size.w, (output_geo.size.h - top_bar_pad - TITLEBAR_HEIGHT).max(120)),
         };
         Rectangle::new((nx, ny).into(), (nw.max(120), nh.max(90)).into())
     }

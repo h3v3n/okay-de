@@ -2608,8 +2608,9 @@ pub fn window_title_str(window: &Window) -> String {
                 .data_map
                 .get::<XdgToplevelSurfaceData>()
                 .and_then(|d| {
-                    let guard = d.lock().unwrap();
-                    guard.title.clone().or_else(|| guard.app_id.clone())
+                    d.lock()
+                        .ok()
+                        .and_then(|guard| guard.title.clone().or_else(|| guard.app_id.clone()))
                 })
         });
         if let Some(t) = title {
@@ -2647,8 +2648,10 @@ static FONT_ENGINE: OnceLock<Mutex<FontEngine>> = OnceLock::new();
 
 fn with_font_engine<R>(f: impl FnOnce(&mut FontEngine) -> R) -> R {
     let lock = FONT_ENGINE.get_or_init(|| Mutex::new(FontEngine::load()));
-    let mut guard = lock.lock().unwrap();
-    f(&mut guard)
+    match lock.lock() {
+        Ok(mut guard) => f(&mut guard),
+        Err(poisoned) => f(&mut poisoned.into_inner()),
+    }
 }
 
 pub fn active_font_name() -> String {

@@ -706,6 +706,11 @@ fn move_pointer_to(state: &mut OkayState, pos: Point<f64, Logical>, time_msec: u
                 initial_pointer,
                 initial_window_loc,
             } => {
+                if !window.alive() {
+                    state.pointer_grab = None;
+                    state.overlays.snap_preview = None;
+                    return;
+                }
                 let dx = (pos.x - initial_pointer.x).round() as i32;
                 let dy = (pos.y - initial_pointer.y).round() as i32;
                 let mut new_loc = Point::from((initial_window_loc.x + dx, initial_window_loc.y + dy));
@@ -740,6 +745,10 @@ fn move_pointer_to(state: &mut OkayState, pos: Point<f64, Logical>, time_msec: u
                 initial_size,
                 edges,
             } => {
+                if !window.alive() {
+                    state.pointer_grab = None;
+                    return;
+                }
                 let dx = (pos.x - initial_pointer.x).round() as i32;
                 let dy = (pos.y - initial_pointer.y).round() as i32;
                 let mut new_x = initial_window_loc.x;

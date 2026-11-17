@@ -162,6 +162,35 @@ impl XdgShellHandler for OkayState {
         self.animations.taskbar_button_rects.remove(&id);
         crate::render::evict_window_cache(&id);
 
+        if let Some(ref grab) = self.pointer_grab {
+            let grab_id = match grab {
+                crate::state::PointerGrabMode::Move { window, .. }
+                | crate::state::PointerGrabMode::Resize { window, .. } => {
+                    window.toplevel().map(|t| t.wl_surface().id())
+                }
+            };
+            if grab_id.as_ref() == Some(&id) {
+                self.pointer_grab = None;
+            }
+        }
+        if self
+            .overlays
+            .window_context_menu
+            .as_ref()
+            .map(|(_, mid)| mid == &id)
+            .unwrap_or(false)
+        {
+            self.overlays.window_context_menu = None;
+        }
+        if self
+            .last_titlebar_click
+            .as_ref()
+            .map(|(lid, _)| lid == &id)
+            .unwrap_or(false)
+        {
+            self.last_titlebar_click = None;
+        }
+
         let window = self
             .space
             .elements()
@@ -170,6 +199,22 @@ impl XdgShellHandler for OkayState {
 
         if let Some(window) = window {
             self.space.unmap_elem(&window);
+        }
+
+        if let Some(pointer) = self.seat.get_pointer() {
+            if let Some(under) = pointer.current_focus() {
+                if !under.alive() || under.id() == id {
+                    pointer.motion(
+                        self,
+                        None,
+                        &smithay::input::pointer::MotionEvent {
+                            location: self.pointer_location,
+                            serial: smithay::utils::SERIAL_COUNTER.next_serial(),
+                            time: 0,
+                        },
+                    );
+                }
+            }
         }
 
         self.retile_workspace();
@@ -341,7 +386,7 @@ impl OkayState {
                 states
                     .data_map
                     .get::<XdgToplevelSurfaceData>()
-                    .map(|d| d.lock().unwrap().initial_configure_sent)
+                    .map(|d| d.lock().map(|g| g.initial_configure_sent).unwrap_or(true))
                     .unwrap_or(true)
             });
 
@@ -369,7 +414,7 @@ impl OkayState {
                 states
                     .data_map
                     .get::<smithay::wayland::shell::xdg::XdgPopupSurfaceData>()
-                    .map(|d| d.lock().unwrap().initial_configure_sent)
+                    .map(|d| d.lock().map(|g| g.initial_configure_sent).unwrap_or(true))
                     .unwrap_or(true)
             });
             if !initial_configure_sent {
@@ -395,7 +440,7 @@ impl OkayState {
                 states
                     .data_map
                     .get::<LayerSurfaceData>()
-                    .map(|d| d.lock().unwrap().initial_configure_sent)
+                    .map(|d| d.lock().map(|g| g.initial_configure_sent).unwrap_or(true))
                     .unwrap_or(true)
             });
 

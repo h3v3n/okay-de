@@ -83,10 +83,13 @@ pub fn collect_output_elements(
         ));
     }
 
-    // 0b. Topmost desktop overlays (Lockscreen, Alt+Tab, Toasts, Notification Drawer, Calendar, Clipboard, Context Menu)
-    elements.extend(crate::overlays::render_top_overlays(
-        state, renderer, output, scale,
-    ));
+    // 0b. Topmost desktop overlays (isolated with catch_unwind so a UI panic never kills the compositor)
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::overlays::render_top_overlays(state, renderer, output, scale)
+    })) {
+        Ok(elems) => elements.extend(elems),
+        Err(_) => tracing::error!("Recovered from panic in render_top_overlays"),
+    }
 
     let layer_map = layer_map_for_output(output);
 
@@ -109,13 +112,19 @@ pub fn collect_output_elements(
         }
     }
 
-    // 2. Native OKay DE taskbar, launcher popup & OKay Settings window
-    elements.extend(crate::panel::render_panel_elements(
-        state, renderer, output, scale,
-    ));
-    elements.extend(crate::settings::render_settings_elements(
-        state, renderer, output, scale,
-    ));
+    // 2. Native OKay DE taskbar, launcher popup & OKay Settings window (panic-isolated)
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::panel::render_panel_elements(state, renderer, output, scale)
+    })) {
+        Ok(elems) => elements.extend(elems),
+        Err(_) => tracing::error!("Recovered from panic in render_panel_elements"),
+    }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::settings::render_settings_elements(state, renderer, output, scale)
+    })) {
+        Ok(elems) => elements.extend(elems),
+        Err(_) => tracing::error!("Recovered from panic in render_settings_elements"),
+    }
 
     // 2b. Active Magic Lamp (Genie) minimize / restore animations
     for window in state.space.elements().rev() {
@@ -148,6 +157,13 @@ pub fn collect_output_elements(
     ordered_windows.sort_by_key(|w| if state.workspaces.is_pinned(w) { 0 } else { 1 });
 
     for window in &ordered_windows {
+        if !window.alive() {
+            continue;
+        }
+        let win_geo_check = window.geometry();
+        if win_geo_check.size.w <= 0 || win_geo_check.size.h <= 0 {
+            continue;
+        }
         let win_id = window.toplevel().map(|t| t.wl_surface().id());
         if let Some(ref id) = win_id {
             if state.animations.is_animating_minimize(id) {
@@ -317,7 +333,7 @@ fn collect_cursor_elements(
                 states
                     .data_map
                     .get::<Mutex<CursorImageAttributes>>()
-                    .map(|attrs| attrs.lock().unwrap().hotspot)
+                    .and_then(|attrs| attrs.lock().ok().map(|a| a.hotspot))
                     .unwrap_or_default()
             });
             let pos = (local_cursor - hotspot.to_f64()).to_physical_precise_round(scale);
@@ -455,7 +471,13 @@ fn render_rounded_window_offscreen(
     alpha: f32,
     border_alpha: f32,
 ) -> Option<OkayRenderElements> {
+    if !window.alive() {
+        return None;
+    }
     let win_geo = window.geometry();
+    if win_geo.size.w <= 0 || win_geo.size.h <= 0 {
+        return None;
+    }
     let tb_h = crate::state::TITLEBAR_HEIGHT;
     let full_w = win_geo.size.w.max(120);
     let full_h = win_geo.size.h + tb_h;
@@ -465,6 +487,9 @@ fn render_rounded_window_offscreen(
 
     let logical_size: Size<i32, Logical> = (full_w, full_h).into();
     let phys_size: Size<i32, Physical> = logical_size.to_physical_precise_round(scale);
+    if phys_size.w <= 0 || phys_size.h <= 0 {
+        return None;
+    }
     let buf_size: Size<i32, smithay::utils::Buffer> = (phys_size.w, phys_size.h).into();
 
     let mut tex = OFFSCREEN_WIN_CACHE.with(|cache| {

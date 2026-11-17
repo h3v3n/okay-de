@@ -224,16 +224,21 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
             }
             WinitEvent::Redraw => {
                 let age = backend.buffer_age().unwrap_or(0);
-                {
-                    let (renderer, mut framebuffer) = backend.bind().expect("Failed to bind Winit EGL");
-                    let _ = render_output(
+                let frame_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let Ok((renderer, mut framebuffer)) = backend.bind() else {
+                        tracing::warn!("Winit EGL bind failed; skipping frame");
+                        return;
+                    };
+                    if let Err(err) = render_output(
                         state,
                         renderer,
                         &mut framebuffer,
                         &mut damage_tracker,
                         &output,
                         age,
-                    );
+                    ) {
+                        tracing::warn!(?err, "Winit render_output failed");
+                    }
                     if !state.pending_screencopies.is_empty() {
                         let scale = Scale::from(output.current_scale().fractional_scale());
                         crate::screencopy::process_pending_screencopies(
@@ -252,6 +257,9 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
                             scale,
                         );
                     }
+                }));
+                if frame_ok.is_err() {
+                    tracing::error!("Recovered from panic during Winit frame render");
                 }
                 if let Err(err) = backend.submit(None) {
                     tracing::warn!(?err, "Winit submit failed");
@@ -420,63 +428,68 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
             for dev in data.devices.values_mut() {
                 for out_state in dev.outputs.values_mut() {
                     let scale = Scale::from(out_state.output.current_scale().fractional_scale());
-                    let elements = crate::render::collect_output_elements(
-                        &mut state,
-                        &mut dev.renderer,
-                        &out_state.output,
-                        scale,
-                    );
-                    let clear_color = smithay::backend::renderer::Color32F::from(
-                        state.theme.background_color,
-                    );
-
-                    match out_state.compositor.render_frame(
-                        &mut dev.renderer,
-                        &elements,
-                        clear_color,
-                        FrameFlags::DEFAULT,
-                    ) {
-                        Ok(res) => {
-                            if !res.is_empty {
-                                let _ = out_state.compositor.queue_frame(());
-                            }
-                            send_frame_callbacks(&state, &out_state.output);
-                        }
-                        Err(err) => {
-                            tracing::debug!(?err, "DRM render_frame skipped/failed");
-                        }
-                    }
-
-                    if !state.pending_screencopies.is_empty() {
-                        crate::screencopy::process_pending_screencopies(
+                    let frame_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let elements = crate::render::collect_output_elements(
                             &mut state,
                             &mut dev.renderer,
                             &out_state.output,
                             scale,
                         );
-                    }
-                    if let Some((_, region_opt)) = &state.pending_native_screenshot {
-                        let region_opt = *region_opt;
-                        let matches_out = if let Some(r) = region_opt {
-                            state
-                                .space
-                                .output_geometry(&out_state.output)
-                                .map(|g| g.overlaps(r))
-                                .unwrap_or(true)
-                        } else {
-                            state
-                                .output_under_pointer()
-                                .map(|o| o == out_state.output)
-                                .unwrap_or(true)
-                        };
-                        if matches_out {
-                            crate::screencopy::capture_native_screenshot(
+                        let clear_color = smithay::backend::renderer::Color32F::from(
+                            state.theme.background_color,
+                        );
+
+                        match out_state.compositor.render_frame(
+                            &mut dev.renderer,
+                            &elements,
+                            clear_color,
+                            FrameFlags::DEFAULT,
+                        ) {
+                            Ok(res) => {
+                                if !res.is_empty {
+                                    let _ = out_state.compositor.queue_frame(());
+                                }
+                                send_frame_callbacks(&state, &out_state.output);
+                            }
+                            Err(err) => {
+                                tracing::debug!(?err, "DRM render_frame skipped/failed");
+                            }
+                        }
+
+                        if !state.pending_screencopies.is_empty() {
+                            crate::screencopy::process_pending_screencopies(
                                 &mut state,
                                 &mut dev.renderer,
                                 &out_state.output,
                                 scale,
                             );
                         }
+                        if let Some((_, region_opt)) = &state.pending_native_screenshot {
+                            let region_opt = *region_opt;
+                            let matches_out = if let Some(r) = region_opt {
+                                state
+                                    .space
+                                    .output_geometry(&out_state.output)
+                                    .map(|g| g.overlaps(r))
+                                    .unwrap_or(true)
+                            } else {
+                                state
+                                    .output_under_pointer()
+                                    .map(|o| o == out_state.output)
+                                    .unwrap_or(true)
+                            };
+                            if matches_out {
+                                crate::screencopy::capture_native_screenshot(
+                                    &mut state,
+                                    &mut dev.renderer,
+                                    &out_state.output,
+                                    scale,
+                                );
+                            }
+                        }
+                    }));
+                    if frame_res.is_err() {
+                        tracing::error!("Recovered from panic during DRM output frame render");
                     }
                 }
             }

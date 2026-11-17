@@ -1879,7 +1879,9 @@ fn read_ram_summary() -> String {
 fn read_disk_summary() -> String {
     unsafe {
         let mut stat: libc::statvfs = std::mem::zeroed();
-        let root = std::ffi::CString::new("/").unwrap();
+        let Ok(root) = std::ffi::CString::new("/") else {
+            return "Unavailable".to_string();
+        };
         if libc::statvfs(root.as_ptr(), &mut stat) == 0 && stat.f_blocks > 0 {
             let total_gb = (stat.f_blocks * stat.f_frsize) / (1024 * 1024 * 1024);
             let avail_gb = (stat.f_bavail * stat.f_frsize) / (1024 * 1024 * 1024);
