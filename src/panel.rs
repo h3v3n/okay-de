@@ -765,7 +765,7 @@ pub fn render_panel_elements(
         .and_then(|k| k.current_focus())
         .map(|s| s.id());
 
-    let ws_windows: Vec<(Option<ObjectId>, String, bool, bool)> = state
+    let mut ws_windows: Vec<(Option<ObjectId>, String, bool, bool)> = state
         .space
         .elements()
         .filter(|w| state.workspaces.is_on_active_workspace(w))
@@ -777,6 +777,7 @@ pub fn render_panel_elements(
             (id, title, is_focused, is_min)
         })
         .collect();
+    ws_windows.sort_by_key(|(id, _, _, _)| id.as_ref().map(|i| i.protocol_id()).unwrap_or(0));
 
     let occupied_workspaces: Vec<bool> = (1..=9)
         .map(|ws| {
@@ -816,15 +817,18 @@ pub fn render_panel_elements(
         let mut mx = 12;
 
         // Crisp `OKay` logo button (toggles Spotlight / Launcher)
-        let logo_w = 50;
+        let logo_w = 54;
         let logo_global = Rectangle::new(
             (output_geo.loc.x + mx, output_geo.loc.y + 2).into(),
             (logo_w, mb_h - 4).into(),
         );
-        if state.panel.launcher_open || rect_contains(logo_global, pointer_x, pointer_y) {
-            mb.fill_rounded_rect_aa(mx, 3, logo_w, mb_h - 6, 6, [255, 255, 255, 32]);
+        if state.panel.launcher_open {
+            mb.fill_rounded_rect_aa(mx, 3, logo_w, mb_h - 6, 7, [accent[0], accent[1], accent[2], 62]);
+            mb.stroke_rect(mx, 3, logo_w, mb_h - 6, [accent[0], accent[1], accent[2], 145]);
+        } else if rect_contains(logo_global, pointer_x, pointer_y) {
+            mb.fill_rounded_rect_aa(mx, 3, logo_w, mb_h - 6, 7, [255, 255, 255, 30]);
         }
-        mb.draw_text_px(mx + 8, 6, "OKay", 13.5, [246, 248, 255, 255]);
+        mb.draw_text_px(mx + 10, 6, "OKay", 13.5, [246, 248, 255, 255]);
         state
             .panel
             .hit_regions
@@ -875,9 +879,16 @@ pub fn render_panel_elements(
                     (ww, mb_h - 8).into(),
                 );
                 if is_active {
-                    mb.fill_rounded_rect_aa(mx, 5, ww, mb_h - 10, 5, [255, 255, 255, 42]);
+                    mb.fill_rounded_rect_aa(
+                        mx,
+                        4,
+                        ww,
+                        mb_h - 8,
+                        6,
+                        [accent[0], accent[1], accent[2], 78],
+                    );
                 } else if rect_contains(ws_rect, pointer_x, pointer_y) {
-                    mb.fill_rounded_rect_aa(mx, 5, ww, mb_h - 10, 5, [255, 255, 255, 20]);
+                    mb.fill_rounded_rect_aa(mx, 4, ww, mb_h - 8, 6, [255, 255, 255, 24]);
                 }
                 let wfg = if is_active {
                     [255, 255, 255, 255]
@@ -909,17 +920,27 @@ pub fn render_panel_elements(
             .hit_regions
             .push((clock_global, ClickTarget::ToggleCalendar));
 
-        // Notification Bell (`N`)
-        let notif_w = 24;
+        // Notification Bell (`N` + unread accent badge)
+        let notif_w = 26;
         let notif_x = clock_x - notif_w - 4;
         let notif_global = Rectangle::new(
             (output_geo.loc.x + notif_x, output_geo.loc.y + 2).into(),
             (notif_w, mb_h - 4).into(),
         );
-        if state.overlays.notif_drawer_open || rect_contains(notif_global, pointer_x, pointer_y) {
-            mb.fill_rounded_rect_aa(notif_x, 3, notif_w, mb_h - 6, 5, [255, 255, 255, 32]);
+        if state.overlays.notif_drawer_open {
+            mb.fill_rounded_rect_aa(notif_x, 3, notif_w, mb_h - 6, 6, [accent[0], accent[1], accent[2], 62]);
+        } else if rect_contains(notif_global, pointer_x, pointer_y) {
+            mb.fill_rounded_rect_aa(notif_x, 3, notif_w, mb_h - 6, 6, [255, 255, 255, 30]);
         }
-        mb.draw_text_px(notif_x + 7, 7, "N", 12.0, [224, 228, 242, 245]);
+        mb.draw_text_px(notif_x + 8, 7, "N", 12.0, [228, 232, 246, 248]);
+        if !state.overlays.notifications.is_empty() || !state.overlays.history.is_empty() {
+            mb.fill_circle_aa(
+                (notif_x + notif_w - 6) as f32,
+                7.5,
+                2.5,
+                [accent[0], accent[1], accent[2], 255],
+            );
+        }
         state
             .panel
             .hit_regions
@@ -1018,22 +1039,66 @@ pub fn render_panel_elements(
         let divider_w = if ws_windows.is_empty() { 0 } else { 18 };
         let dock_pad_x = 16;
         let total_icons = pinned_apps.len() + custom_pinned.len() + ws_windows.len();
-        let dock_pill_w = (dock_pad_x * 2
+
+        let base_pill_w = (dock_pad_x * 2
             + total_icons as i32 * base_icon
+            + (total_icons as i32 - 1).max(0) * icon_gap
+            + divider_w)
+            .clamp(280, output_geo.size.w - 32);
+        let dock_headroom = 26;
+        let base_canvas_x_local = (output_geo.size.w - (base_pill_w + 40)) / 2;
+        let dock_pill_y_local = output_geo.size.h - DOCK_HEIGHT - DOCK_MARGIN;
+        let dock_canvas_y_local = dock_pill_y_local - dock_headroom;
+
+        let dock_zone_y = output_geo.loc.y + dock_pill_y_local - 24;
+        let pointer_near_dock = pointer_y >= dock_zone_y
+            && pointer_x >= output_geo.loc.x + base_canvas_x_local - 32
+            && pointer_x <= output_geo.loc.x + base_canvas_x_local + base_pill_w + 72;
+
+        let compute_zoom = |rest_idx: usize, extra_x: i32| -> i32 {
+            if !pointer_near_dock {
+                return base_icon;
+            }
+            let rest_x = 20 + dock_pad_x + rest_idx as i32 * (base_icon + icon_gap) + extra_x;
+            let center_global_x = output_geo.loc.x + base_canvas_x_local + rest_x + base_icon / 2;
+            let dist = ((pointer_x - center_global_x) as f32).abs();
+            let zoom = if dist < 96.0 {
+                let norm = 1.0 - dist / 96.0;
+                1.0 + 0.38 * norm * norm * (3.0 - 2.0 * norm)
+            } else {
+                1.0
+            };
+            (base_icon as f32 * zoom).round() as i32
+        };
+
+        let mut pinned_sizes = Vec::with_capacity(pinned_apps.len());
+        for i in 0..pinned_apps.len() {
+            pinned_sizes.push(compute_zoom(i, 0));
+        }
+        let mut custom_sizes = Vec::with_capacity(custom_pinned.len());
+        for i in 0..custom_pinned.len() {
+            custom_sizes.push(compute_zoom(pinned_apps.len() + i, 0));
+        }
+        let mut win_sizes = Vec::with_capacity(ws_windows.len());
+        for i in 0..ws_windows.len() {
+            win_sizes.push(compute_zoom(pinned_apps.len() + custom_pinned.len() + i, divider_w));
+        }
+
+        let sum_sizes: i32 = pinned_sizes.iter().sum::<i32>()
+            + custom_sizes.iter().sum::<i32>()
+            + win_sizes.iter().sum::<i32>();
+        let dock_pill_w = (dock_pad_x * 2
+            + sum_sizes
             + (total_icons as i32 - 1).max(0) * icon_gap
             + divider_w)
             .clamp(280, output_geo.size.w - 32);
 
         // Extra canvas headroom above the pill so parabolic hover magnification & bounce never clip
-        let dock_headroom = 26;
         let dock_canvas_w = dock_pill_w + 40;
         let dock_canvas_h = DOCK_HEIGHT + dock_headroom;
         let dock_pill_x_in_canvas = 20;
         let dock_pill_y_in_canvas = dock_headroom;
-
         let dock_canvas_x_local = (output_geo.size.w - dock_canvas_w) / 2;
-        let dock_pill_y_local = output_geo.size.h - DOCK_HEIGHT - DOCK_MARGIN;
-        let dock_canvas_y_local = dock_pill_y_local - dock_headroom;
 
         let mut dock = Canvas::new(dock_canvas_w, dock_canvas_h);
         dock.fill_glass_panel(
@@ -1044,30 +1109,13 @@ pub fn render_panel_elements(
             18,
         );
 
-        let dock_zone_y = output_geo.loc.y + dock_pill_y_local - 24;
-        let pointer_near_dock = pointer_y >= dock_zone_y
-            && pointer_x >= output_geo.loc.x + dock_canvas_x_local
-            && pointer_x <= output_geo.loc.x + dock_canvas_x_local + dock_canvas_w;
-
         let mut dx = dock_pill_x_in_canvas + dock_pad_x;
 
-        for (item, glyph, kind) in pinned_apps {
-            let center_global_x = output_geo.loc.x + dock_canvas_x_local + dx + base_icon / 2;
-            let zoom = if pointer_near_dock {
-                let dist = ((pointer_x - center_global_x) as f32).abs();
-                if dist < 96.0 {
-                    let norm = 1.0 - dist / 96.0;
-                    1.0 + 0.38 * norm * norm * (3.0 - 2.0 * norm)
-                } else {
-                    1.0
-                }
-            } else {
-                1.0
-            };
-            let sz = (base_icon as f32 * zoom).round() as i32;
+        for (i, (item, glyph, kind)) in pinned_apps.into_iter().enumerate() {
+            let sz = pinned_sizes[i];
             let bounce_key = format!("pin_{}", glyph);
             let bounce_y = state.animations.dock_bounce_offset(&bounce_key);
-            let draw_x = dx - (sz - base_icon) / 2;
+            let draw_x = dx;
             let draw_y = dock_pill_y_in_canvas + 8 - (sz - base_icon) - bounce_y;
 
             let sys_icon_hint = match item {
@@ -1081,7 +1129,7 @@ pub fn render_panel_elements(
             // Active indicator dot underneath Settings if open
             if item == LauncherItem::OkaySettings && state.settings.open {
                 dock.fill_circle_aa(
-                    (dx + base_icon / 2) as f32,
+                    (dx + sz / 2) as f32,
                     (dock_pill_y_in_canvas + DOCK_HEIGHT - 6) as f32,
                     2.5,
                     [235, 240, 255, 235],
@@ -1101,25 +1149,13 @@ pub fn render_panel_elements(
                 .hit_regions
                 .push((hit_global, ClickTarget::PinnedApp(item)));
 
-            dx += base_icon + icon_gap;
+            dx += sz + icon_gap;
         }
 
         // User-pinned custom apps from Desktop Icon Context Menu
-        for app in &custom_pinned {
-            let center_global_x = output_geo.loc.x + dock_canvas_x_local + dx + base_icon / 2;
-            let zoom = if pointer_near_dock {
-                let dist = ((pointer_x - center_global_x) as f32).abs();
-                if dist < 96.0 {
-                    let norm = 1.0 - dist / 96.0;
-                    1.0 + 0.36 * norm * norm * (3.0 - 2.0 * norm)
-                } else {
-                    1.0
-                }
-            } else {
-                1.0
-            };
-            let sz = (base_icon as f32 * zoom).round() as i32;
-            let draw_x = dx - (sz - base_icon) / 2;
+        for (i, app) in custom_pinned.iter().enumerate() {
+            let sz = custom_sizes[i];
+            let draw_x = dx;
             let draw_y = dock_pill_y_in_canvas + 8 - (sz - base_icon);
             let kind = crate::icons::VectorIconKind::from_hint(&app.name, &app.exec, false);
             crate::icons::draw_app_icon(&mut dock, draw_x, draw_y, sz, app.icon_name.as_deref(), kind);
@@ -1136,7 +1172,7 @@ pub fn render_panel_elements(
                 .panel
                 .hit_regions
                 .push((hit_global, ClickTarget::LaunchDesktopApp(app.exec.clone())));
-            dx += base_icon + icon_gap;
+            dx += sz + icon_gap;
         }
 
         // Vertical glass divider before open windows
@@ -1151,24 +1187,30 @@ pub fn render_panel_elements(
             dx += divider_w;
 
             for (idx, (win_id, title, is_focused, is_min)) in ws_windows.iter().enumerate() {
-                if dx + base_icon > dock_pill_x_in_canvas + dock_pill_w - 8 {
-                    break;
-                }
-                let center_global_x = output_geo.loc.x + dock_canvas_x_local + dx + base_icon / 2;
-                let zoom = if pointer_near_dock {
-                    let dist = ((pointer_x - center_global_x) as f32).abs();
-                    if dist < 96.0 {
-                        let norm = 1.0 - dist / 96.0;
-                        1.0 + 0.36 * norm * norm * (3.0 - 2.0 * norm)
-                    } else {
-                        1.0
-                    }
-                } else {
-                    1.0
-                };
-                let sz = (base_icon as f32 * zoom).round() as i32;
-                let draw_x = dx - (sz - base_icon) / 2;
+                let sz = win_sizes[idx];
+                let draw_x = dx;
                 let draw_y = dock_pill_y_in_canvas + 8 - (sz - base_icon);
+
+                // Always record resting dock icon rect so minimize/unminimize animations
+                // land directly on this app's Dock icon regardless of window position.
+                let resting_dock_rect = Rectangle::new(
+                    (
+                        output_geo.loc.x + dock_canvas_x_local + draw_x,
+                        output_geo.loc.y + dock_pill_y_local + 8,
+                    )
+                        .into(),
+                    (sz, base_icon).into(),
+                );
+                if let Some(id) = win_id {
+                    state
+                        .animations
+                        .taskbar_button_rects
+                        .insert(id.clone(), resting_dock_rect);
+                }
+
+                if dx + sz > dock_pill_x_in_canvas + dock_pill_w - 8 {
+                    continue;
+                }
 
                 let win_global = Rectangle::new(
                     (
@@ -1178,12 +1220,6 @@ pub fn render_panel_elements(
                         .into(),
                     (sz, sz + 10).into(),
                 );
-                if let Some(id) = win_id {
-                    state
-                        .animations
-                        .taskbar_button_rects
-                        .insert(id.clone(), win_global);
-                }
 
                 let kind = crate::icons::VectorIconKind::from_hint(title, title, false);
                 crate::icons::draw_app_icon(&mut dock, draw_x, draw_y, sz, Some(title), kind);
@@ -1200,7 +1236,7 @@ pub fn render_panel_elements(
                     [210, 218, 238, 215]
                 };
                 dock.fill_circle_aa(
-                    (dx + base_icon / 2) as f32,
+                    (dx + sz / 2) as f32,
                     (dock_pill_y_in_canvas + DOCK_HEIGHT - 6) as f32,
                     if *is_focused { 2.8 } else { 2.2 },
                     dot_col,
@@ -1210,7 +1246,7 @@ pub fn render_panel_elements(
                     .panel
                     .hit_regions
                     .push((win_global, ClickTarget::FocusWindow(idx)));
-                dx += base_icon + icon_gap;
+                dx += sz + icon_gap;
             }
         }
 
@@ -1413,10 +1449,34 @@ pub fn render_panel_elements(
         menu_canvas.fill_glass_panel(0, 0, MENU_WIDTH, menu_h, 14);
 
         // Header + Search Box
-        menu_canvas.draw_text_px(14, 10, "OKay Spotlight", 14.5, [246, 248, 255, 255]);
-        menu_canvas.draw_text_px(142, 11, &focused_app_name, 12.0, [156, 164, 188, 230]);
+        menu_canvas.draw_text_px(14, 11, "OKay Spotlight", 14.5, [246, 248, 255, 255]);
+        let fw_w = menu_canvas.measure_text_px(&focused_app_name, 11.5);
+        menu_canvas.fill_rounded_rect_aa(
+            MENU_WIDTH - fw_w - 26,
+            9,
+            fw_w + 14,
+            20,
+            6,
+            [accent[0], accent[1], accent[2], 36],
+        );
+        menu_canvas.draw_text_px(
+            MENU_WIDTH - fw_w - 19,
+            12,
+            &focused_app_name,
+            11.5,
+            [accent[0], accent[1], accent[2], 245],
+        );
 
-        menu_canvas.fill_rounded_rect_aa(12, 38, MENU_WIDTH - 24, 28, 8, [255, 255, 255, 18]);
+        menu_canvas.fill_rounded_rect_aa(12, 38, MENU_WIDTH - 24, 28, 8, [255, 255, 255, 16]);
+        if !state.panel.search_query.is_empty() {
+            menu_canvas.stroke_rect(
+                12,
+                38,
+                MENU_WIDTH - 24,
+                28,
+                [accent[0], accent[1], accent[2], 145],
+            );
+        }
         let search_txt = if state.panel.search_query.is_empty() {
             "Search apps & commands...".to_string()
         } else {
@@ -1447,9 +1507,9 @@ pub fn render_panel_elements(
             );
             let hovered = rect_contains(item_global, pointer_x, pointer_y);
             let item_bg = if hovered {
-                [54, 50, 78, 255]
+                [accent[0], accent[1], accent[2], 56]
             } else {
-                [30, 30, 46, 235]
+                [255, 255, 255, 12]
             };
 
             menu_canvas.fill_rounded_rect_aa(
@@ -1457,9 +1517,19 @@ pub fn render_panel_elements(
                 iy + 2,
                 MENU_WIDTH - MENU_PADDING * 2,
                 MENU_ITEM_HEIGHT - 4,
-                6,
+                8,
                 item_bg,
             );
+            if hovered {
+                menu_canvas.fill_rounded_rect_aa(
+                    MENU_PADDING + 2,
+                    iy + 7,
+                    3,
+                    MENU_ITEM_HEIGHT - 14,
+                    2,
+                    [accent[0], accent[1], accent[2], 245],
+                );
+            }
             let item_kind = match item {
                 LauncherItem::Terminal => crate::icons::VectorIconKind::Terminal,
                 LauncherItem::FileManager => crate::icons::VectorIconKind::Files,
@@ -1470,26 +1540,34 @@ pub fn render_panel_elements(
             };
             crate::icons::draw_app_icon(
                 &mut menu_canvas,
-                MENU_PADDING + 8,
+                MENU_PADDING + 10,
                 iy + 6,
                 22,
                 None,
                 item_kind,
             );
             menu_canvas.draw_text_px(
-                MENU_PADDING + 38,
+                MENU_PADDING + 40,
                 iy + 8,
                 item.label(),
-                13.5,
-                [238, 240, 252, 255],
+                13.0,
+                [240, 242, 252, 255],
             );
-            let hint_w = menu_canvas.measure_text_px(item.hint(), 11.5);
+            let hint_w = menu_canvas.measure_text_px(item.hint(), 11.0);
+            menu_canvas.fill_rounded_rect_aa(
+                MENU_WIDTH - MENU_PADDING - hint_w - 16,
+                iy + 7,
+                hint_w + 10,
+                18,
+                5,
+                [255, 255, 255, 14],
+            );
             menu_canvas.draw_text_px(
-                MENU_WIDTH - MENU_PADDING - hint_w - 10,
+                MENU_WIDTH - MENU_PADDING - hint_w - 11,
                 iy + 9,
                 item.hint(),
-                11.5,
-                [145, 150, 175, 255],
+                11.0,
+                [172, 178, 202, 240],
             );
 
             state
@@ -1512,9 +1590,9 @@ pub fn render_panel_elements(
             );
             let hovered = rect_contains(item_global, pointer_x, pointer_y);
             let item_bg = if hovered {
-                [54, 50, 78, 255]
+                [accent[0], accent[1], accent[2], 56]
             } else {
-                [28, 28, 42, 235]
+                [255, 255, 255, 10]
             };
 
             menu_canvas.fill_rounded_rect_aa(
@@ -1522,13 +1600,23 @@ pub fn render_panel_elements(
                 iy + 2,
                 MENU_WIDTH - MENU_PADDING * 2,
                 MENU_ITEM_HEIGHT - 4,
-                6,
+                8,
                 item_bg,
             );
+            if hovered {
+                menu_canvas.fill_rounded_rect_aa(
+                    MENU_PADDING + 2,
+                    iy + 7,
+                    3,
+                    MENU_ITEM_HEIGHT - 14,
+                    2,
+                    [accent[0], accent[1], accent[2], 245],
+                );
+            }
             let kind = crate::icons::VectorIconKind::from_hint(&app.name, &app.exec, false);
             crate::icons::draw_app_icon(
                 &mut menu_canvas,
-                MENU_PADDING + 8,
+                MENU_PADDING + 10,
                 iy + 6,
                 22,
                 app.icon_name.as_deref(),
@@ -1536,19 +1624,19 @@ pub fn render_panel_elements(
             );
             let short_name: String = app.name.chars().take(24).collect();
             menu_canvas.draw_text_px(
-                MENU_PADDING + 38,
+                MENU_PADDING + 40,
                 iy + 8,
                 &short_name,
-                13.5,
-                [235, 238, 250, 255],
+                13.0,
+                [238, 240, 252, 255],
             );
-            let cat_w = menu_canvas.measure_text_px(&app.category, 11.5);
+            let cat_w = menu_canvas.measure_text_px(&app.category, 11.0);
             menu_canvas.draw_text_px(
                 MENU_WIDTH - MENU_PADDING - cat_w - 10,
                 iy + 9,
                 &app.category,
-                11.5,
-                [145, 150, 175, 255],
+                11.0,
+                [152, 158, 184, 240],
             );
 
             state.panel.hit_regions.push((
@@ -1558,24 +1646,35 @@ pub fn render_panel_elements(
             row_idx += 1;
         }
 
-        // Power Footer Bar (`Lock`, `Suspend`, `Reboot`, `Exit`)
-        let fy = menu_h - MENU_FOOTER_HEIGHT + 4;
-        menu_canvas.fill_rect(8, fy - 4, MENU_WIDTH - 16, 1, [48, 48, 70, 220]);
+        // Power Footer Bar (`Lock`, `Sleep`, `Reboot`, `Exit`)
+        let fy = menu_h - MENU_FOOTER_HEIGHT + 5;
+        menu_canvas.fill_rect_blend(12, fy - 5, MENU_WIDTH - 24, 1, [255, 255, 255, 24]);
         let power_btns: [(&str, ClickTarget, [u8; 4]); 4] = [
-            ("Lock", ClickTarget::PowerLock, [40, 40, 60, 255]),
-            ("Sleep", ClickTarget::PowerSuspend, [40, 40, 60, 255]),
-            ("Reboot", ClickTarget::PowerReboot, [48, 40, 60, 255]),
-            ("Exit", ClickTarget::PowerExit, [145, 48, 72, 255]),
+            ("Lock", ClickTarget::PowerLock, [255, 255, 255, 20]),
+            ("Sleep", ClickTarget::PowerSuspend, [255, 255, 255, 20]),
+            ("Reboot", ClickTarget::PowerReboot, [255, 255, 255, 20]),
+            ("Exit", ClickTarget::PowerExit, [220, 68, 92, 165]),
         ];
         for (pi, (plabel, ptarget, pbg)) in power_btns.into_iter().enumerate() {
-            let pw = 68;
-            let px = 12 + pi as i32 * 75;
+            let pw = 74;
+            let px = 12 + pi as i32 * 80;
             let p_global = Rectangle::new(
                 (output_geo.loc.x + menu_x + px, output_geo.loc.y + menu_y + fy).into(),
                 (pw, 30).into(),
             );
-            menu_canvas.fill_rounded_rect(px, fy, pw, 30, 6, pbg);
-            menu_canvas.draw_text_px(px + 14, fy + 7, plabel, 12.5, [242, 244, 252, 255]);
+            let hovered = rect_contains(p_global, pointer_x, pointer_y);
+            let bg = if hovered {
+                if matches!(ptarget, ClickTarget::PowerExit) {
+                    [235, 82, 106, 210]
+                } else {
+                    [accent[0], accent[1], accent[2], 64]
+                }
+            } else {
+                pbg
+            };
+            menu_canvas.fill_rounded_rect_aa(px, fy, pw, 30, 8, bg);
+            let tw = menu_canvas.measure_text_px(plabel, 12.0);
+            menu_canvas.draw_text_px(px + (pw - tw) / 2, fy + 8, plabel, 12.0, [244, 246, 255, 255]);
             state.panel.hit_regions.push((p_global, ptarget));
         }
 

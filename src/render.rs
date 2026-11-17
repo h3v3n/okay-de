@@ -120,7 +120,12 @@ pub fn collect_output_elements(
         if let Some(toplevel) = window.toplevel() {
             let id = toplevel.wl_surface().id();
             if state.animations.is_animating_minimize(&id) {
-                elements.extend(state.animations.render_minimize_effect(&id, renderer, scale));
+                elements.extend(state.animations.render_minimize_effect(
+                    &id,
+                    output_geo.loc,
+                    renderer,
+                    scale,
+                ));
             }
         }
     }

@@ -571,13 +571,26 @@ impl OkayState {
             return;
         };
         let id = toplevel.wl_surface().id();
-        let output_geo = self
-            .output_under_pointer()
-            .and_then(|o| self.space.output_geometry(&o))
+        let win_loc_opt = self.space.element_location(window);
+        let output_geo = win_loc_opt
+            .and_then(|loc| {
+                self.space
+                    .outputs()
+                    .filter_map(|o| self.space.output_geometry(o))
+                    .find(|g| g.contains(loc))
+            })
+            .or_else(|| {
+                self.output_under_pointer()
+                    .and_then(|o| self.space.output_geometry(&o))
+            })
+            .or_else(|| {
+                self.space
+                    .outputs()
+                    .next()
+                    .and_then(|o| self.space.output_geometry(o))
+            })
             .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
-        let win_loc = self
-            .space
-            .element_location(window)
+        let win_loc = win_loc_opt
             .unwrap_or_else(|| Point::from((output_geo.loc.x + 120, output_geo.loc.y + 80)));
         let win_geo = window.geometry();
         let local_rect = Rectangle::new(

@@ -250,7 +250,7 @@ impl AnimationManager {
             .copied()
             .unwrap_or_else(|| {
                 Rectangle::new(
-                    (output_loc.x + output_size.w / 2 - 60, output_loc.y + output_loc.y + output_size.h - 38).into(),
+                    (output_loc.x + output_size.w / 2 - 60, output_loc.y + output_size.h - 38).into(),
                     (120, 32).into(),
                 )
             });
@@ -359,6 +359,7 @@ impl AnimationManager {
     pub fn render_minimize_effect(
         &self,
         id: &ObjectId,
+        output_loc: Point<i32, Logical>,
         renderer: &mut GlesRenderer,
         scale: Scale<f64>,
     ) -> Vec<OkayRenderElements> {
@@ -371,7 +372,12 @@ impl AnimationManager {
 
         let t = cubic_ease_in_out(anim.minimize_progress);
         let src = anim.start_rect;
-        let dst = anim.target_button_rect;
+        // Live-track the app's current Dock icon rect so it always flies straight into its icon.
+        let dst = self
+            .taskbar_button_rects
+            .get(id)
+            .map(|r| Rectangle::new(r.loc - output_loc, r.size))
+            .unwrap_or(anim.target_button_rect);
         let accent = anim.accent_rgb;
 
         if self.minimize_effect == MinimizeEffect::ScaleGlide {
