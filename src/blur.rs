@@ -78,9 +78,10 @@ const BLUR_COMPOSITE_FRAG: &str = r#"
 precision mediump float;
 varying vec2 v_coords;
 uniform float alpha;
+uniform vec2 u_pos;
 uniform vec2 u_size;
+uniform vec2 u_out_size;
 uniform float u_radius;
-uniform vec4 u_uv_rect;
 uniform vec3 u_tint;
 uniform float u_tint_alpha;
 uniform float u_grain;
@@ -103,23 +104,25 @@ float hash12(vec2 p) {
 }
 
 void main() {
-    vec2 px = v_coords * u_size;
+    vec2 local_uv = clamp(v_coords, vec2(0.0), vec2(1.0));
+    vec2 px = local_uv * u_size;
     float d = sdRoundedBox(px - u_size * 0.5, u_size * 0.5, u_radius);
     float mask = 1.0 - smoothstep(-0.75, 0.75, d);
     if (mask <= 0.001) {
         discard;
     }
 
-    vec2 sample_uv = clamp(u_uv_rect.xy + v_coords * u_uv_rect.zw, vec2(0.001), vec2(0.999));
+    vec2 sample_uv = clamp((u_pos + local_uv * u_size) / max(u_out_size, vec2(1.0)), vec2(0.001), vec2(0.999));
     vec4 blurred = texture2D(tex, sample_uv);
     #ifdef NO_ALPHA
     blurred.a = 1.0;
     #endif
 
+    // Dark/tonal tint (~0.48) over the blurred backdrop for legibility
     vec3 col = mix(blurred.rgb, u_tint, u_tint_alpha);
 
-    // Subtle procedural grain prevents 8-bit color banding across smooth gradients
-    float grain = (hash12(px) - 0.5) * u_grain;
+    // Subtle procedural grain prevents 8-bit color banding
+    float grain = (hash12(px + u_pos) - 0.5) * u_grain;
     col = clamp(col + vec3(grain), 0.0, 1.0);
 
     // Crisp 1px bright specular edge on the glass perimeter
@@ -137,29 +140,24 @@ struct BlurShaders {
 }
 
 struct BlurPyramid {
-    phys_size: Size<i32, Physical>,
     half_size: Size<i32, Physical>,
     quarter_size: Size<i32, Physical>,
     eighth_size: Size<i32, Physical>,
+    sixteenth_size: Size<i32, Physical>,
     tex_half_a: GlesTexture,
     tex_half_b: GlesTexture,
     tex_quarter_a: GlesTexture,
     tex_quarter_b: GlesTexture,
-    tex_eighth: GlesTexture,
+    tex_eighth_a: GlesTexture,
+    tex_eighth_b: GlesTexture,
+    tex_sixteenth: GlesTexture,
 }
 
 struct OutputBlurCache {
     phys_size: Size<i32, Physical>,
     logical_size: Size<i32, Logical>,
     pyramid: Option<BlurPyramid>,
-    static_wp_revision: u64,
-    static_tex: Option<GlesTexture>,
-    static_seq: u64,
-    dynamic_tex: Option<GlesTexture>,
-    dynamic_seq: u64,
-    dynamic_dirty: bool,
-    has_dynamic_content: bool,
-    region_ids: HashMap<&'static str, (Id, u64)>,
+    blurred_tex: Option<GlesTexture>,
 }
 
 impl OutputBlurCache {
@@ -168,14 +166,7 @@ impl OutputBlurCache {
             phys_size,
             logical_size,
             pyramid: None,
-            static_wp_revision: 0,
-            static_tex: None,
-            static_seq: 0,
-            dynamic_tex: None,
-            dynamic_seq: 0,
-            dynamic_dirty: true,
-            has_dynamic_content: false,
-            region_ids: HashMap::new(),
+            blurred_tex: None,
         }
     }
 }
@@ -211,9 +202,10 @@ fn ensure_shaders(renderer: &mut GlesRenderer) -> Option<(GlesTexProgram, GlesTe
                 .compile_custom_texture_shader(
                     BLUR_COMPOSITE_FRAG,
                     &[
+                        UniformName::new("u_pos", UniformType::_2f),
                         UniformName::new("u_size", UniformType::_2f),
+                        UniformName::new("u_out_size", UniformType::_2f),
                         UniformName::new("u_radius", UniformType::_1f),
-                        UniformName::new("u_uv_rect", UniformType::_4f),
                         UniformName::new("u_tint", UniformType::_3f),
                         UniformName::new("u_tint_alpha", UniformType::_1f),
                         UniformName::new("u_grain", UniformType::_1f),
@@ -238,17 +230,20 @@ fn create_pyramid(renderer: &mut GlesRenderer, phys_size: Size<i32, Physical>) -
     let half_size: Size<i32, Physical> = ((phys_size.w / 2).max(1), (phys_size.h / 2).max(1)).into();
     let quarter_size: Size<i32, Physical> = ((phys_size.w / 4).max(1), (phys_size.h / 4).max(1)).into();
     let eighth_size: Size<i32, Physical> = ((phys_size.w / 8).max(1), (phys_size.h / 8).max(1)).into();
+    let sixteenth_size: Size<i32, Physical> = ((phys_size.w / 16).max(1), (phys_size.h / 16).max(1)).into();
 
     Some(BlurPyramid {
-        phys_size,
         half_size,
         quarter_size,
         eighth_size,
+        sixteenth_size,
         tex_half_a: create_offscreen(renderer, half_size)?,
         tex_half_b: create_offscreen(renderer, half_size)?,
         tex_quarter_a: create_offscreen(renderer, quarter_size)?,
         tex_quarter_b: create_offscreen(renderer, quarter_size)?,
-        tex_eighth: create_offscreen(renderer, eighth_size)?,
+        tex_eighth_a: create_offscreen(renderer, eighth_size)?,
+        tex_eighth_b: create_offscreen(renderer, eighth_size)?,
+        tex_sixteenth: create_offscreen(renderer, sixteenth_size)?,
     })
 }
 
@@ -310,7 +305,7 @@ fn run_dual_kawase_passes(
     logical_size: Size<i32, Logical>,
     clear_color: Color32F,
 ) -> Option<()> {
-    // 1. Capture scene / wallpaper at 1/2 linear resolution (1/4 pixel area)
+    // 1. Capture current frame content below panels/windows into 1/2-res FBO
     let half_scale = Scale {
         x: pyramid.half_size.w as f64 / logical_size.w.max(1) as f64,
         y: pyramid.half_size.h as f64 / logical_size.h.max(1) as f64,
@@ -326,7 +321,7 @@ fn run_dual_kawase_passes(
         let _ = frame.finish().ok()?;
     }
 
-    // 2. Multi-pass Downsample (1/2 -> 1/4 -> 1/8)
+    // 2. Multi-pass Downsample (1/2 -> 1/4 -> 1/8 -> 1/16)
     blit_kawase(
         renderer,
         &pyramid.tex_half_a,
@@ -334,27 +329,45 @@ fn run_dual_kawase_passes(
         &mut pyramid.tex_quarter_a,
         pyramid.quarter_size,
         down_prog.clone(),
-        1.5,
+        2.0,
     )?;
     blit_kawase(
         renderer,
         &pyramid.tex_quarter_a,
         pyramid.quarter_size,
-        &mut pyramid.tex_eighth,
+        &mut pyramid.tex_eighth_a,
         pyramid.eighth_size,
         down_prog.clone(),
-        2.0,
+        2.5,
     )?;
-
-    // 3. Multi-pass Upsample (1/8 -> 1/4 -> 1/2)
     blit_kawase(
         renderer,
-        &pyramid.tex_eighth,
+        &pyramid.tex_eighth_a,
+        pyramid.eighth_size,
+        &mut pyramid.tex_sixteenth,
+        pyramid.sixteenth_size,
+        down_prog.clone(),
+        3.0,
+    )?;
+
+    // 3. Multi-pass Upsample (1/16 -> 1/8 -> 1/4 -> 1/2)
+    blit_kawase(
+        renderer,
+        &pyramid.tex_sixteenth,
+        pyramid.sixteenth_size,
+        &mut pyramid.tex_eighth_b,
+        pyramid.eighth_size,
+        up_prog.clone(),
+        3.0,
+    )?;
+    blit_kawase(
+        renderer,
+        &pyramid.tex_eighth_b,
         pyramid.eighth_size,
         &mut pyramid.tex_quarter_b,
         pyramid.quarter_size,
         up_prog.clone(),
-        2.0,
+        2.5,
     )?;
     blit_kawase(
         renderer,
@@ -363,33 +376,19 @@ fn run_dual_kawase_passes(
         &mut pyramid.tex_half_b,
         pyramid.half_size,
         up_prog.clone(),
-        1.5,
+        2.0,
     )?;
 
     Some(())
 }
 
-/// Marks all outputs' dynamic blur caches dirty (called when surfaces commit or layout changes).
-pub fn mark_all_dirty() {
-    BLUR_CACHE.with(|cache| {
-        for entry in cache.borrow_mut().values_mut() {
-            entry.dynamic_dirty = true;
-        }
-    });
-}
-
-/// Updates the static wallpaper blur cache (only when wallpaper revision or output size changes)
-/// and the dynamic scene blur cache (only when `dynamic_dirty` is true and dynamic content exists).
-#[allow(clippy::too_many_arguments)]
+/// Captures `bg_elements` into an offscreen FBO and runs the 6-pass Dual-Kawase blur
+/// unconditionally on every frame.
 pub fn update_output_blur(
     renderer: &mut GlesRenderer,
     output: &Output,
     scale: Scale<f64>,
-    wallpaper_revision: u64,
-    wallpaper_elem: Option<&OkayRenderElements>,
     bg_elements: &[OkayRenderElements],
-    has_dynamic_content: bool,
-    global_dirty: bool,
     clear_color: Color32F,
 ) {
     let Some(mode) = output.current_mode() else {
@@ -411,12 +410,6 @@ pub fn update_output_blur(
     let out_name = output.name();
     BLUR_CACHE.with(|cache_cell| {
         let mut cache_map = cache_cell.borrow_mut();
-        if global_dirty {
-            for entry in cache_map.values_mut() {
-                entry.dynamic_dirty = true;
-            }
-        }
-
         let entry = cache_map
             .entry(out_name)
             .or_insert_with(|| OutputBlurCache::new(phys_size, logical_size));
@@ -425,13 +418,8 @@ pub fn update_output_blur(
             entry.phys_size = phys_size;
             entry.logical_size = logical_size;
             entry.pyramid = None;
-            entry.static_tex = None;
-            entry.dynamic_tex = None;
-            entry.static_wp_revision = 0;
-            entry.dynamic_dirty = true;
+            entry.blurred_tex = None;
         }
-
-        entry.has_dynamic_content = has_dynamic_content;
 
         if entry.pyramid.is_none() {
             entry.pyramid = create_pyramid(renderer, phys_size);
@@ -440,103 +428,30 @@ pub fn update_output_blur(
             return;
         };
 
-        // A. Static wallpaper cache: only recalculated when wallpaper changes or output resizes
-        if entry.static_wp_revision != wallpaper_revision || entry.static_tex.is_none() {
-            if let Some(wp) = wallpaper_elem {
-                let wp_slice = std::slice::from_ref(wp);
-                if run_dual_kawase_passes(
-                    renderer,
-                    pyramid,
-                    &down_prog,
-                    &up_prog,
-                    wp_slice,
-                    logical_size,
-                    clear_color,
-                )
-                .is_some()
-                {
-                    if entry.static_tex.is_none() {
-                        entry.static_tex = create_offscreen(renderer, pyramid.half_size);
-                    }
-                    if let Some(dst) = entry.static_tex.as_mut() {
-                        let copy_elem = TextureRenderElement::from_texture_with_damage(
-                            Id::new(),
-                            renderer.context_id(),
-                            Point::<f64, Physical>::from((0.0, 0.0)),
-                            pyramid.tex_half_b.clone(),
-                            1,
-                            Transform::Normal,
-                            Some(1.0),
-                            None,
-                            Some(Size::<i32, Logical>::from((
-                                pyramid.half_size.w,
-                                pyramid.half_size.h,
-                            ))),
-                            None,
-                            DamageSnapshot::empty(),
-                            Kind::Unspecified,
-                        );
-                        if let Ok(mut target) = renderer.bind(dst) {
-                            if let Ok(mut frame) = renderer.render(
-                                &mut target,
-                                pyramid.half_size,
-                                Transform::Normal,
-                            ) {
-                                let dmg = Rectangle::from_size(pyramid.half_size);
-                                let _ = frame.clear(Color32F::TRANSPARENT, &[dmg]);
-                                let _ = draw_render_elements::<
-                                    GlesRenderer,
-                                    Scale<f64>,
-                                    TextureRenderElement<GlesTexture>,
-                                >(
-                                    &mut frame,
-                                    Scale::from(1.0),
-                                    &[copy_elem],
-                                    &[dmg],
-                                );
-                                let _ = frame.finish();
-                            }
-                        }
-                        entry.static_wp_revision = wallpaper_revision;
-                        entry.static_seq = entry.static_seq.wrapping_add(1);
-                    }
-                }
-            }
-        }
-
-        // B. Dynamic blur: only executed when damage / active frame refresh occurred
-        if has_dynamic_content && entry.dynamic_dirty {
-            if run_dual_kawase_passes(
-                renderer,
-                pyramid,
-                &down_prog,
-                &up_prog,
-                bg_elements,
-                logical_size,
-                clear_color,
-            )
-            .is_some()
-            {
-                entry.dynamic_tex = Some(pyramid.tex_half_b.clone());
-                entry.dynamic_seq = entry.dynamic_seq.wrapping_add(1);
-            }
-            entry.dynamic_dirty = false;
-        } else if !has_dynamic_content {
-            entry.dynamic_dirty = false;
+        if run_dual_kawase_passes(
+            renderer,
+            pyramid,
+            &down_prog,
+            &up_prog,
+            bg_elements,
+            logical_size,
+            clear_color,
+        )
+        .is_some()
+        {
+            entry.blurred_tex = Some(pyramid.tex_half_b.clone());
         }
     });
 }
 
-/// Returns a Dual-Kawase blurred backdrop element for `rect` clipped with an SDF rounded-rect mask,
-/// anti-banding noise grain, and a subtle 1px bright edge.
-/// Automatically selects the static wallpaper cache when no dynamic windows/content exist,
-/// or the cached dynamic blur texture when dynamic content is present.
+/// Returns a Dual-Kawase frosted-glass backdrop element for `rect` clipped with an SDF rounded-rect mask,
+/// tonal tint (~0.48), anti-banding noise grain, and a subtle 1px bright edge.
 #[allow(clippy::too_many_arguments)]
 pub fn blur_panel_element(
     renderer: &mut GlesRenderer,
     output: &Output,
     scale: Scale<f64>,
-    key: &'static str,
+    _key: &'static str,
     rect: Rectangle<i32, Logical>,
     radius: f32,
     tint_rgb: [u8; 3],
@@ -553,40 +468,19 @@ pub fn blur_panel_element(
     };
 
     let out_name = output.name();
-    let (tex, seq, out_logical) = BLUR_CACHE.with(|cache_cell| {
-        let mut cache_map = cache_cell.borrow_mut();
-        let entry = cache_map.get_mut(&out_name)?;
-        let (tex, seq) = if entry.has_dynamic_content {
-            (entry.dynamic_tex.clone().or_else(|| entry.static_tex.clone())?, entry.dynamic_seq)
-        } else {
-            (entry.static_tex.clone()?, entry.static_seq)
-        };
-        Some((tex, seq, entry.logical_size))
+    let (tex, out_logical) = BLUR_CACHE.with(|cache_cell| {
+        let cache_map = cache_cell.borrow();
+        let entry = cache_map.get(&out_name)?;
+        Some((entry.blurred_tex.clone()?, entry.logical_size))
     })?;
 
     if out_logical.w <= 0 || out_logical.h <= 0 {
         return None;
     }
 
-    let elem_id = BLUR_CACHE.with(|cache_cell| {
-        let mut cache_map = cache_cell.borrow_mut();
-        if let Some(entry) = cache_map.get_mut(&out_name) {
-            let pair = entry
-                .region_ids
-                .entry(key)
-                .or_insert_with(|| (Id::new(), seq));
-            if pair.1 != seq {
-                *pair = (Id::new(), seq);
-            }
-            pair.0.clone()
-        } else {
-            Id::new()
-        }
-    });
-
     let phys_loc: Point<f64, Physical> = rect.loc.to_f64().to_physical(scale);
     let tex_elem = TextureRenderElement::from_texture_with_damage(
-        elem_id,
+        Id::new(),
         renderer.context_id(),
         phys_loc,
         tex,
@@ -600,12 +494,6 @@ pub fn blur_panel_element(
         Kind::Unspecified,
     );
 
-    let uv_rect = [
-        rect.loc.x as f32 / out_logical.w as f32,
-        rect.loc.y as f32 / out_logical.h as f32,
-        rect.size.w as f32 / out_logical.w as f32,
-        rect.size.h as f32 / out_logical.h as f32,
-    ];
     let tint = [
         tint_rgb[0] as f32 / 255.0,
         tint_rgb[1] as f32 / 255.0,
@@ -616,12 +504,16 @@ pub fn blur_panel_element(
         tex_elem,
         composite_prog,
         vec![
+            Uniform::new("u_pos", [rect.loc.x as f32, rect.loc.y as f32]),
             Uniform::new("u_size", [rect.size.w as f32, rect.size.h as f32]),
+            Uniform::new(
+                "u_out_size",
+                [out_logical.w as f32, out_logical.h as f32],
+            ),
             Uniform::new("u_radius", radius),
-            Uniform::new("u_uv_rect", uv_rect),
             Uniform::new("u_tint", tint),
             Uniform::new("u_tint_alpha", tint_alpha),
-            Uniform::new("u_grain", 0.022),
+            Uniform::new("u_grain", 0.020),
             Uniform::new("u_edge_alpha", edge_alpha),
         ],
     )))

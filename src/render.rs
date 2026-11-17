@@ -59,6 +59,16 @@ pub fn collect_output_elements(
         return elements;
     };
 
+    let is_primary = state
+        .space
+        .outputs()
+        .next()
+        .map(|o| o == output)
+        .unwrap_or(false);
+    if is_primary {
+        state.overlays.clear_hit_regions();
+    }
+
     // Advance 60+ FPS animations once per output frame
     state.panel.wallpaper_accent = state.desktop.dominant_accent();
     crate::panel::set_active_m3_palette(state.panel.material_palette());
@@ -107,7 +117,6 @@ pub fn collect_output_elements(
     let layer_map = layer_map_for_output(output);
 
     // 2b. Active Magic Lamp (Genie) minimize / restore animations
-    let mut has_dynamic_content = false;
     for window in state.space.elements().rev() {
         if !state.workspaces.is_on_active_workspace(window) {
             continue;
@@ -115,7 +124,6 @@ pub fn collect_output_elements(
         if let Some(toplevel) = window.toplevel() {
             let id = toplevel.wl_surface().id();
             if state.animations.is_animating_minimize(&id) {
-                has_dynamic_content = true;
                 bg_elements.extend(state.animations.render_minimize_effect(
                     &id,
                     output_geo.loc,
@@ -138,8 +146,6 @@ pub fn collect_output_elements(
     let mut ordered_windows: Vec<_> = state.space.elements().rev().cloned().collect();
     ordered_windows.sort_by_key(|w| if state.workspaces.is_pinned(w) { 0 } else { 1 });
 
-    let mut scene_hash: u64 = (state.workspaces.active as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-
     for window in &ordered_windows {
         if !window.alive() {
             continue;
@@ -161,17 +167,6 @@ pub fn collect_output_elements(
         let Some(win_loc) = state.space.element_location(window) else {
             continue;
         };
-
-        has_dynamic_content = true;
-        if let Some(ref id) = win_id {
-            scene_hash = scene_hash
-                .rotate_left(7)
-                ^ (id.protocol_id() as u64)
-                ^ ((win_loc.x as u64) << 16)
-                ^ ((win_loc.y as u64) << 32)
-                ^ ((win_geo_check.size.w as u64) << 44)
-                ^ ((win_geo_check.size.h as u64) << 54);
-        }
 
         let (move_dx, move_dy, open_p, open_blur_alpha) = win_id
             .as_ref()
@@ -308,7 +303,6 @@ pub fn collect_output_elements(
                         Kind::Unspecified,
                     );
                 if !surface_elems.is_empty() {
-                    has_dynamic_content = true;
                     bg_elements.extend(surface_elems);
                 }
             }
@@ -317,7 +311,6 @@ pub fn collect_output_elements(
 
     // 4a. Desktop Rubber-Band Selection Box (underneath windows, above desktop icons)
     if let Some(rb_elem) = crate::overlays::render_desktop_rubberband(state, renderer, output, scale) {
-        has_dynamic_content = true;
         bg_elements.push(rb_elem);
     }
 
@@ -328,40 +321,15 @@ pub fn collect_output_elements(
     }
 
     // 5. Native OKay DE desktop wallpaper / gradient (bottommost)
-    let has_wallpaper = if let Some(bg) = state.desktop.background_element(renderer, output, scale) {
+    if let Some(bg) = state.desktop.background_element(renderer, output, scale) {
         bg_elements.push(bg);
-        true
-    } else {
-        false
-    };
-
-    // Check whether the scene behind glass panels changed (for zero-idle-GPU Dual-Kawase blur)
-    thread_local! {
-        static LAST_SCENE_HASH: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
     }
-    let scene_changed = LAST_SCENE_HASH.with(|cell| {
-        let mut map = cell.borrow_mut();
-        let prev = map.insert(output.name(), scene_hash);
-        prev != Some(scene_hash)
-    });
-    let global_dirty =
-        state.blur_dirty || scene_changed || state.animations.has_active_bg_animations();
-    state.blur_dirty = false;
 
+    // Run full Dual-Kawase blur pass unconditionally every frame in GlassBlur mode
+    state.blur_dirty = false;
     if state.panel.appearance_mode == crate::panel::AppearanceMode::GlassBlur {
         let clear_color = Color32F::from(state.theme.background_color);
-        let wallpaper_elem = if has_wallpaper { bg_elements.last() } else { None };
-        crate::blur::update_output_blur(
-            renderer,
-            output,
-            scale,
-            state.desktop.revision,
-            wallpaper_elem,
-            &bg_elements,
-            has_dynamic_content,
-            global_dirty,
-            clear_color,
-        );
+        crate::blur::update_output_blur(renderer, output, scale, &bg_elements, clear_color);
     }
 
     // 0b. Topmost desktop overlays (isolated with catch_unwind so a UI panic never kills the compositor)
@@ -641,6 +609,7 @@ fn render_rounded_window_offscreen(
 precision mediump float;
 varying vec2 v_coords;
 uniform float alpha;
+uniform vec2 u_pos;
 uniform vec2 u_size;
 uniform float u_radius;
 uniform float u_border_alpha;
@@ -656,12 +625,14 @@ float sdRoundedBox(vec2 p, vec2 b, float r) {
 }
 
 void main() {
-    vec4 texel = texture2D(tex, v_coords);
+    vec2 local_uv = clamp(v_coords, vec2(0.0), vec2(1.0));
+    vec4 texel = texture2D(tex, local_uv);
     #ifdef NO_ALPHA
     texel.a = 1.0;
     #endif
 
-    vec2 px = v_coords * u_size;
+    // Local pixel position inside this window's [0..u_size] bounds (origin top-left)
+    vec2 px = local_uv * u_size + (u_pos - u_pos);
     float d = sdRoundedBox(px - u_size * 0.5, u_size * 0.5, u_radius);
 
     // Smooth anti-aliased clip across all 4 corners (top-left, top-right, bottom-left, bottom-right)
@@ -687,6 +658,7 @@ void main() {
             if let Ok(prog) = renderer.compile_custom_texture_shader(
                 ROUNDED_TEX_FRAG,
                 &[
+                    UniformName::new("u_pos", UniformType::_2f),
                     UniformName::new("u_size", UniformType::_2f),
                     UniformName::new("u_radius", UniformType::_1f),
                     UniformName::new("u_border_alpha", UniformType::_1f),
@@ -698,8 +670,12 @@ void main() {
         borrow.clone()
     })?;
 
-    let (draw_loc, draw_size, draw_radius): (Point<i32, Physical>, Size<i32, Logical>, f32) =
-        if open_ease < 0.999 {
+    let (draw_logical_loc, draw_loc, draw_size, draw_radius): (
+        Point<i32, Logical>,
+        Point<i32, Physical>,
+        Size<i32, Logical>,
+        f32,
+    ) = if open_ease < 0.999 {
         let start_dim = (full_w.min(full_h) as f32 * 0.18).max(40.0);
         let sw = (start_dim + (full_w as f32 - start_dim) * open_ease).round().max(1.0) as i32;
         let sh = (start_dim + (full_h as f32 - start_dim) * open_ease).round().max(1.0) as i32;
@@ -709,10 +685,12 @@ void main() {
             base_loc.y + (full_h - sh) / 2,
         ));
         let r = (sw.min(sh) as f32 * 0.5) * (1.0 - open_ease) + corner_radius * open_ease;
-        (centered.to_physical_precise_round(scale), Size::from((sw, sh)), r)
+        (centered, centered.to_physical_precise_round(scale), Size::from((sw, sh)), r)
     } else {
+        let loc_l = local_loc + win_geo.loc - Point::from((0, tb_h));
         (
-            (local_loc + win_geo.loc - Point::from((0, tb_h))).to_physical_precise_round(scale),
+            loc_l,
+            loc_l.to_physical_precise_round(scale),
             logical_size,
             corner_radius,
         )
@@ -737,6 +715,7 @@ void main() {
         tex_elem,
         program,
         vec![
+            Uniform::new("u_pos", [draw_logical_loc.x as f32, draw_logical_loc.y as f32]),
             Uniform::new("u_size", [draw_size.w as f32, draw_size.h as f32]),
             Uniform::new("u_radius", draw_radius),
             Uniform::new("u_border_alpha", border_alpha),
@@ -930,8 +909,8 @@ pub fn panel_backdrop_element(
                 rect,
                 radius,
                 pal.surface,
+                0.48,
                 0.24,
-                0.22,
                 alpha,
             )
         }

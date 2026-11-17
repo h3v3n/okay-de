@@ -1257,10 +1257,9 @@ pub fn render_panel_elements(
         let pal = active_m3_palette();
         match pal.appearance_mode {
             AppearanceMode::GlassBlur => {
-                // Translucent glass over Dual-Kawase blur + subtle 1px bright edge
-                mb.fill_rect(0, 0, mb_w, mb_h, [pal.surface[0], pal.surface[1], pal.surface[2], 140]);
-                mb.fill_rect_blend(0, 0, mb_w, 1, [255, 255, 255, 42]);
-                mb.fill_rect_blend(0, mb_h - 1, mb_w, 1, [255, 255, 255, 46]);
+                // Transparent canvas over Dual-Kawase blur (which provides 0.48 tint + 1px bright edge)
+                mb.fill_rect(0, 0, mb_w, mb_h, [0, 0, 0, 0]);
+                mb.fill_rect_blend(0, mb_h - 1, mb_w, 1, [255, 255, 255, 48]);
             }
             AppearanceMode::Material3Expressive => {
                 // Opaque/tonal surfaceContainer + clear outlineVariant bottom edge
@@ -3432,19 +3431,8 @@ impl Canvas {
                 );
             }
             AppearanceMode::GlassBlur => {
-                // Translucent glass body so Dual-Kawase blurred backdrop shines through
-                if w > 2 && h > 2 {
-                    self.fill_rounded_rect_aa(
-                        x + 1,
-                        y + 1,
-                        w - 2,
-                        h - 2,
-                        (radius - 1).max(2),
-                        [pal.surface[0], pal.surface[1], pal.surface[2], 144],
-                    );
-                }
-                // Subtle 1px bright edge on outline
-                self.stroke_rounded_rect_aa(x, y, w, h, radius, [255, 255, 255, 48]);
+                // Transparent interior so Dual-Kawase blur + 0.48 tint + 1px edge shows through cleanly
+                self.stroke_rounded_rect_aa(x, y, w, h, radius, [255, 255, 255, 42]);
             }
         }
         if w > 2 && h > 2 {

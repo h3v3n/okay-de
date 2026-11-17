@@ -227,6 +227,10 @@ impl OverlaysState {
         Self::default()
     }
 
+    pub fn clear_hit_regions(&mut self) {
+        self.hit_regions.clear();
+    }
+
     /// Starts inline folder creation on the desktop grid with an editable name input.
     pub fn begin_creating_folder(&mut self) {
         self.show_desktop_icons = true;
@@ -1323,9 +1327,7 @@ pub fn render_top_overlays(
     };
 
     state.overlays.poll_background();
-    if is_primary {
-        state.overlays.hit_regions.clear();
-    }
+    let _ = is_primary;
 
     let accent = state.panel.accent_rgb();
     let mut elements = Vec::new();
