@@ -1999,7 +1999,11 @@ pub fn render_top_overlays(
         let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(cal_w, cal_h);
-        canvas.fill_glass_panel(0, 0, cal_w, cal_h, 18);
+        if !state.animations.enabled || state.animations.calendar_open_anim >= 0.995 {
+            canvas.fill_frosted_backdrop_panel(0, 0, cal_w, cal_h, 18);
+        } else {
+            canvas.fill_glass_panel(0, 0, cal_w, cal_h, 18);
+        }
 
         let (date_header, start_mon_0, days_in_month, today_opt) =
             calendar_grid_info(state.overlays.cal_month_offset);
@@ -2154,7 +2158,11 @@ pub fn render_top_overlays(
         let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(nw, nh);
-        canvas.fill_glass_panel(0, 0, nw, nh, 18);
+        if !state.animations.enabled || state.animations.notif_open_anim >= 0.995 {
+            canvas.fill_frosted_backdrop_panel(0, 0, nw, nh, 18);
+        } else {
+            canvas.fill_glass_panel(0, 0, nw, nh, 18);
+        }
         canvas.draw_text_px(
             16,
             14,
@@ -2258,7 +2266,11 @@ pub fn render_top_overlays(
         let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(cc_w, cc_h);
-        canvas.fill_glass_panel(0, 0, cc_w, cc_h, 18);
+        if !state.animations.enabled || state.animations.control_center_open_anim >= 0.995 {
+            canvas.fill_frosted_backdrop_panel(0, 0, cc_w, cc_h, 18);
+        } else {
+            canvas.fill_glass_panel(0, 0, cc_w, cc_h, 18);
+        }
 
         // Connectivity & AdShield card (Wi-Fi, Bluetooth, AdShield, Layout)
         canvas.fill_rounded_rect_aa(12, 12, cc_w - 24, 151, 12, [255, 255, 255, 14]);

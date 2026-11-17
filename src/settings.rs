@@ -867,7 +867,7 @@ pub fn render_settings_elements(
     let pointer_y = state.pointer_location.y.round() as i32;
 
     let mut canvas = Canvas::new(SETTINGS_WIDTH, SETTINGS_HEIGHT);
-    canvas.fill_glass_panel(0, 0, SETTINGS_WIDTH, SETTINGS_HEIGHT, 18);
+    canvas.fill_frosted_backdrop_panel(0, 0, SETTINGS_WIDTH, SETTINGS_HEIGHT, 18);
 
     // Crisp 1px vertical sidebar divider (no extra stacked background rect)
     canvas.fill_rect_blend(

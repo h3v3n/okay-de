@@ -1658,7 +1658,11 @@ pub fn render_panel_elements(
             let tx = (tray_x + tray_w / 2 - tw / 2).clamp(8, (output_geo.size.w - tw - 8).max(8));
             let ty = PANEL_HEIGHT + 6;
             let mut tcan = Canvas::new(tw, th);
-            tcan.fill_glass_panel(0, 0, tw, th, 16);
+            if !state.animations.enabled || state.animations.tray_open_anim >= 0.995 {
+                tcan.fill_frosted_backdrop_panel(0, 0, tw, th, 16);
+            } else {
+                tcan.fill_glass_panel(0, 0, tw, th, 16);
+            }
             tcan.draw_text_px(14, 12, "Background & Running Apps", 13.5, [244, 246, 255, 255]);
 
             if bg_rows.is_empty() {
@@ -1880,7 +1884,7 @@ pub fn render_panel_elements(
         }
 
         let mut dock = Canvas::new(dock_canvas_w, dock_canvas_h);
-        dock.fill_glass_panel(
+        dock.fill_frosted_backdrop_panel(
             dock_pill_x_in_canvas,
             dock_pill_y_in_canvas,
             dock_pill_w,
@@ -2177,7 +2181,11 @@ pub fn render_panel_elements(
                 let mx = anchor_x.clamp(8, (output_geo.size.w - mw - 8).max(8));
                 let my = PANEL_HEIGHT + 8;
                 let mut mcan = Canvas::new(mw, mh);
-                mcan.fill_glass_panel(0, 0, mw, mh, 16);
+                if !state.animations.enabled || state.animations.top_menu_open_anim >= 0.995 {
+                    mcan.fill_frosted_backdrop_panel(0, 0, mw, mh, 16);
+                } else {
+                    mcan.fill_glass_panel(0, 0, mw, mh, 16);
+                }
 
                 let mut iy = 10;
                 for (lbl, hint, act, sep_after) in rows {
@@ -2459,7 +2467,11 @@ pub fn render_panel_elements(
         let menu_y = base_y - slide_px;
 
         let mut menu_canvas = Canvas::new(menu_w, menu_h);
-        menu_canvas.fill_glass_panel(0, 0, menu_w, menu_h, 18);
+        if !state.animations.enabled || state.animations.launcher_open_anim >= 0.995 {
+            menu_canvas.fill_frosted_backdrop_panel(0, 0, menu_w, menu_h, 18);
+        } else {
+            menu_canvas.fill_glass_panel(0, 0, menu_w, menu_h, 18);
+        }
 
         // Header + Centered Search Bar
         menu_canvas.draw_text_px(20, 14, "Applications", 16.0, [246, 248, 255, 255]);
@@ -3401,8 +3413,18 @@ impl Canvas {
 
     /// Draws a surface panel styled according to the active `AppearanceMode`:
     /// - `Material3Expressive`: opaque/tonal `surfaceContainer` with clear `outlineVariant` border.
-    /// - `GlassBlur`: translucent `surface` over Dual-Kawase blur with 1px bright edge & grain.
+    /// - `GlassBlur`: translucent `surface` for standalone popups/tooltips without FBO backdrop.
     pub fn fill_glass_panel(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32) {
+        self.fill_panel_impl(x, y, w, h, radius, false);
+    }
+
+    /// Draws a panel whose `GlassBlur` background is rendered by the GLSL FBO blur backdrop shader
+    /// (transparent interior in `GlassBlur`, opaque `surfaceContainer` + `outlineVariant` in `M3E`).
+    pub fn fill_frosted_backdrop_panel(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32) {
+        self.fill_panel_impl(x, y, w, h, radius, true);
+    }
+
+    fn fill_panel_impl(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, has_fbo_blur: bool) {
         if w <= 0 || h <= 0 {
             return;
         }
@@ -3431,8 +3453,20 @@ impl Canvas {
                 );
             }
             AppearanceMode::GlassBlur => {
-                // Transparent interior so Dual-Kawase blur + 0.48 tint + 1px edge shows through cleanly
-                self.stroke_rounded_rect_aa(x, y, w, h, radius, [255, 255, 255, 42]);
+                if !has_fbo_blur && w > 2 && h > 2 {
+                    self.fill_rounded_rect_aa(
+                        x + 1,
+                        y + 1,
+                        w - 2,
+                        h - 2,
+                        (radius - 1).max(2),
+                        [pal.surface[0], pal.surface[1], pal.surface[2], 218],
+                    );
+                }
+                // Subtle 1px bright edge on outline (FBO shader also renders edge when has_fbo_blur)
+                if !has_fbo_blur {
+                    self.stroke_rounded_rect_aa(x, y, w, h, radius, [255, 255, 255, 48]);
+                }
             }
         }
         if w > 2 && h > 2 {

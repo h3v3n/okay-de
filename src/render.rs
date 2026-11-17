@@ -696,15 +696,19 @@ void main() {
         )
     };
 
+    let tex_src: Rectangle<f64, Logical> = Rectangle::from_size(Size::from((
+        phys_size.w.max(1) as f64,
+        phys_size.h.max(1) as f64,
+    )));
     let tex_elem = TextureRenderElement::from_texture_with_damage(
         Id::new(),
         renderer.context_id(),
         draw_loc.to_f64(),
         tex,
-        scale.x.round().max(1.0) as i32,
+        1,
         Transform::Normal,
         Some(alpha),
-        None,
+        Some(tex_src),
         Some(draw_size),
         None,
         DamageSnapshot::empty(),
