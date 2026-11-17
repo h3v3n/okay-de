@@ -640,7 +640,8 @@ void main() {
         borrow.clone()
     })?;
 
-    let (draw_loc, draw_size, draw_radius) = if open_ease < 0.999 {
+    let (draw_loc, draw_size, draw_radius): (Point<i32, Physical>, Size<i32, Logical>, f32) =
+        if open_ease < 0.999 {
         let start_dim = (full_w.min(full_h) as f32 * 0.18).max(40.0);
         let sw = (start_dim + (full_w as f32 - start_dim) * open_ease).round().max(1.0) as i32;
         let sh = (start_dim + (full_h as f32 - start_dim) * open_ease).round().max(1.0) as i32;

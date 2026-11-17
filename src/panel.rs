@@ -961,7 +961,12 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                     })
                     .cloned();
                 if let Some(win) = found {
-                    let win_ws = state.workspaces.workspace_of(&win_id);
+                    let win_ws = state
+                        .workspaces
+                        .window_map
+                        .get(&win_id)
+                        .copied()
+                        .unwrap_or(state.workspaces.active);
                     if win_ws != state.workspaces.active {
                         state.switch_workspace(win_ws);
                     }

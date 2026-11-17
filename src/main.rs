@@ -202,7 +202,7 @@ fn init_wayland_loop() -> Result<
 // Winit Nested Backend (Development & Debugging inside Wayland/X11)
 // ============================================================================
 
-fn target_frame_duration(space: &smithay::desktop::Space<smithay::output::Output>) -> Duration {
+fn target_frame_duration(space: &smithay::desktop::Space<smithay::desktop::Window>) -> Duration {
     let max_refresh_mhz = space
         .outputs()
         .filter_map(|o| o.current_mode())

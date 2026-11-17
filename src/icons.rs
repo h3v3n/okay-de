@@ -753,7 +753,7 @@ pub fn draw_vector_squircle_icon(
     }
 }
 
-fn draw_thick_line(canvas: &mut Canvas, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32, color: [u8; 4]) {
+pub fn draw_thick_line(canvas: &mut Canvas, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32, color: [u8; 4]) {
     let steps = ((x1 - x0).hypot(y1 - y0) * 1.5).ceil().max(2.0) as i32;
     for i in 0..=steps {
         let t = i as f32 / steps as f32;
