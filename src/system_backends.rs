@@ -446,54 +446,86 @@ pub fn set_default_audio_sink(sink_id: &str) -> (Option<i32>, Option<bool>, Vec<
     poll_audio_state()
 }
 
-/// Checks for available system package updates asynchronously (`dnf` / `pacman` / `apt`).
-pub fn check_system_updates() -> String {
-    if let Ok(out) = Command::new("dnf").args(["check-update", "-q"]).output() {
-        let code = out.status.code().unwrap_or(0);
-        if code == 100 {
-            let count = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter(|l| !l.trim().is_empty() && !l.starts_with("Obsoleting"))
-                .count();
-            return format!("{} Fedora (dnf) package update(s) available", count.max(1));
-        } else if code == 0 {
-            return "System is up to date (dnf)".to_string();
-        }
+const GITHUB_REPO_URL: &str = "https://github.com/h3v3n/okay-de.git";
+
+fn find_okay_repo_dir() -> Option<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(manifest) = option_env!("CARGO_MANIFEST_DIR") {
+        candidates.push(std::path::PathBuf::from(manifest));
     }
-    if let Ok(out) = Command::new("checkupdates").output() {
-        if out.status.success() {
-            let count = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .count();
-            if count > 0 {
-                return format!("{} Arch (pacman) update(s) available", count);
-            }
-            return "System is up to date (pacman)".to_string();
-        }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd);
     }
-    if let Ok(out) = Command::new("pacman").args(["-Qu"]).output() {
-        let count = String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .count();
-        if count > 0 {
-            return format!("{} package update(s) pending (pacman)", count);
-        }
-        if out.status.success() {
-            return "System is up to date (pacman)".to_string();
-        }
+    if let Ok(home) = std::env::var("HOME") {
+        let h = std::path::PathBuf::from(home);
+        candidates.push(h.join("Documents/okay-de"));
+        candidates.push(h.join("okay-de"));
     }
-    "Click 'Install Updates' to run system updater in terminal".to_string()
+    candidates.into_iter().find(|p| p.join(".git").is_dir())
 }
 
-/// Returns the interactive shell command for updating the host OS packages in a terminal.
-pub fn install_system_updates_cmd() -> &'static str {
-    if std::path::Path::new("/usr/bin/dnf").exists() {
-        "echo '=== OKay DE System Update (dnf) ===' && sudo dnf upgrade --refresh; echo; read -p 'Press Enter to close...'"
-    } else if std::path::Path::new("/usr/bin/pacman").exists() {
-        "echo '=== OKay DE System Update (pacman) ===' && sudo pacman -Syu; echo; read -p 'Press Enter to close...'"
+/// Checks for new OKay DE commits on GitHub (`https://github.com/h3v3n/okay-de`).
+pub fn check_system_updates() -> String {
+    let remote_sha = Command::new("git")
+        .args(["ls-remote", GITHUB_REPO_URL, "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split_whitespace()
+                .next()
+                .map(|s| s.to_string())
+        });
+
+    let Some(remote_full) = remote_sha else {
+        return "Could not reach GitHub (github.com/h3v3n/okay-de)".to_string();
+    };
+    let remote_short: String = remote_full.chars().take(7).collect();
+
+    if let Some(repo) = find_okay_repo_dir() {
+        let _ = Command::new("git").arg("-C").arg(&repo).args(["fetch", "origin"]).output();
+        let local_full = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+
+        if local_full == remote_full {
+            return format!("OKay DE is up to date ({})", remote_short);
+        }
+        let behind = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["rev-list", "--count", &format!("{}..{}", local_full, remote_full)])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<usize>().ok());
+        return match behind {
+            Some(n) if n > 0 => format!("GitHub update available: {} new commit(s) ({})", n, remote_short),
+            _ => format!("GitHub HEAD {} differs from local build", remote_short),
+        };
+    }
+
+    format!("Latest GitHub commit: {} (click Update DE)", remote_short)
+}
+
+/// Returns the interactive terminal command to pull, build, and install OKay DE from GitHub.
+pub fn install_system_updates_cmd() -> String {
+    if let Some(repo) = find_okay_repo_dir() {
+        format!(
+            "cd '{}' && echo '=== Updating OKay DE from GitHub ===' && git pull --ff-only origin main && cargo build --release && sudo install -Dm755 target/release/okay-de /usr/local/bin/okay-de && echo && echo 'Updated! Restart OKay DE to apply.'; read -p 'Press Enter to close...'",
+            repo.display()
+        )
     } else {
-        "echo '=== OKay DE System Update (apt) ===' && sudo apt update && sudo apt upgrade; echo; read -p 'Press Enter to close...'"
+        format!(
+            "mkdir -p \"$HOME/okay-de\" && if [ ! -d \"$HOME/okay-de/.git\" ]; then git clone {} \"$HOME/okay-de\"; fi && cd \"$HOME/okay-de\" && git pull --ff-only origin main && cargo build --release && sudo install -Dm755 target/release/okay-de /usr/local/bin/okay-de && echo && echo 'Updated! Restart OKay DE to apply.'; read -p 'Press Enter to close...'",
+            GITHUB_REPO_URL
+        )
     }
 }

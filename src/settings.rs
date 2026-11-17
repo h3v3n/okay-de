@@ -206,7 +206,7 @@ impl Default for SettingsState {
             ram_summary: String::new(),
             disk_summary: String::new(),
             input_devices: Vec::new(),
-            update_status: "Ready to check for system updates".to_string(),
+            update_status: "Check GitHub (h3v3n/okay-de) for updates".to_string(),
             hit_regions: Vec::new(),
         };
         s
@@ -692,7 +692,7 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                 }
             }
             SettingsAction::CheckUpdates => {
-                state.settings.update_status = "Checking for system updates...".to_string();
+                state.settings.update_status = "Checking github.com/h3v3n/okay-de...".to_string();
                 crate::worker::dispatch(crate::worker::WorkerRequest::CheckSystemUpdates);
             }
             SettingsAction::InstallUpdates => {
@@ -712,13 +712,13 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                 for term in terms {
                     let ok = if term == "gnome-terminal" {
                         Command::new(term)
-                            .args(["--", "sh", "-c", cmd])
+                            .args(["--", "sh", "-c", &cmd])
                             .env("WAYLAND_DISPLAY", &state.socket_name)
                             .spawn()
                             .is_ok()
                     } else {
                         Command::new(term)
-                            .args(["-e", "sh", "-c", cmd])
+                            .args(["-e", "sh", "-c", &cmd])
                             .env("WAYLAND_DISPLAY", &state.socket_name)
                             .spawn()
                             .is_ok()
@@ -729,9 +729,9 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                     }
                 }
                 state.settings.update_status = if launched {
-                    "System updater launched in terminal".to_string()
+                    "GitHub updater launched in terminal".to_string()
                 } else {
-                    "Could not open terminal for system update".to_string()
+                    "Could not open terminal for GitHub update".to_string()
                 };
             }
         }
@@ -1698,7 +1698,7 @@ pub fn render_settings_elements(
 
             let chk_rect = Rectangle::new((wx + content_x + 280, wy + cy + 7).into(), (104, 28).into());
             canvas.fill_rounded_rect_aa(content_x + 280, cy + 7, 104, 28, 6, [52, 56, 78, 255]);
-            canvas.draw_text_px(content_x + 291, cy + 14, "Check Updates", 11.5, [238, 240, 252, 255]);
+            canvas.draw_text_px(content_x + 292, cy + 14, "Check GitHub", 11.5, [238, 240, 252, 255]);
             state
                 .settings
                 .hit_regions
@@ -1714,9 +1714,9 @@ pub fn render_settings_elements(
                 [accent[0], accent[1], accent[2], 235],
             );
             canvas.draw_text_px(
-                content_x + 402,
+                content_x + 408,
                 cy + 14,
-                "Install Updates",
+                "Update DE",
                 11.5,
                 contrast_fg(accent),
             );
