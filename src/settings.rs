@@ -116,8 +116,6 @@ enum SettingsAction {
     SelectAccent(usize),
     ToggleDynamicAccent,
     ToggleM3Expressive,
-    AdjustWindowGaps(i32),
-    AdjustBorderWidth(i32),
     ToggleAnimations,
     AdjustAnimSpeed(f32),
     CycleMinimizeEffect,
@@ -430,14 +428,6 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
             SettingsAction::ToggleM3Expressive => {
                 state.panel.m3_expressive = !state.panel.m3_expressive;
                 save_all_prefs(state);
-            }
-            SettingsAction::AdjustWindowGaps(delta) => {
-                state.panel.window_gaps = (state.panel.window_gaps + delta).clamp(0, 28);
-                state.retile_workspace();
-                save_all_prefs(state);
-            }
-            SettingsAction::AdjustBorderWidth(delta) => {
-                state.theme.border_width = (state.theme.border_width + delta).clamp(1, 6);
             }
             SettingsAction::ToggleAnimations => {
                 state.animations.enabled = !state.animations.enabled;
@@ -870,32 +860,6 @@ pub fn render_settings_elements(
             canvas.draw_text_px(content_x + 416, cy + 7, "+", 14.0, [240, 242, 252, 255]);
             state.settings.hit_regions.push((s_inc, SettingsAction::AdjustAnimSpeed(0.25)));
             cy += 40;
-
-            // Row 5: Window Gaps & Border Width
-            let gaps_txt = format!("Window Gaps: {}px", state.panel.window_gaps);
-            canvas.draw_text_px(content_x, cy + 8, &gaps_txt, 13.0, [225, 228, 245, 255]);
-            let g_dec = Rectangle::new((wx + content_x + 150, wy + cy).into(), (30, 30).into());
-            canvas.fill_rounded_rect_aa(content_x + 150, cy, 30, 30, 5, [44, 44, 66, 255]);
-            canvas.draw_text_px(content_x + 161, cy + 6, "-", 14.0, [240, 242, 252, 255]);
-            state.settings.hit_regions.push((g_dec, SettingsAction::AdjustWindowGaps(-2)));
-
-            let g_inc = Rectangle::new((wx + content_x + 186, wy + cy).into(), (30, 30).into());
-            canvas.fill_rounded_rect_aa(content_x + 186, cy, 30, 30, 5, [44, 44, 66, 255]);
-            canvas.draw_text_px(content_x + 196, cy + 6, "+", 14.0, [240, 242, 252, 255]);
-            state.settings.hit_regions.push((g_inc, SettingsAction::AdjustWindowGaps(2)));
-
-            let bw_txt = format!("Border: {}px", state.theme.border_width);
-            canvas.draw_text_px(content_x + 250, cy + 8, &bw_txt, 13.0, [225, 228, 245, 255]);
-            let b_dec = Rectangle::new((wx + content_x + 365, wy + cy).into(), (30, 30).into());
-            canvas.fill_rounded_rect_aa(content_x + 365, cy, 30, 30, 5, [44, 44, 66, 255]);
-            canvas.draw_text_px(content_x + 376, cy + 6, "-", 14.0, [240, 242, 252, 255]);
-            state.settings.hit_regions.push((b_dec, SettingsAction::AdjustBorderWidth(-1)));
-
-            let b_inc = Rectangle::new((wx + content_x + 401, wy + cy).into(), (30, 30).into());
-            canvas.fill_rounded_rect_aa(content_x + 401, cy, 30, 30, 5, [44, 44, 66, 255]);
-            canvas.draw_text_px(content_x + 411, cy + 6, "+", 14.0, [240, 242, 252, 255]);
-            state.settings.hit_regions.push((b_inc, SettingsAction::AdjustBorderWidth(1)));
-            cy += 36;
 
             // Material You Dynamic Wallpaper Accent + M3 Expressive Mode
             let dyn_rect = Rectangle::new((wx + content_x, wy + cy).into(), (248, 32).into());

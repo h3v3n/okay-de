@@ -581,11 +581,21 @@ impl OkayState {
             .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
 
         if self.workspaces.maximized.remove(&id) {
-            let restore = self
+            let mut restore = self
                 .workspaces
                 .saved_geometries
                 .remove(&id)
                 .unwrap_or_else(|| Rectangle::new((output_geo.loc.x + 80, output_geo.loc.y + 60).into(), (800, 600).into()));
+            let top_pad = if self.panel.dock_mode || self.panel.panel_top {
+                crate::panel::PANEL_HEIGHT
+            } else {
+                0
+            };
+            let win_geo = window.geometry();
+            let min_y = output_geo.loc.y + top_pad + TITLEBAR_HEIGHT - win_geo.loc.y;
+            if restore.loc.y < min_y {
+                restore.loc.y = min_y;
+            }
             self.space.map_element(window.clone(), restore.loc, true);
             toplevel.with_pending_state(|state| {
                 state.states.unset(xdg_toplevel::State::Maximized);
@@ -612,7 +622,11 @@ impl OkayState {
             } else {
                 0
             };
-            let target_loc = Point::from((output_geo.loc.x, output_geo.loc.y + top_pad + TITLEBAR_HEIGHT));
+            let win_geo = window.geometry();
+            let target_loc = Point::from((
+                output_geo.loc.x - win_geo.loc.x,
+                output_geo.loc.y + top_pad + TITLEBAR_HEIGHT - win_geo.loc.y,
+            ));
             let target_size = Size::from((
                 output_geo.size.w,
                 (output_geo.size.h - top_pad - bot_pad - TITLEBAR_HEIGHT).max(120),
@@ -830,6 +844,11 @@ impl OkayState {
             let right = (px - x1).abs() <= border;
             let bottom = (py - y1).abs() <= border;
             let top = (py - y0).abs() <= border;
+
+            // Never steal clicks on the titlebar Traffic Lights (`[x]`, `[-]`, `[+]`)
+            if py >= y0 + 2 && py < y0 + TITLEBAR_HEIGHT && px >= x0 + 6 && px <= x0 + 66 {
+                return None;
+            }
 
             // Only match outer rim (not interior titlebar traffic lights or client surface)
             if left || right || bottom {
@@ -1245,7 +1264,7 @@ impl OkayState {
         let rel_x = px - tb_rect.loc.x;
 
         // Top-left macOS Traffic Light buttons: Close (#ff5f57), Minimize (#febc2e), Maximize (#28c840)
-        if (8..=24).contains(&rel_x) {
+        if (6..=25).contains(&rel_x) {
             if let Some(toplevel) = window.toplevel() {
                 toplevel.send_close();
             }
