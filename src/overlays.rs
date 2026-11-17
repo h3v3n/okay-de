@@ -70,6 +70,8 @@ pub struct OverlaysState {
     pub calendar_open: bool,
     pub clipboard_open: bool,
     pub control_center_open: bool,
+    pub cc_wifi_expanded: bool,
+    pub cc_bt_expanded: bool,
     pub clipboard_items: Vec<String>,
     pub alttab_visible_until: Option<Instant>,
     pub locked: bool,
@@ -96,6 +98,10 @@ enum OverlayClick {
     CloseCalendar,
     ControlToggleWifi,
     ControlToggleBt,
+    ControlExpandWifi,
+    ControlExpandBt,
+    ControlConnectWifi(usize),
+    ControlConnectBt(usize),
     ControlToggleTiling,
     ControlCycleMinimize,
     ControlSetVolume(i32),
@@ -122,6 +128,8 @@ impl Default for OverlaysState {
             calendar_open: false,
             clipboard_open: false,
             control_center_open: false,
+            cc_wifi_expanded: false,
+            cc_bt_expanded: false,
             clipboard_items: vec![
                 "Welcome to OKay DE (Super+V Clipboard)".to_string(),
                 "~/.config/okay-de/config.toml".to_string(),
@@ -680,12 +688,63 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
                 let is_on = !state.settings.wifi_status.to_lowercase().contains("off");
                 let flag = if is_on { "off" } else { "on" };
                 state.settings.wifi_status = if is_on { "Off".to_string() } else { "On".to_string() };
-                let _ = Command::new("nmcli").args(["radio", "wifi", flag]).spawn();
+                crate::worker::dispatch(crate::worker::WorkerRequest::RunCommand {
+                    program: "nmcli".to_string(),
+                    args: vec!["radio".into(), "wifi".into(), flag.into()],
+                });
             }
             OverlayClick::ControlToggleBt => {
                 state.settings.bt_powered = !state.settings.bt_powered;
                 let flag = if state.settings.bt_powered { "on" } else { "off" };
-                let _ = Command::new("bluetoothctl").args(["power", flag]).spawn();
+                crate::worker::dispatch(crate::worker::WorkerRequest::ToggleBluetoothPower {
+                    enable: state.settings.bt_powered,
+                });
+                state.settings.bt_status = format!("Bluetooth {}", flag);
+            }
+            OverlayClick::ControlExpandWifi => {
+                state.overlays.cc_wifi_expanded = !state.overlays.cc_wifi_expanded;
+                if state.overlays.cc_wifi_expanded {
+                    state.overlays.cc_bt_expanded = false;
+                    state.settings.refresh_wifi(true);
+                }
+            }
+            OverlayClick::ControlExpandBt => {
+                state.overlays.cc_bt_expanded = !state.overlays.cc_bt_expanded;
+                if state.overlays.cc_bt_expanded {
+                    state.overlays.cc_wifi_expanded = false;
+                    state.settings.refresh_bluetooth();
+                }
+            }
+            OverlayClick::ControlConnectWifi(idx) => {
+                if let Some(net) = state.settings.wifi_networks.get(idx).cloned() {
+                    if net.in_use {
+                        crate::worker::dispatch(crate::worker::WorkerRequest::RunCommand {
+                            program: "nmcli".to_string(),
+                            args: vec!["dev".into(), "wifi".into(), "disconnect".into()],
+                        });
+                        state.settings.wifi_status = format!("Disconnecting {}...", net.ssid);
+                    } else {
+                        crate::worker::dispatch(crate::worker::WorkerRequest::ConnectWifi {
+                            ssid: net.ssid.clone(),
+                        });
+                        state.settings.wifi_status = format!("Connecting to {}...", net.ssid);
+                    }
+                }
+            }
+            OverlayClick::ControlConnectBt(idx) => {
+                if let Some(dev) = state.settings.bt_devices.get_mut(idx) {
+                    let connect = !dev.connected;
+                    crate::worker::dispatch(crate::worker::WorkerRequest::ToggleBluetoothDevice {
+                        mac: dev.mac.clone(),
+                        connect,
+                    });
+                    dev.connected = connect;
+                    state.settings.bt_status = if connect {
+                        format!("Connecting {}...", dev.name)
+                    } else {
+                        format!("Disconnecting {}...", dev.name)
+                    };
+                }
             }
             OverlayClick::ControlToggleTiling => {
                 state.toggle_tiling();
@@ -1319,10 +1378,25 @@ pub fn render_top_overlays(
         }
     }
 
-    // 6b. Compact macOS Control Center Popup
+    // 6b. Compact macOS Control Center Popup (with expandable Wi-Fi & Bluetooth lists)
     if state.overlays.control_center_open {
-        let cc_w = 300;
-        let cc_h = 266;
+        let wifi_expanded = state.overlays.cc_wifi_expanded;
+        let bt_expanded = state.overlays.cc_bt_expanded;
+        let list_rows = if wifi_expanded {
+            state.settings.wifi_networks.len().clamp(1, 5) as i32
+        } else if bt_expanded {
+            state.settings.bt_devices.len().clamp(1, 5) as i32
+        } else {
+            0
+        };
+        let extra_h = if wifi_expanded || bt_expanded {
+            40 + list_rows * 32
+        } else {
+            0
+        };
+
+        let cc_w = 310;
+        let cc_h = 266 + extra_h;
         let cc_x = (output_geo.size.w - cc_w - 12).max(8);
         let cc_y = if state.panel.dock_mode || state.panel.panel_top {
             PANEL_HEIGHT + 8
@@ -1338,19 +1412,38 @@ pub fn render_top_overlays(
         // Connectivity card (Wi-Fi, Bluetooth, Tiling)
         canvas.fill_rounded_rect_aa(12, 12, cc_w - 24, 116, 12, [255, 255, 255, 14]);
         let wifi_on = !state.settings.wifi_status.to_lowercase().contains("off");
-        let toggles = [
-            ("Wi-Fi", if wifi_on { "Connected" } else { "Off" }, wifi_on, OverlayClick::ControlToggleWifi),
-            ("Bluetooth", if state.settings.bt_powered { "On" } else { "Off" }, state.settings.bt_powered, OverlayClick::ControlToggleBt),
-            ("Layout", state.workspaces.layout_mode.short_label(), state.workspaces.tiling_enabled(), OverlayClick::ControlToggleTiling),
+        let toggles: [(&str, &str, bool, OverlayClick, Option<(bool, OverlayClick)>); 3] = [
+            (
+                "Wi-Fi",
+                if wifi_on { "Connected" } else { "Off" },
+                wifi_on,
+                OverlayClick::ControlToggleWifi,
+                Some((wifi_expanded, OverlayClick::ControlExpandWifi)),
+            ),
+            (
+                "Bluetooth",
+                if state.settings.bt_powered { "On" } else { "Off" },
+                state.settings.bt_powered,
+                OverlayClick::ControlToggleBt,
+                Some((bt_expanded, OverlayClick::ControlExpandBt)),
+            ),
+            (
+                "Layout",
+                state.workspaces.layout_mode.short_label(),
+                state.workspaces.tiling_enabled(),
+                OverlayClick::ControlToggleTiling,
+                None,
+            ),
         ];
-        for (i, (lbl, sub, active, act)) in toggles.into_iter().enumerate() {
+        for (i, (lbl, sub, active, act, expand_opt)) in toggles.into_iter().enumerate() {
             let ry = 18 + i as i32 * 35;
+            let main_w = if expand_opt.is_some() { cc_w - 68 } else { cc_w - 32 };
             let row_rect = Rectangle::new(
                 (output_geo.loc.x + cc_x + 16, output_geo.loc.y + cc_y + ry).into(),
-                (cc_w - 32, 32).into(),
+                (main_w, 32).into(),
             );
             if rect_contains(row_rect, ptr_x, ptr_y) {
-                canvas.fill_rounded_rect_aa(16, ry, cc_w - 32, 32, 8, [255, 255, 255, 18]);
+                canvas.fill_rounded_rect_aa(16, ry, main_w, 32, 8, [255, 255, 255, 18]);
             }
             let pill_col = if active { [accent[0], accent[1], accent[2], 240] } else { [255, 255, 255, 30] };
             let pill_fg = if active { contrast_fg(accent) } else { [220, 224, 240, 255] };
@@ -1359,18 +1452,110 @@ pub fn render_top_overlays(
             canvas.draw_text_px(54, ry + 3, lbl, 12.5, [244, 246, 255, 255]);
             canvas.draw_text_px(54, ry + 18, sub, 10.5, [158, 166, 192, 230]);
             state.overlays.hit_regions.push((row_rect, act));
+
+            if let Some((is_exp, exp_act)) = expand_opt {
+                let exp_x = cc_w - 46;
+                let exp_rect = Rectangle::new(
+                    (output_geo.loc.x + cc_x + exp_x, output_geo.loc.y + cc_y + ry + 3).into(),
+                    (30, 26).into(),
+                );
+                let exp_bg = if is_exp {
+                    [accent[0], accent[1], accent[2], 78]
+                } else if rect_contains(exp_rect, ptr_x, ptr_y) {
+                    [255, 255, 255, 32]
+                } else {
+                    [255, 255, 255, 16]
+                };
+                canvas.fill_rounded_rect_aa(exp_x, ry + 3, 30, 26, 7, exp_bg);
+                let glyph = if is_exp { "v" } else { ">" };
+                canvas.draw_text_px(exp_x + 11, ry + 8, glyph, 12.0, [238, 240, 252, 255]);
+                state.overlays.hit_regions.push((exp_rect, exp_act));
+            }
+        }
+
+        // Expanded Wi-Fi Networks or Bluetooth Devices sub-panel
+        if wifi_expanded || bt_expanded {
+            let sub_y = 136;
+            let sub_h = extra_h - 8;
+            canvas.fill_rounded_rect_aa(12, sub_y, cc_w - 24, sub_h, 12, [255, 255, 255, 12]);
+            let header_txt = if wifi_expanded {
+                &state.settings.wifi_status
+            } else {
+                &state.settings.bt_status
+            };
+            let short_hdr: String = header_txt.chars().take(34).collect();
+            canvas.draw_text_px(22, sub_y + 8, &short_hdr, 11.5, [accent[0], accent[1], accent[2], 245]);
+
+            if wifi_expanded {
+                if state.settings.wifi_networks.is_empty() {
+                    canvas.draw_text_px(22, sub_y + 34, "Scanning Wi-Fi networks...", 11.5, [168, 174, 200, 235]);
+                } else {
+                    for (idx, net) in state.settings.wifi_networks.iter().take(5).enumerate() {
+                        let iy = sub_y + 28 + idx as i32 * 32;
+                        let item_rect = Rectangle::new(
+                            (output_geo.loc.x + cc_x + 18, output_geo.loc.y + cc_y + iy).into(),
+                            (cc_w - 36, 28).into(),
+                        );
+                        let hovered = rect_contains(item_rect, ptr_x, ptr_y);
+                        let row_bg = if net.in_use {
+                            [accent[0], accent[1], accent[2], 54]
+                        } else if hovered {
+                            [255, 255, 255, 22]
+                        } else {
+                            [255, 255, 255, 10]
+                        };
+                        canvas.fill_rounded_rect_aa(18, iy, cc_w - 36, 28, 7, row_bg);
+                        let short_ssid: String = net.ssid.chars().take(20).collect();
+                        canvas.draw_text_px(26, iy + 7, &short_ssid, 12.0, [240, 242, 252, 255]);
+                        let sig = if net.in_use {
+                            format!("{}% *", net.signal)
+                        } else {
+                            format!("{}%", net.signal)
+                        };
+                        let sw = canvas.measure_text_px(&sig, 11.0);
+                        canvas.draw_text_px(cc_w - 26 - sw, iy + 8, &sig, 11.0, [178, 186, 212, 240]);
+                        state.overlays.hit_regions.push((item_rect, OverlayClick::ControlConnectWifi(idx)));
+                    }
+                }
+            } else if state.settings.bt_devices.is_empty() {
+                canvas.draw_text_px(22, sub_y + 34, "No paired Bluetooth devices", 11.5, [168, 174, 200, 235]);
+            } else {
+                for (idx, dev) in state.settings.bt_devices.iter().take(5).enumerate() {
+                    let iy = sub_y + 28 + idx as i32 * 32;
+                    let item_rect = Rectangle::new(
+                        (output_geo.loc.x + cc_x + 18, output_geo.loc.y + cc_y + iy).into(),
+                        (cc_w - 36, 28).into(),
+                    );
+                    let hovered = rect_contains(item_rect, ptr_x, ptr_y);
+                    let row_bg = if dev.connected {
+                        [accent[0], accent[1], accent[2], 54]
+                    } else if hovered {
+                        [255, 255, 255, 22]
+                    } else {
+                        [255, 255, 255, 10]
+                    };
+                    canvas.fill_rounded_rect_aa(18, iy, cc_w - 36, 28, 7, row_bg);
+                    let short_name: String = dev.name.chars().take(20).collect();
+                    canvas.draw_text_px(26, iy + 7, &short_name, 12.0, [240, 242, 252, 255]);
+                    let st = if dev.connected { "On" } else { "Pair" };
+                    let sw = canvas.measure_text_px(st, 11.0);
+                    canvas.draw_text_px(cc_w - 26 - sw, iy + 8, st, 11.0, [178, 186, 212, 240]);
+                    state.overlays.hit_regions.push((item_rect, OverlayClick::ControlConnectBt(idx)));
+                }
+            }
         }
 
         // Sound Volume Slider Card
-        canvas.fill_rounded_rect_aa(12, 136, cc_w - 24, 64, 12, [255, 255, 255, 14]);
+        let vol_y = 136 + extra_h;
+        canvas.fill_rounded_rect_aa(12, vol_y, cc_w - 24, 64, 12, [255, 255, 255, 14]);
         let vol_lbl = if state.panel.volume_muted {
             "Sound  (Muted)".to_string()
         } else {
             format!("Sound  ({}%)", state.panel.volume_percent)
         };
-        canvas.draw_text_px(24, 144, &vol_lbl, 12.0, [240, 242, 252, 255]);
+        canvas.draw_text_px(24, vol_y + 8, &vol_lbl, 12.0, [240, 242, 252, 255]);
         let track_x = 24;
-        let track_y = 171;
+        let track_y = vol_y + 35;
         let track_w = cc_w - 48;
         canvas.fill_rounded_rect_aa(track_x, track_y, track_w, 10, 5, [255, 255, 255, 28]);
         let fill_w = ((track_w as f32 * state.panel.volume_percent as f32 / 100.0).round() as i32).max(10);
@@ -1381,7 +1566,7 @@ pub fn render_top_overlays(
             let sx = track_x + (step * track_w / 100) - (track_w / 10);
             state.overlays.hit_regions.push((
                 Rectangle::new(
-                    (output_geo.loc.x + cc_x + sx.max(track_x), output_geo.loc.y + cc_y + 160).into(),
+                    (output_geo.loc.x + cc_x + sx.max(track_x), output_geo.loc.y + cc_y + vol_y + 24).into(),
                     ((track_w / 5).max(36), 28).into(),
                 ),
                 OverlayClick::ControlSetVolume(step),
@@ -1389,34 +1574,35 @@ pub fn render_top_overlays(
         }
 
         // Bottom quick actions: Minimize Effect + Open System Settings
+        let bot_y = 208 + extra_h;
         let min_lbl = match state.animations.minimize_effect {
             crate::animation::MinimizeEffect::MagicLamp => "FX: Genie",
             crate::animation::MinimizeEffect::ScaleGlide => "FX: Scale",
             crate::animation::MinimizeEffect::Off => "FX: Off",
         };
         let fx_rect = Rectangle::new(
-            (output_geo.loc.x + cc_x + 12, output_geo.loc.y + cc_y + 208).into(),
-            (132, 42).into(),
+            (output_geo.loc.x + cc_x + 12, output_geo.loc.y + cc_y + bot_y).into(),
+            (136, 42).into(),
         );
         let fx_bg = if rect_contains(fx_rect, ptr_x, ptr_y) {
             [255, 255, 255, 32]
         } else {
             [255, 255, 255, 16]
         };
-        canvas.fill_rounded_rect_aa(12, 208, 132, 42, 10, fx_bg);
-        canvas.draw_text_px(26, 222, min_lbl, 12.0, [240, 242, 252, 255]);
+        canvas.fill_rounded_rect_aa(12, bot_y, 136, 42, 10, fx_bg);
+        canvas.draw_text_px(28, bot_y + 14, min_lbl, 12.0, [240, 242, 252, 255]);
         state
             .overlays
             .hit_regions
             .push((fx_rect, OverlayClick::ControlCycleMinimize));
 
         let set_rect = Rectangle::new(
-            (output_geo.loc.x + cc_x + 152, output_geo.loc.y + cc_y + 208).into(),
-            (136, 42).into(),
+            (output_geo.loc.x + cc_x + 156, output_geo.loc.y + cc_y + bot_y).into(),
+            (142, 42).into(),
         );
         let set_alpha = if rect_contains(set_rect, ptr_x, ptr_y) { 250 } else { 225 };
-        canvas.fill_rounded_rect_aa(152, 208, 136, 42, 10, [accent[0], accent[1], accent[2], set_alpha]);
-        canvas.draw_text_px(176, 222, "Settings...", 12.0, contrast_fg(accent));
+        canvas.fill_rounded_rect_aa(156, bot_y, 142, 42, 10, [accent[0], accent[1], accent[2], set_alpha]);
+        canvas.draw_text_px(184, bot_y + 14, "Settings...", 12.0, contrast_fg(accent));
         state
             .overlays
             .hit_regions
