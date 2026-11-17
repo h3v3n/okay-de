@@ -819,7 +819,7 @@ pub fn render_settings_elements(
         .position(|t| *t == state.settings.active_tab)
         .unwrap_or(0);
     let target_tab_y = (HEADER_HEIGHT + 10 + active_idx as i32 * 38) as f32;
-    state.settings.anim_tab_y += (target_tab_y - state.settings.anim_tab_y) * 0.28;
+    state.settings.anim_tab_y += (target_tab_y - state.settings.anim_tab_y) * 0.55;
     if (target_tab_y - state.settings.anim_tab_y).abs() < 0.5 {
         state.settings.anim_tab_y = target_tab_y;
     }
@@ -873,25 +873,20 @@ pub fn render_settings_elements(
             );
             cy += 30;
 
-            // Row 1: 3 balanced Dock / Panel / Desktop toggles (162px each, 10px gap = 506px)
-            let pos_rect = Rectangle::new((wx + content_x, wy + cy).into(), (162, 34).into());
-            let pos_lbl = if state.panel.panel_top { "Top Bar" } else { "Bottom Bar" };
-            draw_setting_button(&mut canvas, content_x, cy, 162, 34, pos_lbl, state.panel.panel_top, accent);
-            state.settings.hit_regions.push((pos_rect, SettingsAction::TogglePanelPosition));
-
-            let ws_rect = Rectangle::new((wx + content_x + 172, wy + cy).into(), (162, 34).into());
-            draw_setting_button(&mut canvas, content_x + 172, cy, 162, 34, "Workspaces", state.panel.show_workspaces, accent);
+            // Row 1: 2 balanced Desktop / Workspace toggles (248px each + 10px gap = 506px)
+            let ws_rect = Rectangle::new((wx + content_x, wy + cy).into(), (248, 36).into());
+            draw_setting_button(&mut canvas, content_x, cy, 248, 36, "Workspaces", state.panel.show_workspaces, accent);
             state.settings.hit_regions.push((ws_rect, SettingsAction::ToggleShowWorkspaces));
 
-            let ic_rect = Rectangle::new((wx + content_x + 344, wy + cy).into(), (162, 34).into());
-            draw_setting_button(&mut canvas, content_x + 344, cy, 162, 34, "Desk Icons", state.overlays.show_desktop_icons, accent);
+            let ic_rect = Rectangle::new((wx + content_x + 258, wy + cy).into(), (248, 36).into());
+            draw_setting_button(&mut canvas, content_x + 258, cy, 248, 36, "Desktop Icons", state.overlays.show_desktop_icons, accent);
             state.settings.hit_regions.push((ic_rect, SettingsAction::ToggleDesktopIcons));
-            cy += 44;
+            cy += 46;
 
-            // Row 3: Minimize Animation Effect Selector (Magic Lamp Genie / ScaleGlide / Off)
-            let min_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 34).into());
+            // Row 2: Minimize Animation Effect Selector (Magic Lamp Genie / ScaleGlide / Off)
+            let min_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 36).into());
             let min_lbl = format!(
-                "Minimize Animation Effect:   {}   (click to cycle)",
+                "Minimize Effect:   {}   (click to cycle)",
                 state.animations.minimize_effect.label()
             );
             draw_setting_button(
@@ -899,7 +894,7 @@ pub fn render_settings_elements(
                 content_x,
                 cy,
                 506,
-                34,
+                36,
                 &min_lbl,
                 state.animations.enabled,
                 accent,
@@ -908,51 +903,45 @@ pub fn render_settings_elements(
                 .settings
                 .hit_regions
                 .push((min_rect, SettingsAction::CycleMinimizeEffect));
-            cy += 40;
+            cy += 46;
 
-            // Row 4: Animations Toggle + Speed Slider
-            let anim_rect = Rectangle::new((wx + content_x, wy + cy).into(), (230, 32).into());
-            let anim_lbl = if state.animations.enabled { "60+ FPS Animations: ON" } else { "Animations: OFF" };
-            draw_setting_button(&mut canvas, content_x, cy, 230, 32, anim_lbl, state.animations.enabled, accent);
-            state.settings.hit_regions.push((anim_rect, SettingsAction::ToggleAnimations));
+            // Row 3: Auto Refresh Sync Info + Animation Speed Controls
+            let max_refresh_mhz = state
+                .space
+                .outputs()
+                .filter_map(|o| o.current_mode())
+                .map(|m| m.refresh)
+                .max()
+                .unwrap_or(60_000);
+            let sync_lbl = if max_refresh_mhz >= 120_000 {
+                format!("Animations: 120 FPS ({:.0}Hz)", max_refresh_mhz as f64 / 1000.0)
+            } else {
+                format!("Animations: 60 FPS ({:.0}Hz)", max_refresh_mhz as f64 / 1000.0)
+            };
+            canvas.fill_rounded_rect_aa(content_x, cy, 248, 34, 10, [30, 33, 46, 235]);
+            canvas.draw_text_px(content_x + 12, cy + 9, &sync_lbl, 12.5, [215, 224, 245, 255]);
 
             let spd_txt = format!("Speed: {:.2}x", state.animations.speed);
-            canvas.draw_text_px(content_x + 244, cy + 8, &spd_txt, 13.0, [225, 228, 245, 255]);
-            let s_dec = Rectangle::new((wx + content_x + 365, wy + cy).into(), (32, 32).into());
-            canvas.fill_rounded_rect_aa(content_x + 365, cy, 32, 32, 5, [44, 44, 66, 255]);
-            canvas.draw_text_px(content_x + 377, cy + 7, "-", 14.0, [240, 242, 252, 255]);
+            canvas.draw_text_px(content_x + 262, cy + 9, &spd_txt, 13.0, [225, 228, 245, 255]);
+            let s_dec = Rectangle::new((wx + content_x + 426, wy + cy + 1).into(), (34, 32).into());
+            canvas.fill_rounded_rect_aa(content_x + 426, cy + 1, 34, 32, 8, [44, 46, 68, 255]);
+            canvas.draw_text_px(content_x + 439, cy + 8, "-", 14.0, [240, 242, 252, 255]);
             state.settings.hit_regions.push((s_dec, SettingsAction::AdjustAnimSpeed(-0.25)));
 
-            let s_inc = Rectangle::new((wx + content_x + 405, wy + cy).into(), (32, 32).into());
-            canvas.fill_rounded_rect_aa(content_x + 405, cy, 32, 32, 5, [44, 44, 66, 255]);
-            canvas.draw_text_px(content_x + 416, cy + 7, "+", 14.0, [240, 242, 252, 255]);
+            let s_inc = Rectangle::new((wx + content_x + 468, wy + cy + 1).into(), (34, 32).into());
+            canvas.fill_rounded_rect_aa(content_x + 468, cy + 1, 34, 32, 8, [44, 46, 68, 255]);
+            canvas.draw_text_px(content_x + 480, cy + 8, "+", 14.0, [240, 242, 252, 255]);
             state.settings.hit_regions.push((s_inc, SettingsAction::AdjustAnimSpeed(0.25)));
-            cy += 40;
+            cy += 44;
 
-            // Material You Dynamic Wallpaper Accent + M3 Expressive Mode
-            let dyn_rect = Rectangle::new((wx + content_x, wy + cy).into(), (248, 32).into());
+            // Row 4: M3 Expressive Surfaces
+            let exp_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 36).into());
             draw_setting_button(
                 &mut canvas,
                 content_x,
                 cy,
-                248,
-                32,
-                "Dynamic (From Wallpaper)",
-                state.panel.dynamic_accent,
-                accent,
-            );
-            state
-                .settings
-                .hit_regions
-                .push((dyn_rect, SettingsAction::ToggleDynamicAccent));
-
-            let exp_rect = Rectangle::new((wx + content_x + 258, wy + cy).into(), (248, 32).into());
-            draw_setting_button(
-                &mut canvas,
-                content_x + 258,
-                cy,
-                248,
-                32,
+                506,
+                36,
                 "M3 Expressive Surfaces",
                 state.panel.m3_expressive,
                 accent,
@@ -961,7 +950,7 @@ pub fn render_settings_elements(
                 .settings
                 .hit_regions
                 .push((exp_rect, SettingsAction::ToggleM3Expressive));
-            cy += 38;
+            cy += 46;
 
             // Row 6: Circular Accent Color Swatch Dots with Active Ring
             canvas.draw_text_px(content_x, cy, "Accent Color", 13.0, [215, 220, 238, 255]);
@@ -1892,23 +1881,21 @@ fn draw_setting_button(
     if w > 2 && h > 2 {
         canvas.fill_rounded_rect_aa(x + 1, y + 1, w - 2, h - 2, 9, [30, 33, 46, 235]);
     }
-    // Pill-shaped toggle switch (40x20)
+    // Pill-shaped animated toggle switch (40x20)
     let pill_w = 40;
     let pill_h = 20;
     let pill_x = x + w - pill_w - 10;
     let pill_y = y + (h - pill_h) / 2;
-    let pill_bg = if active {
-        [accent[0], accent[1], accent[2], 245]
-    } else {
-        [255, 255, 255, 42]
-    };
-    canvas.fill_rounded_rect_aa(pill_x, pill_y, pill_w, pill_h, 10, pill_bg);
-    let knob_cx = if active {
-        (pill_x + pill_w - 10) as f32
-    } else {
-        (pill_x + 10) as f32
-    };
-    canvas.fill_circle_aa(knob_cx, (pill_y + pill_h / 2) as f32, 7.5, [250, 252, 255, 255]);
+    crate::panel::draw_animated_toggle_pill(
+        canvas,
+        label,
+        pill_x,
+        pill_y,
+        pill_w,
+        pill_h,
+        active,
+        accent,
+    );
     canvas.draw_text_px(x + 12, y + (h - 14) / 2, label, 13.0, [238, 240, 252, 255]);
 }
 

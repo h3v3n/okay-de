@@ -804,41 +804,75 @@ pub fn draw_tiling_glyph(canvas: &mut Canvas, cx: f32, cy: f32, scale: f32, colo
 
 /// Crisp vector Notification Bell centered at `(cx, cy)`.
 pub fn draw_bell_glyph(canvas: &mut Canvas, cx: f32, cy: f32, scale: f32, color: [u8; 4]) {
-    canvas.fill_circle_aa(cx, cy - 1.5 * scale, 4.0 * scale, color);
-    let bw = (9.5 * scale).round().max(5.0) as i32;
-    let bh = (4.5 * scale).round().max(3.0) as i32;
-    canvas.fill_rounded_rect_aa((cx - bw as f32 * 0.5).round() as i32, (cy - 1.0 * scale).round() as i32, bw, bh, 2, color);
-    let base_w = (12.0 * scale).round().max(7.0) as i32;
-    canvas.fill_rounded_rect_aa((cx - base_w as f32 * 0.5).round() as i32, (cy + 2.5 * scale).round() as i32, base_w, (2.2 * scale).round().max(2.0) as i32, 1, color);
-    canvas.fill_circle_aa(cx, cy + 5.2 * scale, 1.5 * scale, color);
+    let s = scale.clamp(0.7, 2.0);
+    let cxi = cx.round() as i32;
+    let cyi = cy.round() as i32;
+    // Top knob
+    canvas.fill_circle_aa(cxi as f32, (cyi as f32) - 5.2 * s, 1.3 * s, color);
+    // Bell dome + flared skirt using non-overlapping scanlines
+    let top_y = (cyi as f32 - 4.2 * s).round() as i32;
+    let bot_y = (cyi as f32 + 2.8 * s).round() as i32;
+    for py in top_y..=bot_y {
+        let t = ((py - top_y) as f32 / ((bot_y - top_y).max(1) as f32)).clamp(0.0, 1.0);
+        let half_w = if t < 0.55 {
+            // Dome curve
+            (4.2 * s) * (1.0 - (1.0 - t / 0.55).powi(2)).sqrt()
+        } else if t < 0.82 {
+            // Body
+            4.2 * s
+        } else {
+            // Flared rim
+            4.2 * s + ((t - 0.82) / 0.18) * 1.8 * s
+        };
+        let x0 = (cx - half_w).round() as i32;
+        let x1 = (cx + half_w).round() as i32;
+        if x1 > x0 {
+            canvas.fill_rect_blend(x0, py, x1 - x0, 1, color);
+        }
+    }
+    // Bottom clapper
+    canvas.fill_circle_aa(cxi as f32, (cyi as f32) + 4.4 * s, 1.45 * s, color);
 }
 
 /// Crisp vector Speaker icon with sound waves (or mute cross) centered vertically at `cy`.
 pub fn draw_speaker_glyph(canvas: &mut Canvas, left_x: f32, cy: f32, muted: bool, scale: f32, color: [u8; 4]) {
-    let bx = left_x.round() as i32;
-    let by = (cy - 2.5 * scale).round() as i32;
-    canvas.fill_rounded_rect_aa(bx, by, (3.8 * scale).round().max(2.0) as i32, (5.0 * scale).round().max(3.0) as i32, 1, color);
-    draw_thick_line(canvas, left_x + 3.0 * scale, cy - 2.0 * scale, left_x + 6.5 * scale, cy - 4.8 * scale, 1.0 * scale, color);
-    draw_thick_line(canvas, left_x + 6.5 * scale, cy - 4.8 * scale, left_x + 6.5 * scale, cy + 4.8 * scale, 1.0 * scale, color);
-    draw_thick_line(canvas, left_x + 3.0 * scale, cy + 2.0 * scale, left_x + 6.5 * scale, cy + 4.8 * scale, 1.0 * scale, color);
+    let s = scale.clamp(0.7, 2.0);
+    let lx = left_x.round();
+    let cyi = cy.round();
+    // Solid single-pass speaker body + cone (no overlapping alpha)
+    let x_start = lx as i32;
+    let x_mid = (lx + 3.2 * s).round() as i32;
+    let x_end = (lx + 7.2 * s).round() as i32;
+    for px in x_start..=x_end {
+        let half_h = if px <= x_mid {
+            2.2 * s
+        } else {
+            let t = (px - x_mid) as f32 / (x_end - x_mid).max(1) as f32;
+            2.2 * s + t * 3.0 * s
+        };
+        let y0 = (cyi - half_h).round() as i32;
+        let y1 = (cyi + half_h).round() as i32;
+        if y1 > y0 {
+            canvas.fill_rect_blend(px, y0, 1, y1 - y0, color);
+        }
+    }
     if muted {
-        let mut xcol = color;
-        xcol[0] = 255; xcol[1] = 108; xcol[2] = 104;
-        draw_thick_line(canvas, left_x + 9.0 * scale, cy - 2.8 * scale, left_x + 13.5 * scale, cy + 2.8 * scale, 0.9 * scale, xcol);
-        draw_thick_line(canvas, left_x + 13.5 * scale, cy - 2.8 * scale, left_x + 9.0 * scale, cy + 2.8 * scale, 0.9 * scale, xcol);
+        let xcol = [255, 108, 104, color[3]];
+        draw_thick_line(canvas, lx + 9.2 * s, cyi - 2.8 * s, lx + 13.4 * s, cyi + 2.8 * s, 0.9 * s, xcol);
+        draw_thick_line(canvas, lx + 13.4 * s, cyi - 2.8 * s, lx + 9.2 * s, cyi + 2.8 * s, 0.9 * s, xcol);
     } else {
-        draw_arc_aa(canvas, left_x + 6.0 * scale, cy, 4.0 * scale, -48.0, 48.0, 0.85 * scale, color);
-        draw_arc_aa(canvas, left_x + 6.0 * scale, cy, 6.8 * scale, -52.0, 52.0, 0.85 * scale, color);
+        draw_arc_aa(canvas, lx + 6.4 * s, cyi, 3.8 * s, -44.0, 44.0, 0.8 * s, color);
+        draw_arc_aa(canvas, lx + 6.4 * s, cyi, 6.4 * s, -48.0, 48.0, 0.8 * s, color);
     }
 }
 
 /// Crisp vector Battery icon with fill level at `(x, cy)`.
 pub fn draw_battery_glyph(canvas: &mut Canvas, x: i32, cy: i32, percent: i32, color: [u8; 4]) {
-    let bw = 15;
-    let bh = 9;
+    let bw = 16;
+    let bh = 10;
     let by = cy - bh / 2;
-    canvas.fill_rounded_rect_aa(x, by, bw, bh, 2, [color[0], color[1], color[2], 70]);
-    canvas.fill_rounded_rect_aa(x + bw, by + 2, 2, 5, 1, [color[0], color[1], color[2], 180]);
+    canvas.fill_rounded_rect_aa(x, by, bw, bh, 2, [color[0], color[1], color[2], 64]);
+    canvas.fill_rounded_rect_aa(x + bw, by + 3, 2, 4, 1, [color[0], color[1], color[2], 185]);
     let fill_w = ((bw - 4) * percent.clamp(0, 100) / 100).max(2);
     let fill_col = if percent <= 20 { [255, 102, 96, 255] } else { [92, 224, 146, 255] };
     canvas.fill_rounded_rect_aa(x + 2, by + 2, fill_w, bh - 4, 1, fill_col);

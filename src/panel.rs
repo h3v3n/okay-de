@@ -961,6 +961,10 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                     })
                     .cloned();
                 if let Some(win) = found {
+                    let win_ws = state.workspaces.workspace_of(&win_id);
+                    if win_ws != state.workspaces.active {
+                        state.switch_workspace(win_ws);
+                    }
                     let is_focused = state.focused_window().as_ref() == Some(&win);
                     let is_min = state.workspaces.is_minimized(&win);
                     if is_min || is_focused {
@@ -1156,7 +1160,7 @@ pub fn render_panel_elements(
         );
         if state.panel.launcher_open {
             mb.fill_rounded_rect_aa(mx, 3, logo_w, mb_h - 6, 7, [accent[0], accent[1], accent[2], 62]);
-            mb.stroke_rect(mx, 3, logo_w, mb_h - 6, [accent[0], accent[1], accent[2], 145]);
+            mb.stroke_rounded_rect_aa(mx, 3, logo_w, mb_h - 6, 7, [accent[0], accent[1], accent[2], 145]);
         } else if rect_contains(logo_global, pointer_x, pointer_y) {
             mb.fill_rounded_rect_aa(mx, 3, logo_w, mb_h - 6, 7, [255, 255, 255, 30]);
         }
@@ -1203,38 +1207,40 @@ pub fn render_panel_elements(
         }
 
         // Optional compact Workspace pills in menu bar (1..9) if enabled
-        if state.panel.show_workspaces && mx + 200 < mb_w - 340 {
+        if state.panel.show_workspaces && mx + 220 < mb_w - 300 {
             mx += 10;
             for ws in 1..=9 {
-                let ww = 18;
+                let ww = 22;
                 let is_active = state.workspaces.active == ws;
                 let is_occ = occupied_workspaces[ws - 1];
                 let ws_rect = Rectangle::new(
-                    (output_geo.loc.x + mx, output_geo.loc.y + 4).into(),
-                    (ww, mb_h - 8).into(),
+                    (output_geo.loc.x + mx, output_geo.loc.y + 3).into(),
+                    (ww, mb_h - 6).into(),
                 );
                 if is_active {
                     mb.fill_rounded_rect_aa(
                         mx,
-                        4,
+                        3,
                         ww,
-                        mb_h - 8,
-                        6,
-                        [accent[0], accent[1], accent[2], 78],
+                        mb_h - 6,
+                        7,
+                        [accent[0], accent[1], accent[2], 195],
                     );
                 } else if rect_contains(ws_rect, pointer_x, pointer_y) {
-                    mb.fill_rounded_rect_aa(mx, 4, ww, mb_h - 8, 6, [255, 255, 255, 24]);
+                    mb.fill_rounded_rect_aa(mx, 3, ww, mb_h - 6, 7, [255, 255, 255, 30]);
+                } else if is_occ {
+                    mb.fill_rounded_rect_aa(mx, 3, ww, mb_h - 6, 7, [255, 255, 255, 14]);
                 }
                 let wfg = if is_active {
-                    [255, 255, 255, 255]
+                    contrast_fg(accent)
                 } else if is_occ {
-                    [198, 204, 224, 235]
+                    [220, 224, 240, 240]
                 } else {
-                    [118, 124, 146, 180]
+                    [130, 136, 158, 190]
                 };
-                mb.draw_text_px(mx + 5, 7, &ws.to_string(), 11.5, wfg);
+                mb.draw_text_px(mx + 7, 7, &ws.to_string(), 11.5, wfg);
                 state.panel.hit_regions.push((ws_rect, ClickTarget::Workspace(ws)));
-                mx += ww + 2;
+                mx += ww + 3;
             }
         }
 
@@ -1379,14 +1385,9 @@ pub fn render_panel_elements(
         mb.fill_rounded_rect_aa(tray_x, 4, tray_w, mb_h - 8, 6, tray_bg);
         let acx = (tray_x + tray_w / 2) as f32;
         let acy = (mb_h / 2) as f32;
-        let chev_dir = if state.panel.tray_open { -1.0 } else { 1.0 };
-        for i in 0..=8 {
-            let t = i as f32 / 8.0;
-            let dx = -4.5 + t * 4.5;
-            let dy = (-2.0 + t * 4.0) * chev_dir;
-            mb.fill_circle_aa(acx + dx, acy + dy, 1.0, [234, 238, 250, 250]);
-            mb.fill_circle_aa(acx - dx, acy + dy, 1.0, [234, 238, 250, 250]);
-        }
+        let dy_off = if state.panel.tray_open { -2.2 } else { 2.2 };
+        crate::icons::draw_thick_line(&mut mb, acx - 4.0, acy - dy_off, acx, acy + dy_off, 1.0, [234, 238, 250, 250]);
+        crate::icons::draw_thick_line(&mut mb, acx, acy + dy_off, acx + 4.0, acy - dy_off, 1.0, [234, 238, 250, 250]);
         state
             .panel
             .hit_regions
@@ -1926,36 +1927,36 @@ pub fn render_panel_elements(
                         ("Keyboard Shortcuts", "", ClickTarget::OpenSettingsTab(crate::settings::SettingsTab::Shortcuts), false),
                     ],
                 };
-                let mw = 258;
+                let mw = 286;
                 let seps = rows.iter().filter(|(_, _, _, s)| *s).count() as i32;
-                let mh = 16 + rows.len() as i32 * 30 + seps * 8;
+                let mh = 20 + rows.len() as i32 * 35 + seps * 10;
                 let mx = anchor_x.clamp(8, (output_geo.size.w - mw - 8).max(8));
-                let my = PANEL_HEIGHT + 6;
+                let my = PANEL_HEIGHT + 8;
                 let mut mcan = Canvas::new(mw, mh);
                 mcan.fill_glass_panel(0, 0, mw, mh, 16);
 
-                let mut iy = 8;
+                let mut iy = 10;
                 for (lbl, hint, act, sep_after) in rows {
                     let r_rect = Rectangle::new(
-                        (output_geo.loc.x + mx + 8, output_geo.loc.y + my + iy).into(),
-                        (mw - 16, 28).into(),
+                        (output_geo.loc.x + mx + 10, output_geo.loc.y + my + iy).into(),
+                        (mw - 20, 32).into(),
                     );
                     let hov = rect_contains(r_rect, pointer_x, pointer_y);
                     if hov {
-                        mcan.fill_rounded_rect_aa(8, iy, mw - 16, 28, 7, [accent[0], accent[1], accent[2], 220]);
+                        mcan.fill_rounded_rect_aa(10, iy, mw - 20, 32, 9, [accent[0], accent[1], accent[2], 225]);
                     }
-                    let fg = if hov { contrast_fg(accent) } else { [238, 240, 252, 255] };
-                    let hfg = if hov { fg } else { [154, 162, 190, 230] };
-                    mcan.draw_text_px(16, iy + 7, lbl, 12.0, fg);
+                    let fg = if hov { contrast_fg(accent) } else { [240, 242, 254, 255] };
+                    let hfg = if hov { fg } else { [156, 164, 192, 230] };
+                    mcan.draw_text_px(20, iy + 9, lbl, 12.5, fg);
                     if !hint.is_empty() {
-                        let hw = mcan.measure_text_px(hint, 10.5);
-                        mcan.draw_text_px(mw - 16 - hw, iy + 8, hint, 10.5, hfg);
+                        let hw = mcan.measure_text_px(hint, 11.0);
+                        mcan.draw_text_px(mw - 20 - hw, iy + 10, hint, 11.0, hfg);
                     }
                     state.panel.hit_regions.push((r_rect, act));
-                    iy += 30;
+                    iy += 35;
                     if sep_after {
-                        mcan.fill_rect_blend(14, iy + 2, mw - 28, 1, [255, 255, 255, 22]);
-                        iy += 8;
+                        mcan.fill_rect_blend(16, iy + 4, mw - 32, 1, [255, 255, 255, 24]);
+                        iy += 10;
                     }
                 }
 
@@ -2213,11 +2214,12 @@ pub fn render_panel_elements(
         let search_w = menu_w - 40;
         menu_canvas.fill_rounded_rect_aa(20, 44, search_w, 34, 10, [255, 255, 255, 18]);
         if !state.panel.search_query.is_empty() {
-            menu_canvas.stroke_rect(
+            menu_canvas.stroke_rounded_rect_aa(
                 20,
                 44,
                 search_w,
                 34,
+                10,
                 [accent[0], accent[1], accent[2], 160],
             );
         }
@@ -2256,11 +2258,12 @@ pub fn render_panel_elements(
             };
             menu_canvas.fill_rounded_rect_aa(cx, cy, cell_w, cell_h, 12, cell_bg);
             if hovered {
-                menu_canvas.stroke_rect(
+                menu_canvas.stroke_rounded_rect_aa(
                     cx,
                     cy,
                     cell_w,
                     cell_h,
+                    12,
                     [accent[0], accent[1], accent[2], 150],
                 );
             }
@@ -3079,16 +3082,48 @@ impl Canvas {
         }
     }
 
+    pub fn stroke_rounded_rect_aa(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        radius: i32,
+        color: [u8; 4],
+    ) {
+        if w <= 2 || h <= 2 || color[3] == 0 {
+            return;
+        }
+        let r = (radius as f32).min((w.min(h) as f32) * 0.5).max(0.0);
+        let x0 = (x - 1).clamp(0, self.width);
+        let y0 = (y - 1).clamp(0, self.height);
+        let x1 = (x + w + 1).clamp(0, self.width);
+        let y1 = (y + h + 1).clamp(0, self.height);
+        let cx = x as f32 + w as f32 * 0.5;
+        let cy = y as f32 + h as f32 * 0.5;
+        let hx = (w as f32 * 0.5 - r).max(0.0);
+        let hy = (h as f32 * 0.5 - r).max(0.0);
+        for py in y0..y1 {
+            for px in x0..x1 {
+                let dx = (px as f32 + 0.5 - cx).abs() - hx;
+                let dy = (py as f32 + 0.5 - cy).abs() - hy;
+                let dist = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt() + dx.max(dy).min(0.0) - r;
+                let ring = (1.0 - (dist + 0.5).abs()).clamp(0.0, 1.0);
+                if ring > 0.01 {
+                    let a = (color[3] as f32 * ring).round() as u8;
+                    self.blend_pixel(px, py, [color[0], color[1], color[2], a]);
+                }
+            }
+        }
+    }
+
     /// Draws a clean Material 3 tonal surface panel tinted by the active Material You palette
-    /// with subtle 1.5% tonal grain noise, soft drop shadow, and 1px `rgba(255, 255, 255, 0.08)` outline.
+    /// with subtle 1.5% tonal grain noise and 1px `rgba(255, 255, 255, 0.08)` outline.
     pub fn fill_glass_panel(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32) {
         if w <= 0 || h <= 0 {
             return;
         }
         let pal = active_m3_palette();
-        // Multi-layer analytical soft drop shadow
-        self.fill_rounded_rect_aa(x - 2, y + 3, w + 4, h + 4, radius + 2, [0, 0, 0, 48]);
-        self.fill_rounded_rect_aa(x - 1, y + 1, w + 2, h + 2, radius + 1, [0, 0, 0, 72]);
         // Crisp 1px rgba(255, 255, 255, 0.08) + tonal outline border
         self.fill_rounded_rect_aa(x, y, w, h, radius, [255, 255, 255, 22]);
         // Clean Material 3 tonal surface body
@@ -3225,4 +3260,45 @@ impl Canvas {
             }
         });
     }
+}
+
+/// Draws a pill-shaped toggle switch with smooth animated left-to-right knob & track transition.
+pub fn draw_animated_toggle_pill(
+    canvas: &mut Canvas,
+    key: &str,
+    pill_x: i32,
+    pill_y: i32,
+    pill_w: i32,
+    pill_h: i32,
+    active: bool,
+    accent: [u8; 3],
+) {
+    thread_local! {
+        static TOGGLE_PROGRESS: std::cell::RefCell<std::collections::HashMap<String, f32>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    let target = if active { 1.0f32 } else { 0.0f32 };
+    let t = TOGGLE_PROGRESS.with(|map| {
+        let mut borrow = map.borrow_mut();
+        let entry = borrow.entry(key.to_string()).or_insert(target);
+        *entry += (target - *entry) * 0.28;
+        if (target - *entry).abs() < 0.01 {
+            *entry = target;
+        }
+        *entry
+    });
+
+    let r = (pill_h / 2).max(4);
+    let track_r = (255.0 * (1.0 - t) + accent[0] as f32 * t).round() as u8;
+    let track_g = (255.0 * (1.0 - t) + accent[1] as f32 * t).round() as u8;
+    let track_b = (255.0 * (1.0 - t) + accent[2] as f32 * t).round() as u8;
+    let track_a = (42.0 * (1.0 - t) + 245.0 * t).round() as u8;
+    canvas.fill_rounded_rect_aa(pill_x, pill_y, pill_w, pill_h, r, [track_r, track_g, track_b, track_a]);
+
+    let pad = (pill_h as f32 * 0.5).max(6.0);
+    let min_x = pill_x as f32 + pad;
+    let max_x = (pill_x + pill_w) as f32 - pad;
+    let knob_cx = min_x + (max_x - min_x) * t;
+    let knob_r = (pill_h as f32 * 0.375).max(4.5);
+    canvas.fill_circle_aa(knob_cx, (pill_y + pill_h / 2) as f32, knob_r, [250, 252, 255, 255]);
 }

@@ -77,6 +77,8 @@ impl MinimizeEffect {
 pub struct WindowAnimation {
     /// `0.0 -> 1.0` when opening a new window.
     pub open_progress: f32,
+    /// Subtle blur/frosted veil alpha over the opening window that fades out after `open_progress` reaches `1.0`.
+    pub open_blur_alpha: f32,
     /// `0.0` = normal, `1.0` = fully minimized into taskbar button.
     pub minimize_progress: f32,
     /// Direction of minimize transition (`true` = minimizing to 1.0, `false` = restoring to 0.0).
@@ -95,6 +97,7 @@ impl Default for WindowAnimation {
     fn default() -> Self {
         Self {
             open_progress: 0.0,
+            open_blur_alpha: 0.0,
             minimize_progress: 0.0,
             minimizing: false,
             start_rect: Rectangle::from_size((800, 500).into()),
@@ -185,6 +188,7 @@ impl AnimationManager {
     pub fn on_window_opened(&mut self, id: ObjectId, accent_rgb: [u8; 3]) {
         let mut anim = WindowAnimation::default();
         anim.open_progress = if self.enabled { 0.0 } else { 1.0 };
+        anim.open_blur_alpha = if self.enabled { 1.0 } else { 0.0 };
         anim.accent_rgb = accent_rgb;
         self.windows.insert(id, anim);
     }
@@ -340,7 +344,9 @@ impl AnimationManager {
 
         for anim in self.windows.values_mut() {
             if anim.open_progress < 1.0 {
-                anim.open_progress = (anim.open_progress + dt * 5.0).min(1.0);
+                anim.open_progress = (anim.open_progress + dt * 3.8).min(1.0);
+            } else if anim.open_blur_alpha > 0.0 {
+                anim.open_blur_alpha = (anim.open_blur_alpha - dt * 2.4).max(0.0);
             }
 
             anim.move_offset.x *= decay;

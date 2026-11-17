@@ -960,8 +960,13 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
             return;
         }
 
-        // Right-click (0x111) on empty desktop -> Open Desktop Context Menu
-        if button == 0x111 && !super_held && crate::overlays::handle_desktop_right_click(state, pos) {
+        // Right-click (0x111) on bare empty desktop -> Open Desktop Context Menu (never over windows/surfaces)
+        if button == 0x111
+            && !super_held
+            && state.window_under(pos).is_none()
+            && state.surface_under(pos).is_none()
+            && crate::overlays::handle_desktop_right_click(state, pos)
+        {
             return;
         }
 

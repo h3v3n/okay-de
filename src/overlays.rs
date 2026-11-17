@@ -115,6 +115,8 @@ pub struct OverlaysState {
     pub rubberband_start: Option<Point<f64, Logical>>,
     pub rubberband_current: Option<Point<f64, Logical>>,
     pub dragging_icon: Option<usize>,
+    pub drag_anchor_pointer: Option<Point<f64, Logical>>,
+    pub drag_offset: Point<i32, Logical>,
     pub creating_folder: Option<CreatingFolderState>,
     pub renaming_icon: Option<(usize, String)>,
     hit_regions: Vec<(Rectangle<i32, Logical>, OverlayClick)>,
@@ -204,6 +206,8 @@ impl Default for OverlaysState {
             rubberband_start: None,
             rubberband_current: None,
             dragging_icon: None,
+            drag_anchor_pointer: None,
+            drag_offset: Point::from((0, 0)),
             creating_folder: None,
             renaming_icon: None,
             hit_regions: Vec::new(),
@@ -653,73 +657,12 @@ pub fn handle_overlays_motion(state: &mut OkayState, pos: Point<f64, Logical>) -
             return true;
         }
     }
-    if let Some(idx) = state.overlays.dragging_icon {
-        let top_margin = if state.panel.dock_mode || state.panel.panel_top {
-            PANEL_HEIGHT + 18
-        } else {
-            20
-        };
-        let target_col = ((pos.x.round() as i32 - 20).max(0) / 98).clamp(0, 14);
-        let target_row = ((pos.y.round() as i32 - top_margin).max(0) / 94).clamp(0, 8);
-        let Some((anchor_col, anchor_row)) = state
-            .overlays
-            .desktop_icons
-            .get(idx)
-            .map(|ic| (ic.grid_col, ic.grid_row))
-        else {
-            return true;
-        };
-        let dcol = target_col - anchor_col;
-        let drow = target_row - anchor_row;
-        if dcol == 0 && drow == 0 {
-            return true;
-        }
-
-        let moving: Vec<usize> = if state.overlays.selected_icons.contains(&idx)
-            && !state.overlays.selected_icons.is_empty()
-        {
-            state.overlays.selected_icons.clone()
-        } else {
-            vec![idx]
-        };
-
-        let mut can_move = true;
-        for &m_idx in &moving {
-            let Some(ic) = state.overlays.desktop_icons.get(m_idx) else {
-                can_move = false;
-                break;
-            };
-            let nc = ic.grid_col + dcol;
-            let nr = ic.grid_row + drow;
-            if !(0..=14).contains(&nc) || !(0..=8).contains(&nr) {
-                can_move = false;
-                break;
-            }
-            let hits_other = state
-                .overlays
-                .desktop_icons
-                .iter()
-                .enumerate()
-                .any(|(i, other)| !moving.contains(&i) && other.grid_col == nc && other.grid_row == nr)
-                || state
-                    .overlays
-                    .creating_folder
-                    .as_ref()
-                    .map(|cf| cf.grid_col == nc && cf.grid_row == nr)
-                    .unwrap_or(false);
-            if hits_other {
-                can_move = false;
-                break;
-            }
-        }
-
-        if can_move {
-            for m_idx in moving {
-                if let Some(icon) = state.overlays.desktop_icons.get_mut(m_idx) {
-                    icon.grid_col += dcol;
-                    icon.grid_row += drow;
-                }
-            }
+    if state.overlays.dragging_icon.is_some() {
+        if let Some(anchor) = state.overlays.drag_anchor_pointer {
+            state.overlays.drag_offset = Point::from((
+                (pos.x - anchor.x).round() as i32,
+                (pos.y - anchor.y).round() as i32,
+            ));
         }
         return true;
     }
@@ -781,7 +724,58 @@ pub fn handle_overlays_release(state: &mut OkayState) -> bool {
         state.overlays.cc_dragging_volume = false;
         return true;
     }
-    if state.overlays.dragging_icon.take().is_some() {
+    if let Some(idx) = state.overlays.dragging_icon.take() {
+        let off = state.overlays.drag_offset;
+        state.overlays.drag_anchor_pointer = None;
+        state.overlays.drag_offset = Point::from((0, 0));
+        let dcol = (off.x as f32 / 98.0).round() as i32;
+        let drow = (off.y as f32 / 94.0).round() as i32;
+        if dcol != 0 || drow != 0 {
+            let moving: Vec<usize> = if state.overlays.selected_icons.contains(&idx)
+                && !state.overlays.selected_icons.is_empty()
+            {
+                state.overlays.selected_icons.clone()
+            } else {
+                vec![idx]
+            };
+            let mut can_move = true;
+            for &m_idx in &moving {
+                let Some(ic) = state.overlays.desktop_icons.get(m_idx) else {
+                    can_move = false;
+                    break;
+                };
+                let nc = ic.grid_col + dcol;
+                let nr = ic.grid_row + drow;
+                if !(0..=14).contains(&nc) || !(0..=8).contains(&nr) {
+                    can_move = false;
+                    break;
+                }
+                let hits_other = state
+                    .overlays
+                    .desktop_icons
+                    .iter()
+                    .enumerate()
+                    .any(|(i, other)| !moving.contains(&i) && other.grid_col == nc && other.grid_row == nr)
+                    || state
+                        .overlays
+                        .creating_folder
+                        .as_ref()
+                        .map(|cf| cf.grid_col == nc && cf.grid_row == nr)
+                        .unwrap_or(false);
+                if hits_other {
+                    can_move = false;
+                    break;
+                }
+            }
+            if can_move {
+                for m_idx in moving {
+                    if let Some(icon) = state.overlays.desktop_icons.get_mut(m_idx) {
+                        icon.grid_col += dcol;
+                        icon.grid_row += drow;
+                    }
+                }
+            }
+        }
         return true;
     }
     if state.overlays.rubberband_start.take().is_some() {
@@ -1092,6 +1086,8 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
                     state.overlays.selected_icons.push(idx);
                 }
                 state.overlays.dragging_icon = Some(idx);
+                state.overlays.drag_anchor_pointer = Some(pos);
+                state.overlays.drag_offset = Point::from((0, 0));
 
                 let now = std::time::Instant::now();
                 let is_double_click = state
@@ -1513,7 +1509,7 @@ pub fn render_top_overlays(
                 canvas.fill_glass_panel(cx, cy, card_w, card_h, 14);
                 canvas.fill_rounded_rect_aa(cx + 2, cy + 2, card_w - 4, card_h - 4, 12, card_bg);
                 if is_focused || hovered {
-                    canvas.stroke_rect(cx, cy, card_w, card_h, [accent[0], accent[1], accent[2], 210]);
+                    canvas.stroke_rounded_rect_aa(cx, cy, card_w, card_h, 14, [accent[0], accent[1], accent[2], 210]);
                 }
 
                 let kind = crate::icons::VectorIconKind::from_hint(&title, &title, false);
@@ -1569,15 +1565,15 @@ pub fn render_top_overlays(
         }
     }
 
-    // 2. Right-Click Desktop Context Menu (Polished Dark Glass)
+    // 2. Right-Click Desktop Context Menu (Polished M3 Expressive Dark Glass)
     if let Some(menu_pos) = state.overlays.context_menu_pos {
-        let mw = 264;
-        let mh = 232;
+        let mw = 288;
+        let mh = 258;
         let mx = (menu_pos.x - output_geo.loc.x).clamp(8, (output_geo.size.w - mw - 8).max(8));
         let my = (menu_pos.y - output_geo.loc.y).clamp(8, (output_geo.size.h - mh - 8).max(8));
 
         let mut canvas = Canvas::new(mw, mh);
-        canvas.fill_glass_panel(0, 0, mw, mh, 16);
+        canvas.fill_glass_panel(0, 0, mw, mh, 18);
 
         // Label, optional shortcut hint, action, draw_separator_after
         let items: [(&str, &str, OverlayClick, bool); 6] = [
@@ -1589,11 +1585,11 @@ pub fn render_top_overlays(
             ("OKay Settings", "Super+I", OverlayClick::ContextOkaySettings, false),
         ];
 
-        let mut iy = 10;
+        let mut iy = 12;
         for (label, hint, act, sep_after) in items {
             let row_rect = Rectangle::new(
-                (output_geo.loc.x + mx + 8, output_geo.loc.y + my + iy).into(),
-                (mw - 16, 30).into(),
+                (output_geo.loc.x + mx + 10, output_geo.loc.y + my + iy).into(),
+                (mw - 20, 34).into(),
             );
             let hovered = rect_contains(
                 row_rect,
@@ -1601,28 +1597,28 @@ pub fn render_top_overlays(
                 state.pointer_location.y.round() as i32,
             );
             if hovered {
-                canvas.fill_rounded_rect_aa(8, iy, mw - 16, 30, 6, [accent[0], accent[1], accent[2], 225]);
+                canvas.fill_rounded_rect_aa(10, iy, mw - 20, 34, 9, [accent[0], accent[1], accent[2], 225]);
             }
             let fg = if hovered {
                 contrast_fg(accent)
             } else {
-                [238, 240, 252, 255]
+                [240, 242, 254, 255]
             };
             let hint_fg = if hovered {
                 contrast_fg(accent)
             } else {
-                [150, 158, 185, 220]
+                [154, 162, 190, 225]
             };
-            canvas.draw_text_px(18, iy + 7, label, 12.5, fg);
+            canvas.draw_text_px(20, iy + 9, label, 13.0, fg);
             if !hint.is_empty() {
                 let hw = canvas.measure_text_px(hint, 11.0);
-                canvas.draw_text_px(mw - 18 - hw, iy + 8, hint, 11.0, hint_fg);
+                canvas.draw_text_px(mw - 20 - hw, iy + 10, hint, 11.0, hint_fg);
             }
             state.overlays.hit_regions.push((row_rect, act));
-            iy += 32;
+            iy += 36;
             if sep_after {
-                canvas.fill_rect(14, iy + 3, mw - 28, 1, [255, 255, 255, 24]);
-                iy += 8;
+                canvas.fill_rect_blend(16, iy + 4, mw - 32, 1, [255, 255, 255, 24]);
+                iy += 10;
             }
         }
 
@@ -1818,29 +1814,6 @@ pub fn render_top_overlays(
 
         if let Some(elem) = upload_canvas(&canvas, (px, py), renderer, scale) {
             elements.push(elem);
-        }
-    }
-
-    // 2c. Desktop Rubber-Band Selection Box
-    if let (Some(start), Some(cur)) = (
-        state.overlays.rubberband_start,
-        state.overlays.rubberband_current,
-    ) {
-        let sx = start.x.round() as i32;
-        let sy = start.y.round() as i32;
-        let cx = cur.x.round() as i32;
-        let cy = cur.y.round() as i32;
-        let rx = (sx.min(cx) - output_geo.loc.x).max(0);
-        let ry = (sy.min(cy) - output_geo.loc.y).max(0);
-        let rw = (sx - cx).abs().max(2);
-        let rh = (sy - cy).abs().max(2);
-        if rw >= 4 && rh >= 4 {
-            let mut canvas = Canvas::new(rw, rh);
-            canvas.fill_rounded_rect_aa(0, 0, rw, rh, 6, [100, 160, 255, 56]);
-            canvas.stroke_rect(0, 0, rw, rh, [120, 180, 255, 210]);
-            if let Some(elem) = upload_canvas(&canvas, (rx, ry), renderer, scale) {
-                elements.push(elem);
-            }
         }
     }
 
@@ -2482,6 +2455,44 @@ pub fn render_top_overlays(
 }
 
 /// Renders the Desktop Shortcut/File Icons Grid directly above the desktop wallpaper.
+/// Renders the desktop rubber-band selection box underneath windows.
+pub fn render_desktop_rubberband(
+    state: &OkayState,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+    scale: Scale<f64>,
+) -> Option<OkayRenderElements> {
+    let is_primary = state
+        .space
+        .outputs()
+        .next()
+        .map(|o| o == output)
+        .unwrap_or(false);
+    if !is_primary {
+        return None;
+    }
+    let output_geo = state.space.output_geometry(output)?;
+    let (start, cur) = (
+        state.overlays.rubberband_start?,
+        state.overlays.rubberband_current?,
+    );
+    let sx = start.x.round() as i32;
+    let sy = start.y.round() as i32;
+    let cx = cur.x.round() as i32;
+    let cy = cur.y.round() as i32;
+    let rx = (sx.min(cx) - output_geo.loc.x).max(0);
+    let ry = (sy.min(cy) - output_geo.loc.y).max(0);
+    let rw = (sx - cx).abs().max(2);
+    let rh = (sy - cy).abs().max(2);
+    if rw < 4 || rh < 4 {
+        return None;
+    }
+    let mut canvas = Canvas::new(rw, rh);
+    canvas.fill_rounded_rect_aa(0, 0, rw, rh, 8, [100, 160, 255, 52]);
+    canvas.stroke_rounded_rect_aa(0, 0, rw, rh, 8, [130, 188, 255, 210]);
+    upload_canvas(&canvas, (rx, ry), renderer, scale)
+}
+
 pub fn render_desktop_icons(
     state: &mut OkayState,
     renderer: &mut GlesRenderer,
@@ -2512,24 +2523,27 @@ pub fn render_desktop_icons(
     };
 
     for (idx, icon) in state.overlays.desktop_icons.iter().enumerate() {
-        let ix = 20 + icon.grid_col * 98;
-        let iy = top_margin + icon.grid_row * 94;
+        let is_selected = state.overlays.selected_icons.contains(&idx);
+        let is_dragged = state.overlays.dragging_icon.is_some()
+            && (state.overlays.dragging_icon == Some(idx) || is_selected);
+        let drag_dx = if is_dragged { state.overlays.drag_offset.x } else { 0 };
+        let drag_dy = if is_dragged { state.overlays.drag_offset.y } else { 0 };
+        let ix = 20 + icon.grid_col * 98 + drag_dx;
+        let iy = top_margin + icon.grid_row * 94 + drag_dy;
         let iw = 90;
         let ih = 86;
 
         let mut canvas = Canvas::new(iw, ih);
-        let is_selected = state.overlays.selected_icons.contains(&idx);
-        let is_dragged = state.overlays.dragging_icon.is_some()
-            && (state.overlays.dragging_icon == Some(idx) || is_selected);
         if is_selected {
-            canvas.fill_rounded_rect_aa(2, 0, iw - 4, ih - 2, 10, [100, 160, 255, 68]);
-            canvas.stroke_rect(2, 0, iw - 4, ih - 2, [130, 185, 255, 195]);
+            canvas.fill_rounded_rect_aa(2, 0, iw - 4, ih - 2, 12, [100, 160, 255, 62]);
+            canvas.stroke_rounded_rect_aa(2, 0, iw - 4, ih - 2, 12, [130, 185, 255, 195]);
         }
 
         if is_dragged {
-            // Stronger multi-layer drop shadow + subtle enlargement while dragging
-            canvas.fill_rounded_rect_aa(14, 9, 62, 58, 15, [0, 0, 0, 78]);
-            canvas.fill_rounded_rect_aa(17, 6, 56, 54, 14, [0, 0, 0, 128]);
+            // Soft diffused multi-layer blur shadow + subtle enlargement while dragging
+            canvas.fill_rounded_rect_aa(12, 10, 66, 60, 20, [0, 0, 0, 18]);
+            canvas.fill_rounded_rect_aa(15, 8, 60, 56, 17, [0, 0, 0, 26]);
+            canvas.fill_rounded_rect_aa(17, 6, 56, 54, 15, [0, 0, 0, 34]);
             crate::icons::draw_app_icon(
                 &mut canvas,
                 18,
@@ -2539,8 +2553,10 @@ pub fn render_desktop_icons(
                 icon.kind,
             );
         } else {
-            // Soft drop shadow behind icon
-            canvas.fill_rounded_rect_aa(20, 7, 50, 50, 12, [0, 0, 0, 72]);
+            // Soft diffused multi-ring blur shadow behind desktop icon (no harsh black square)
+            canvas.fill_rounded_rect_aa(15, 9, 60, 54, 18, [0, 0, 0, 10]);
+            canvas.fill_rounded_rect_aa(17, 8, 56, 52, 16, [0, 0, 0, 14]);
+            canvas.fill_rounded_rect_aa(19, 7, 52, 50, 14, [0, 0, 0, 18]);
             crate::icons::draw_app_icon(
                 &mut canvas,
                 21,
@@ -2561,8 +2577,8 @@ pub fn render_desktop_icons(
 
         if let Some((_, ref edit_name)) = state.overlays.renaming_icon.as_ref().filter(|(ri, _)| *ri == idx) {
             let accent = state.panel.accent_rgb();
-            canvas.fill_rounded_rect_aa(4, 57, iw - 8, 22, 6, [18, 20, 32, 242]);
-            canvas.stroke_rect(4, 57, iw - 8, 22, [accent[0], accent[1], accent[2], 235]);
+            canvas.fill_rounded_rect_aa(4, 57, iw - 8, 22, 7, [18, 20, 32, 242]);
+            canvas.stroke_rounded_rect_aa(4, 57, iw - 8, 22, 7, [accent[0], accent[1], accent[2], 235]);
             let tail: String = if edit_name.chars().count() > 10 {
                 edit_name.chars().rev().take(10).collect::<String>().chars().rev().collect()
             } else {
@@ -2604,10 +2620,12 @@ pub fn render_desktop_icons(
         let accent = state.panel.accent_rgb();
 
         let mut canvas = Canvas::new(iw, ih);
-        canvas.fill_rounded_rect_aa(2, 0, iw - 4, ih - 2, 10, [accent[0], accent[1], accent[2], 44]);
-        canvas.stroke_rect(2, 0, iw - 4, ih - 2, [accent[0], accent[1], accent[2], 210]);
+        canvas.fill_rounded_rect_aa(2, 0, iw - 4, ih - 2, 12, [accent[0], accent[1], accent[2], 44]);
+        canvas.stroke_rounded_rect_aa(2, 0, iw - 4, ih - 2, 12, [accent[0], accent[1], accent[2], 210]);
 
-        canvas.fill_rounded_rect_aa(27, 7, 50, 50, 12, [0, 0, 0, 72]);
+        canvas.fill_rounded_rect_aa(22, 9, 60, 54, 18, [0, 0, 0, 10]);
+        canvas.fill_rounded_rect_aa(24, 8, 56, 52, 16, [0, 0, 0, 14]);
+        canvas.fill_rounded_rect_aa(26, 7, 52, 50, 14, [0, 0, 0, 18]);
         crate::icons::draw_app_icon(
             &mut canvas,
             28,
@@ -2618,8 +2636,8 @@ pub fn render_desktop_icons(
         );
 
         // Crisp inline text input box for folder name
-        canvas.fill_rounded_rect_aa(4, 57, iw - 8, 22, 6, [18, 20, 32, 242]);
-        canvas.stroke_rect(4, 57, iw - 8, 22, [accent[0], accent[1], accent[2], 235]);
+        canvas.fill_rounded_rect_aa(4, 57, iw - 8, 22, 7, [18, 20, 32, 242]);
+        canvas.stroke_rounded_rect_aa(4, 57, iw - 8, 22, 7, [accent[0], accent[1], accent[2], 235]);
 
         let max_chars = 11;
         let display_name: String = if cf.name.chars().count() > max_chars {

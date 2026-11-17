@@ -196,17 +196,20 @@ pub fn collect_output_elements(
             continue;
         };
 
-        let (move_dx, move_dy, alpha) = win_id
+        let (move_dx, move_dy, open_p, open_blur_alpha) = win_id
             .as_ref()
             .and_then(|id| state.animations.windows.get(id))
             .map(|a| {
                 (
                     a.move_offset.x.round() as i32,
                     a.move_offset.y.round() as i32,
-                    a.open_progress.clamp(0.15, 1.0),
+                    a.open_progress.clamp(0.0, 1.0),
+                    a.open_blur_alpha.clamp(0.0, 1.0),
                 )
             })
-            .unwrap_or((0, 0, 1.0));
+            .unwrap_or((0, 0, 1.0, 0.0));
+        let open_ease = 1.0 - (1.0 - open_p).powi(3);
+        let alpha = open_ease.clamp(0.15, 1.0);
 
         // Translate global space coordinates into output-local coordinates + smooth animation offsets
         let local_loc = win_loc - output_geo.loc + Point::from((ws_slide_x + move_dx, move_dy));
@@ -252,32 +255,25 @@ pub fn collect_output_elements(
                     scale,
                     alpha,
                     border_alpha,
+                    open_ease,
                     stack_tabs.as_ref().map(|(t, a)| (t.as_slice(), *a)),
                 )
             });
 
             if let Some(rounded_elem) = rendered_offscreen {
-                elements.push(rounded_elem);
-
-                // Multi-layer analytical SDF drop shadow (deeper for active window, lighter for background)
-                if corner_radius > 0.0 {
-                    let pad = if is_focused { 18 } else { 13 };
-                    let shadow_strength = if is_focused { 1.15f32 } else { 0.65f32 };
-                    let shadow_area = Rectangle::new(
-                        local_loc + win_geo.loc - Point::from((pad, pad + tb_h)),
-                        (full_w + pad * 2, full_h + pad * 2).into(),
-                    );
-                    if let Some(sdf_elem) = sdf_rounded_window_element(
-                        renderer,
-                        shadow_area,
-                        corner_radius,
-                        pad as f32,
-                        0.0,
-                        alpha * shadow_strength,
-                    ) {
-                        elements.push(sdf_elem);
+                if open_blur_alpha > 0.005 {
+                    let start_dim = (full_w.min(full_h) as f32 * 0.18).max(40.0);
+                    let sw = (start_dim + (full_w as f32 - start_dim) * open_ease).round() as i32;
+                    let sh = (start_dim + (full_h as f32 - start_dim) * open_ease).round() as i32;
+                    let sx = local_loc.x + win_geo.loc.x + (full_w - sw) / 2;
+                    let sy = local_loc.y + win_geo.loc.y - tb_h + (full_h - sh) / 2;
+                    let anim_r = (sw.min(sh) as f32 * 0.5) * (1.0 - open_ease) + corner_radius * open_ease;
+                    let blur_area = Rectangle::new((sx, sy).into(), (sw, sh).into());
+                    if let Some(blur_elem) = open_blur_veil_element(renderer, blur_area, anim_r, open_blur_alpha) {
+                        elements.push(blur_elem);
                     }
                 }
+                elements.push(rounded_elem);
             } else {
                 // Fallback direct rendering
                 let win_elements: Vec<OkayRenderElements> =
@@ -335,6 +331,11 @@ pub fn collect_output_elements(
                 elements.extend(surface_elems);
             }
         }
+    }
+
+    // 4a. Desktop Rubber-Band Selection Box (underneath windows, above desktop icons)
+    if let Some(rb_elem) = crate::overlays::render_desktop_rubberband(state, renderer, output, scale) {
+        elements.push(rb_elem);
     }
 
     // 4b. Desktop Icons Grid (right above wallpaper, underneath all windows)
@@ -501,6 +502,7 @@ fn render_rounded_window_offscreen(
     scale: Scale<f64>,
     alpha: f32,
     border_alpha: f32,
+    open_ease: f32,
     stack_tabs: Option<(&[(ObjectId, String)], usize)>,
 ) -> Option<OkayRenderElements> {
     if !window.alive() {
@@ -638,19 +640,35 @@ void main() {
         borrow.clone()
     })?;
 
-    let screen_loc: Point<i32, Physical> =
-        (local_loc + win_geo.loc - Point::from((0, tb_h))).to_physical_precise_round(scale);
+    let (draw_loc, draw_size, draw_radius) = if open_ease < 0.999 {
+        let start_dim = (full_w.min(full_h) as f32 * 0.18).max(40.0);
+        let sw = (start_dim + (full_w as f32 - start_dim) * open_ease).round().max(1.0) as i32;
+        let sh = (start_dim + (full_h as f32 - start_dim) * open_ease).round().max(1.0) as i32;
+        let base_loc = local_loc + win_geo.loc - Point::from((0, tb_h));
+        let centered = Point::from((
+            base_loc.x + (full_w - sw) / 2,
+            base_loc.y + (full_h - sh) / 2,
+        ));
+        let r = (sw.min(sh) as f32 * 0.5) * (1.0 - open_ease) + corner_radius * open_ease;
+        (centered.to_physical_precise_round(scale), Size::from((sw, sh)), r)
+    } else {
+        (
+            (local_loc + win_geo.loc - Point::from((0, tb_h))).to_physical_precise_round(scale),
+            logical_size,
+            corner_radius,
+        )
+    };
 
     let tex_elem = TextureRenderElement::from_texture_with_damage(
         Id::new(),
         renderer.context_id(),
-        screen_loc.to_f64(),
+        draw_loc.to_f64(),
         tex,
         scale.x.round().max(1.0) as i32,
         Transform::Normal,
         Some(alpha),
         None,
-        Some(logical_size),
+        Some(draw_size),
         None,
         DamageSnapshot::empty(),
         Kind::Unspecified,
@@ -660,14 +678,15 @@ void main() {
         tex_elem,
         program,
         vec![
-            Uniform::new("u_size", [full_w as f32, full_h as f32]),
-            Uniform::new("u_radius", corner_radius),
+            Uniform::new("u_size", [draw_size.w as f32, draw_size.h as f32]),
+            Uniform::new("u_radius", draw_radius),
             Uniform::new("u_border_alpha", border_alpha),
         ],
     )))
 }
 
 /// Compiles (once) and instantiates an OpenGL ES SDF rounded-corner shadow + 1px hairline border shader.
+#[allow(dead_code)]
 fn sdf_rounded_window_element(
     renderer: &mut GlesRenderer,
     area: Rectangle<i32, Logical>,
@@ -742,6 +761,66 @@ void main() {
             Uniform::new("u_pad", pad),
             Uniform::new("u_border_alpha", border_alpha),
         ],
+        Kind::Unspecified,
+    )))
+}
+
+/// Renders a subtle frosted-blur/glow veil over a newly opening window that smoothly fades out.
+fn open_blur_veil_element(
+    renderer: &mut GlesRenderer,
+    area: Rectangle<i32, Logical>,
+    radius: f32,
+    blur_alpha: f32,
+) -> Option<OkayRenderElements> {
+    const BLUR_VEIL_FRAG: &str = r#"
+precision mediump float;
+varying vec2 v_coords;
+uniform vec2 size;
+uniform float alpha;
+uniform float u_radius;
+
+float sdRoundedBox(vec2 p, vec2 b, float r) {
+    vec2 q = abs(p) - b + vec2(r);
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+}
+
+void main() {
+    vec2 px = v_coords * size;
+    vec2 half_size = size * 0.5;
+    float d = sdRoundedBox(px - half_size, max(half_size, vec2(1.0)), u_radius);
+    if (d > 0.0) {
+        discard;
+    }
+    float edge = 1.0 - smoothstep(-1.5, 0.0, d);
+    float radial = 1.0 - clamp(length((v_coords - 0.5) * 1.45), 0.0, 1.0);
+    float veil = (0.28 + 0.18 * radial) * alpha * edge;
+    gl_FragColor = vec4(vec3(0.92, 0.94, 1.0) * veil, veil);
+}
+"#;
+
+    thread_local! {
+        static BLUR_VEIL_SHADER: RefCell<Option<GlesPixelProgram>> = const { RefCell::new(None) };
+    }
+
+    let program = BLUR_VEIL_SHADER.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if borrow.is_none() {
+            if let Ok(prog) = renderer.compile_custom_pixel_shader(
+                BLUR_VEIL_FRAG,
+                &[UniformName::new("u_radius", UniformType::_1f)],
+            ) {
+                *borrow = Some(prog);
+            }
+        }
+        borrow.clone()
+    })?;
+
+    Some(OkayRenderElements::Shader(PixelShaderElement::new(
+        program,
+        area,
+        None,
+        blur_alpha.clamp(0.0, 1.0),
+        vec![Uniform::new("u_radius", radius)],
         Kind::Unspecified,
     )))
 }

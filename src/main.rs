@@ -202,6 +202,20 @@ fn init_wayland_loop() -> Result<
 // Winit Nested Backend (Development & Debugging inside Wayland/X11)
 // ============================================================================
 
+fn target_frame_duration(space: &smithay::desktop::Space<smithay::output::Output>) -> Duration {
+    let max_refresh_mhz = space
+        .outputs()
+        .filter_map(|o| o.current_mode())
+        .map(|m| m.refresh)
+        .max()
+        .unwrap_or(60_000);
+    if max_refresh_mhz >= 120_000 {
+        Duration::from_micros(8_333)
+    } else {
+        Duration::from_millis(16)
+    }
+}
+
 fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize Winit BEFORE overriding WAYLAND_DISPLAY so it connects to the host compositor.
     let (mut backend, winit_evt_loop) = winit::init::<GlesRenderer>()?;
@@ -328,7 +342,7 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
         })?;
 
     while state.running {
-        event_loop.dispatch(Some(Duration::from_millis(16)), &mut state)?;
+        event_loop.dispatch(Some(target_frame_duration(&state.space)), &mut state)?;
         if state.last_status_poll.elapsed() >= Duration::from_secs(5) {
             state.last_status_poll = Instant::now();
             crate::worker::dispatch(crate::worker::WorkerRequest::PollPanelStatus);
@@ -473,7 +487,7 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main DRM frame & Wayland event loop
     while state.running {
-        event_loop.dispatch(Some(Duration::from_millis(16)), &mut state)?;
+        event_loop.dispatch(Some(target_frame_duration(&state.space)), &mut state)?;
 
         // Render active DRM outputs
         {

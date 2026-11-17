@@ -536,6 +536,8 @@ impl OkayState {
             .unwrap_or(1280);
         self.workspaces.active = target;
         self.animations.on_workspace_switched(old, target, out_w);
+        self.overlays
+            .show_osd("Workspace", &format!("Workspace {}", target), None);
         tracing::info!(workspace = target, "Switched workspace");
         self.retile_workspace();
         self.refocus_topmost_visible();
