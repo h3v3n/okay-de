@@ -869,8 +869,7 @@ pub fn render_settings_elements(
     let mut canvas = Canvas::new(SETTINGS_WIDTH, SETTINGS_HEIGHT);
     canvas.fill_glass_panel(0, 0, SETTINGS_WIDTH, SETTINGS_HEIGHT, 18);
 
-    // Left macOS System Settings Sidebar (translucent tinted panel + 1px divider)
-    canvas.fill_rounded_rect_aa(2, 2, SIDEBAR_WIDTH, SETTINGS_HEIGHT - 4, 12, [255, 255, 255, 10]);
+    // Crisp 1px vertical sidebar divider (no extra stacked background rect)
     canvas.fill_rect_blend(
         SIDEBAR_WIDTH + 2,
         8,
