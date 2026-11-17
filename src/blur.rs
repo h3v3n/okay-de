@@ -484,7 +484,11 @@ pub fn update_output_blur(
                             ) {
                                 let dmg = Rectangle::from_size(pyramid.half_size);
                                 let _ = frame.clear(Color32F::TRANSPARENT, &[dmg]);
-                                let _ = draw_render_elements(
+                                let _ = draw_render_elements::<
+                                    GlesRenderer,
+                                    Scale<f64>,
+                                    TextureRenderElement<GlesTexture>,
+                                >(
                                     &mut frame,
                                     Scale::from(1.0),
                                     &[copy_elem],

@@ -138,7 +138,7 @@ pub fn collect_output_elements(
     let mut ordered_windows: Vec<_> = state.space.elements().rev().cloned().collect();
     ordered_windows.sort_by_key(|w| if state.workspaces.is_pinned(w) { 0 } else { 1 });
 
-    let mut scene_hash: u64 = (state.workspaces.active_workspace() as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    let mut scene_hash: u64 = (state.workspaces.active as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
 
     for window in &ordered_windows {
         if !window.alive() {
@@ -328,10 +328,12 @@ pub fn collect_output_elements(
     }
 
     // 5. Native OKay DE desktop wallpaper / gradient (bottommost)
-    let wallpaper_elem = state.desktop.background_element(renderer, output, scale);
-    if let Some(ref bg) = wallpaper_elem {
-        bg_elements.push(bg.clone());
-    }
+    let has_wallpaper = if let Some(bg) = state.desktop.background_element(renderer, output, scale) {
+        bg_elements.push(bg);
+        true
+    } else {
+        false
+    };
 
     // Check whether the scene behind glass panels changed (for zero-idle-GPU Dual-Kawase blur)
     thread_local! {
@@ -348,12 +350,13 @@ pub fn collect_output_elements(
 
     if state.panel.appearance_mode == crate::panel::AppearanceMode::GlassBlur {
         let clear_color = Color32F::from(state.theme.background_color);
+        let wallpaper_elem = if has_wallpaper { bg_elements.last() } else { None };
         crate::blur::update_output_blur(
             renderer,
             output,
             scale,
             state.desktop.revision,
-            wallpaper_elem.as_ref(),
+            wallpaper_elem,
             &bg_elements,
             has_dynamic_content,
             global_dirty,
