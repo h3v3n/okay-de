@@ -521,11 +521,30 @@ pub fn start_desktop_rubberband(state: &mut OkayState, pos: Point<f64, Logical>)
 /// Handles dragging a desktop icon across the desktop grid or dragging the rubber-band box.
 pub fn handle_overlays_motion(state: &mut OkayState, pos: Point<f64, Logical>) -> bool {
     if let Some(idx) = state.overlays.dragging_icon {
+        let top_margin = if state.panel.dock_mode || state.panel.panel_top {
+            PANEL_HEIGHT + 18
+        } else {
+            20
+        };
         let col = ((pos.x.round() as i32 - 20).max(0) / 98).clamp(0, 14);
-        let row = ((pos.y.round() as i32 - 48).max(0) / 94).clamp(0, 8);
-        if let Some(icon) = state.overlays.desktop_icons.get_mut(idx) {
-            icon.grid_col = col;
-            icon.grid_row = row;
+        let row = ((pos.y.round() as i32 - top_margin).max(0) / 94).clamp(0, 8);
+        let occupied = state
+            .overlays
+            .desktop_icons
+            .iter()
+            .enumerate()
+            .any(|(i, ic)| i != idx && ic.grid_col == col && ic.grid_row == row)
+            || state
+                .overlays
+                .creating_folder
+                .as_ref()
+                .map(|cf| cf.grid_col == col && cf.grid_row == row)
+                .unwrap_or(false);
+        if !occupied {
+            if let Some(icon) = state.overlays.desktop_icons.get_mut(idx) {
+                icon.grid_col = col;
+                icon.grid_row = row;
+            }
         }
         return true;
     }

@@ -252,7 +252,8 @@ pub fn handle_settings_motion(state: &mut OkayState, pos: Point<f64, Logical>) -
     if let Some(offset) = state.settings.dragging {
         let nx = (pos.x - offset.x).round() as i32;
         let ny = (pos.y - offset.y).round() as i32;
-        state.settings.position = Point::from((nx.max(8), ny.max(8)));
+        let min_y = crate::panel::PANEL_HEIGHT + 4;
+        state.settings.position = Point::from((nx.max(8), ny.max(min_y)));
         return true;
     }
     false

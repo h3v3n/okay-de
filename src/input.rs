@@ -397,7 +397,27 @@ fn move_pointer_to(state: &mut OkayState, pos: Point<f64, Logical>, time_msec: u
             } => {
                 let dx = (pos.x - initial_pointer.x).round() as i32;
                 let dy = (pos.y - initial_pointer.y).round() as i32;
-                let new_loc = Point::from((initial_window_loc.x + dx, initial_window_loc.y + dy));
+                let mut new_loc = Point::from((initial_window_loc.x + dx, initial_window_loc.y + dy));
+
+                // Prevent moving the window or its titlebar under the top bar
+                if !state.workspaces.is_fullscreen(&window) {
+                    let win_geo = window.geometry();
+                    let top_bar_h = if state.panel.dock_mode || state.panel.panel_top {
+                        crate::panel::PANEL_HEIGHT
+                    } else {
+                        0
+                    };
+                    let out_top = state
+                        .output_under_pointer()
+                        .and_then(|o| state.space.output_geometry(&o))
+                        .map(|g| g.loc.y)
+                        .unwrap_or(0);
+                    let min_y = out_top + top_bar_h + crate::state::TITLEBAR_HEIGHT - win_geo.loc.y;
+                    if new_loc.y < min_y {
+                        new_loc.y = min_y;
+                    }
+                }
+
                 state.space.map_element(window, new_loc, false);
                 return;
             }
@@ -483,25 +503,16 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
             return;
         }
 
-        // BTN_LEFT (0x110 = 272): check native taskbar, launcher, settings & overlays first
-        if button == 0x110 && crate::panel::handle_panel_click(state, pos) {
-            return;
-        }
-        if button == 0x110 && crate::settings::handle_settings_click(state, pos) {
-            return;
-        }
-        if button == 0x110 && crate::overlays::handle_overlays_click(state, pos) {
-            return;
-        }
+        let super_held = state.super_pressed
+            || state
+                .seat
+                .get_keyboard()
+                .map(|k| k.modifier_state().logo)
+                .unwrap_or(false);
 
-        // Right-click (0x111) on empty desktop -> Open Desktop Context Menu
-        if button == 0x111 && !state.super_pressed && crate::overlays::handle_desktop_right_click(state, pos) {
-            return;
-        }
-
-        // Super + Left Click (0x110) -> Drag-to-move window
-        // Super + Right Click (0x111) -> Drag-to-resize window
-        if state.super_pressed && (button == 0x110 || button == 0x111) {
+        // Super + Left Click (0x110) -> Drag-to-move window from anywhere on the window
+        // Super + Right Click (0x111) -> Drag-to-resize window from anywhere on the window
+        if super_held && (button == 0x110 || button == 0x111) {
             if let Some(win) = state.window_under(pos) {
                 state.focus_window(&win);
                 if button == 0x110 {
@@ -523,6 +534,22 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
                     return;
                 }
             }
+        }
+
+        // BTN_LEFT (0x110 = 272): check native taskbar, launcher, settings & overlays first
+        if button == 0x110 && crate::panel::handle_panel_click(state, pos) {
+            return;
+        }
+        if button == 0x110 && crate::settings::handle_settings_click(state, pos) {
+            return;
+        }
+        if button == 0x110 && crate::overlays::handle_overlays_click(state, pos) {
+            return;
+        }
+
+        // Right-click (0x111) on empty desktop -> Open Desktop Context Menu
+        if button == 0x111 && !super_held && crate::overlays::handle_desktop_right_click(state, pos) {
+            return;
         }
 
         // Server-side titlebar click (buttons [-] [+] [X] or drag-to-move)

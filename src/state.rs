@@ -1041,11 +1041,17 @@ impl OkayState {
 
         let x = output_geo.loc.x + ((output_geo.size.w - win_size.w) / 2).max(24) + offset - 64;
         let y = output_geo.loc.y + ((usable_h - win_size.h) / 2).max(24 + TITLEBAR_HEIGHT) + offset - 64;
-        let max_y = output_geo.loc.y + (usable_h - win_size.h - 8).max(16 + TITLEBAR_HEIGHT);
+        let top_bar_h = if self.panel.dock_mode || self.panel.panel_top {
+            crate::panel::PANEL_HEIGHT
+        } else {
+            0
+        };
+        let min_y = output_geo.loc.y + top_bar_h + 8 + TITLEBAR_HEIGHT;
+        let max_y = (output_geo.loc.y + usable_h - win_size.h - 8).max(min_y);
 
         Point::from((
             x.max(output_geo.loc.x + 16),
-            y.clamp(output_geo.loc.y + 16 + TITLEBAR_HEIGHT, max_y),
+            y.clamp(min_y, max_y),
         ))
     }
 }
