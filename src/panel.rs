@@ -31,11 +31,10 @@ use crate::{animation::MinimizeEffect, render::OkayRenderElements, state::OkaySt
 pub const PANEL_HEIGHT: i32 = 28;
 pub const DOCK_HEIGHT: i32 = 62;
 pub const DOCK_MARGIN: i32 = 10;
-const MENU_WIDTH: i32 = 340;
-const MENU_HEADER_HEIGHT: i32 = 76;
-const MENU_ITEM_HEIGHT: i32 = 34;
-const MENU_FOOTER_HEIGHT: i32 = 44;
-const MENU_PADDING: i32 = 10;
+const MENU_WIDTH: i32 = 700;
+const MENU_HEADER_HEIGHT: i32 = 88;
+const MENU_FOOTER_HEIGHT: i32 = 58;
+const MENU_PADDING: i32 = 16;
 
 /// Accent color presets: `(Name, [R, G, B], linear [f32; 4])`.
 pub const ACCENT_PRESETS: [(&str, [u8; 3], [f32; 4]); 6] = [
@@ -115,6 +114,13 @@ impl LauncherItem {
 }
 
 #[derive(Debug, Clone)]
+pub enum PinContextAction {
+    PinApp(DesktopAppEntry),
+    UnpinBuiltin(LauncherItem),
+    UnpinCustom(String),
+}
+
+#[derive(Debug, Clone)]
 enum ClickTarget {
     ToggleLauncher,
     ToggleSettings,
@@ -130,9 +136,11 @@ enum ClickTarget {
     FocusWindow(usize),
     LaunchItem(LauncherItem),
     LaunchDesktopApp(String),
+    ApplyPinAction(PinContextAction),
     PowerLock,
     PowerSuspend,
     PowerReboot,
+    PowerShutdown,
     PowerExit,
 }
 
@@ -147,6 +155,8 @@ pub struct PanelState {
     pub search_query: String,
     pub desktop_apps: Vec<DesktopAppEntry>,
     pub custom_pinned: Vec<DesktopAppEntry>,
+    pub hidden_builtins: Vec<LauncherItem>,
+    pub pin_context_menu: Option<(Point<i32, Logical>, PinContextAction)>,
     pub default_terminal: String,
     pub default_browser: String,
     pub default_file_manager: String,
@@ -155,6 +165,7 @@ pub struct PanelState {
     pub battery_percent: Option<i32>,
     pub autostart_cmds: Vec<String>,
     hit_regions: Vec<(Rectangle<i32, Logical>, ClickTarget)>,
+    right_hit_regions: Vec<(Rectangle<i32, Logical>, PinContextAction)>,
 }
 
 impl Default for PanelState {
@@ -169,6 +180,8 @@ impl Default for PanelState {
             search_query: String::new(),
             desktop_apps: scan_desktop_applications(),
             custom_pinned: Vec::new(),
+            hidden_builtins: Vec::new(),
+            pin_context_menu: None,
             default_terminal: "foot".to_string(),
             default_browser: "firefox".to_string(),
             default_file_manager: "thunar".to_string(),
@@ -177,6 +190,7 @@ impl Default for PanelState {
             battery_percent: read_battery_percent(),
             autostart_cmds: Vec::new(),
             hit_regions: Vec::new(),
+            right_hit_regions: Vec::new(),
         }
     }
 }
@@ -362,7 +376,11 @@ impl PanelState {
     }
 
     pub fn set_volume(&mut self, new_vol: i32) {
-        self.volume_percent = new_vol.clamp(0, 100);
+        let clamped = new_vol.clamp(0, 100);
+        if clamped == self.volume_percent {
+            return;
+        }
+        self.volume_percent = clamped;
         let pct_arg = format!("{}%", self.volume_percent);
         if Command::new("wpctl")
             .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &pct_arg])
@@ -601,6 +619,24 @@ pub fn execute_launcher_item(state: &mut OkayState, item: LauncherItem) {
     }
 }
 
+/// Handles a right-click at global logical coordinates on Dock icons or Launcher apps.
+pub fn handle_panel_right_click(state: &mut OkayState, global_pos: Point<f64, Logical>) -> bool {
+    let px = global_pos.x.round() as i32;
+    let py = global_pos.y.round() as i32;
+
+    for (rect, action) in state.panel.right_hit_regions.iter().rev() {
+        if rect_contains(*rect, px, py) {
+            state.panel.pin_context_menu = Some((Point::from((px, py)), action.clone()));
+            return true;
+        }
+    }
+    if state.panel.pin_context_menu.is_some() {
+        state.panel.pin_context_menu = None;
+        return true;
+    }
+    false
+}
+
 /// Handles a left-click at global logical coordinates. Returns `true` if the panel or
 /// launcher menu consumed the click.
 pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>) -> bool {
@@ -616,6 +652,9 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
     }
 
     if let Some(target) = matched {
+        if !matches!(target, ClickTarget::ApplyPinAction(_)) {
+            state.panel.pin_context_menu = None;
+        }
         match target {
             ClickTarget::ToggleLauncher => {
                 state.panel.launcher_open = !state.panel.launcher_open;
@@ -701,6 +740,44 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                     .env("WAYLAND_DISPLAY", &state.socket_name)
                     .spawn();
             }
+            ClickTarget::ApplyPinAction(pin_act) => {
+                state.panel.pin_context_menu = None;
+                match pin_act {
+                    PinContextAction::PinApp(app) => {
+                        if !state.panel.custom_pinned.iter().any(|p| p.exec == app.exec) {
+                            let app_name = app.name.clone();
+                            state.panel.custom_pinned.push(app);
+                            state.panel.save_full_config(
+                                state.pointer_sensitivity,
+                                state.natural_scroll,
+                                state.animations.enabled,
+                                state.animations.speed,
+                                state.animations.minimize_effect,
+                                &state.settings.xkb_layout,
+                            );
+                            state.overlays.push_notification("Dock", format!("Pinned '{}' to Dock", app_name));
+                        }
+                    }
+                    PinContextAction::UnpinBuiltin(item) => {
+                        if !state.panel.hidden_builtins.contains(&item) {
+                            state.panel.hidden_builtins.push(item);
+                            state.overlays.push_notification("Dock", format!("Unpinned '{}' from Dock", item.label()));
+                        }
+                    }
+                    PinContextAction::UnpinCustom(exec) => {
+                        state.panel.custom_pinned.retain(|p| p.exec != exec);
+                        state.panel.save_full_config(
+                            state.pointer_sensitivity,
+                            state.natural_scroll,
+                            state.animations.enabled,
+                            state.animations.speed,
+                            state.animations.minimize_effect,
+                            &state.settings.xkb_layout,
+                        );
+                        state.overlays.push_notification("Dock", "Unpinned app from Dock");
+                    }
+                }
+            }
             ClickTarget::PowerLock => {
                 state.panel.launcher_open = false;
                 state.overlays.locked = true;
@@ -714,11 +791,19 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                 state.panel.launcher_open = false;
                 let _ = Command::new("systemctl").arg("reboot").spawn();
             }
+            ClickTarget::PowerShutdown => {
+                state.panel.launcher_open = false;
+                let _ = Command::new("systemctl").arg("poweroff").spawn();
+            }
             ClickTarget::PowerExit => {
                 state.running = false;
                 state.loop_signal.stop();
             }
         }
+        return true;
+    }
+
+    if state.panel.pin_context_menu.take().is_some() {
         return true;
     }
 
@@ -753,6 +838,7 @@ pub fn render_panel_elements(
         .unwrap_or(false);
     if is_primary {
         state.panel.hit_regions.clear();
+        state.panel.right_hit_regions.clear();
     }
 
     let accent = state.panel.accent_rgb();
@@ -1044,13 +1130,16 @@ pub fn render_panel_elements(
         // ====================================================================
         // B. Bottom Floating Dock (Centered 18px Glass Pill + Squircle Icons + Zoom)
         // ====================================================================
-        let pinned_apps: [(LauncherItem, &str, crate::icons::VectorIconKind); 5] = [
+        let pinned_apps: Vec<(LauncherItem, &str, crate::icons::VectorIconKind)> = [
             (LauncherItem::FileManager, "FM", crate::icons::VectorIconKind::Files),
             (LauncherItem::Terminal, ">_", crate::icons::VectorIconKind::Terminal),
             (LauncherItem::Browser, "WB", crate::icons::VectorIconKind::Browser),
             (LauncherItem::OkaySettings, "OS", crate::icons::VectorIconKind::Settings),
             (LauncherItem::SystemMonitor, "SM", crate::icons::VectorIconKind::SystemMonitor),
-        ];
+        ]
+        .into_iter()
+        .filter(|(item, _, _)| !state.panel.hidden_builtins.contains(item))
+        .collect();
 
         let custom_pinned = state.panel.custom_pinned.clone();
         let base_icon = 42;
@@ -1178,6 +1267,10 @@ pub fn render_panel_elements(
                 .panel
                 .hit_regions
                 .push((hit_global, ClickTarget::PinnedApp(item)));
+            state
+                .panel
+                .right_hit_regions
+                .push((hit_global, PinContextAction::UnpinBuiltin(item)));
 
             dx += sz + icon_gap;
         }
@@ -1202,6 +1295,10 @@ pub fn render_panel_elements(
                 .panel
                 .hit_regions
                 .push((hit_global, ClickTarget::LaunchDesktopApp(app.exec.clone())));
+            state
+                .panel
+                .right_hit_regions
+                .push((hit_global, PinContextAction::UnpinCustom(app.exec.clone())));
             dx += sz + icon_gap;
         }
 
@@ -1449,269 +1546,250 @@ pub fn render_panel_elements(
         }
     }
 
-    // 6. Render Expanded Searchable Start Menu Popup (with smooth slide animation)
+    // 6. Render Expanded COSMIC / macOS Launchpad-style App Grid Menu
     let menu_anim = state.animations.launcher_open_anim;
     if (state.panel.launcher_open || menu_anim > 0.02) && is_primary {
         let query_lower = state.panel.search_query.to_lowercase();
-        let matching_desktop: Vec<DesktopAppEntry> = state
-            .panel
-            .desktop_apps
-            .iter()
-            .filter(|a| query_lower.is_empty() || a.name.to_lowercase().contains(&query_lower))
-            .take(4)
-            .cloned()
-            .collect();
 
-        let total_rows = LauncherItem::BUILTIN.len() + matching_desktop.len();
-        let menu_h = MENU_HEADER_HEIGHT
-            + MENU_PADDING * 2
-            + total_rows as i32 * MENU_ITEM_HEIGHT
-            + MENU_FOOTER_HEIGHT;
-        let menu_x = 12;
-        let slide_px = ((1.0 - menu_anim) * 14.0).round() as i32;
-        let menu_y = if state.panel.dock_mode || state.panel.panel_top {
-            PANEL_HEIGHT + 8 - slide_px
-        } else {
-            (output_geo.size.h - 36 - menu_h - 8 + slide_px).max(8)
-        };
+        enum GridEntry {
+            Builtin(LauncherItem),
+            Desktop(DesktopAppEntry),
+        }
 
-        let mut menu_canvas = Canvas::new(MENU_WIDTH, menu_h);
-        menu_canvas.fill_glass_panel(0, 0, MENU_WIDTH, menu_h, 14);
+        let mut grid_items: Vec<GridEntry> = Vec::new();
+        for item in LauncherItem::BUILTIN {
+            if query_lower.is_empty() || item.label().to_lowercase().contains(&query_lower) {
+                grid_items.push(GridEntry::Builtin(item));
+            }
+        }
+        for app in &state.panel.desktop_apps {
+            if query_lower.is_empty() || app.name.to_lowercase().contains(&query_lower) {
+                grid_items.push(GridEntry::Desktop(app.clone()));
+            }
+            if grid_items.len() >= 15 {
+                break;
+            }
+        }
+        grid_items.truncate(15);
 
-        // Header + Search Box
-        menu_canvas.draw_text_px(14, 11, "OKay Spotlight", 14.5, [246, 248, 255, 255]);
-        let fw_w = menu_canvas.measure_text_px(&focused_app_name, 11.5);
+        let cols = 5i32;
+        let cell_w = 126i32;
+        let cell_h = 94i32;
+        let cell_gap = 10i32;
+        let rows = ((grid_items.len() as i32 + cols - 1) / cols).max(1);
+        let grid_h = rows * cell_h + (rows - 1).max(0) * cell_gap;
+
+        let menu_w = MENU_WIDTH.min((output_geo.size.w - 32).max(360));
+        let menu_h = MENU_HEADER_HEIGHT + MENU_PADDING + grid_h + MENU_PADDING + MENU_FOOTER_HEIGHT;
+        let menu_x = ((output_geo.size.w - menu_w) / 2).max(12);
+        let slide_px = ((1.0 - menu_anim) * 18.0).round() as i32;
+        let base_y = ((output_geo.size.h - menu_h) / 2).max(PANEL_HEIGHT + 14);
+        let menu_y = base_y - slide_px;
+
+        let mut menu_canvas = Canvas::new(menu_w, menu_h);
+        menu_canvas.fill_glass_panel(0, 0, menu_w, menu_h, 16);
+
+        // Header + Centered Search Bar
+        menu_canvas.draw_text_px(20, 14, "Applications", 16.0, [246, 248, 255, 255]);
+        let hint_badge = "Right-click app to Pin to Dock";
+        let hbw = menu_canvas.measure_text_px(hint_badge, 11.0);
         menu_canvas.fill_rounded_rect_aa(
-            MENU_WIDTH - fw_w - 26,
-            9,
-            fw_w + 14,
-            20,
-            6,
-            [accent[0], accent[1], accent[2], 36],
+            menu_w - hbw - 34,
+            13,
+            hbw + 16,
+            22,
+            7,
+            [255, 255, 255, 16],
         );
         menu_canvas.draw_text_px(
-            MENU_WIDTH - fw_w - 19,
-            12,
-            &focused_app_name,
-            11.5,
-            [accent[0], accent[1], accent[2], 245],
+            menu_w - hbw - 26,
+            17,
+            hint_badge,
+            11.0,
+            [176, 184, 210, 235],
         );
 
-        menu_canvas.fill_rounded_rect_aa(12, 38, MENU_WIDTH - 24, 28, 8, [255, 255, 255, 16]);
+        let search_w = menu_w - 40;
+        menu_canvas.fill_rounded_rect_aa(20, 44, search_w, 34, 10, [255, 255, 255, 18]);
         if !state.panel.search_query.is_empty() {
             menu_canvas.stroke_rect(
-                12,
-                38,
-                MENU_WIDTH - 24,
-                28,
-                [accent[0], accent[1], accent[2], 145],
+                20,
+                44,
+                search_w,
+                34,
+                [accent[0], accent[1], accent[2], 160],
             );
         }
         let search_txt = if state.panel.search_query.is_empty() {
-            "Search apps & commands...".to_string()
+            "Search applications & commands...".to_string()
         } else {
             format!("{}|", state.panel.search_query)
         };
         let search_fg = if state.panel.search_query.is_empty() {
-            [142, 148, 172, 235]
+            [148, 154, 180, 235]
         } else {
             [248, 250, 255, 255]
         };
-        menu_canvas.draw_text_px(22, 44, &search_txt, 12.5, search_fg);
+        menu_canvas.draw_text_px(34, 53, &search_txt, 13.0, search_fg);
 
-        let mut row_idx = 0;
+        // 5-Column App Grid
+        let grid_total_w = cols * cell_w + (cols - 1) * cell_gap;
+        let grid_x0 = ((menu_w - grid_total_w) / 2).max(MENU_PADDING);
+        let grid_y0 = MENU_HEADER_HEIGHT + MENU_PADDING;
 
-        // Built-in items
-        for item in LauncherItem::BUILTIN {
-            if !query_lower.is_empty() && !item.label().to_lowercase().contains(&query_lower) {
-                continue;
-            }
-            let iy = MENU_HEADER_HEIGHT + MENU_PADDING + row_idx * MENU_ITEM_HEIGHT;
-            let item_global = Rectangle::new(
-                (
-                    output_geo.loc.x + menu_x + MENU_PADDING,
-                    output_geo.loc.y + menu_y + iy + 2,
-                )
-                    .into(),
-                (MENU_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT - 4).into(),
+        for (idx, entry) in grid_items.into_iter().enumerate() {
+            let c = idx as i32 % cols;
+            let r = idx as i32 / cols;
+            let cx = grid_x0 + c * (cell_w + cell_gap);
+            let cy = grid_y0 + r * (cell_h + cell_gap);
+
+            let cell_global = Rectangle::new(
+                (output_geo.loc.x + menu_x + cx, output_geo.loc.y + menu_y + cy).into(),
+                (cell_w, cell_h).into(),
             );
-            let hovered = rect_contains(item_global, pointer_x, pointer_y);
-            let item_bg = if hovered {
+            let hovered = rect_contains(cell_global, pointer_x, pointer_y);
+            let cell_bg = if hovered {
                 [accent[0], accent[1], accent[2], 56]
             } else {
                 [255, 255, 255, 12]
             };
-
-            menu_canvas.fill_rounded_rect_aa(
-                MENU_PADDING,
-                iy + 2,
-                MENU_WIDTH - MENU_PADDING * 2,
-                MENU_ITEM_HEIGHT - 4,
-                8,
-                item_bg,
-            );
+            menu_canvas.fill_rounded_rect_aa(cx, cy, cell_w, cell_h, 12, cell_bg);
             if hovered {
-                menu_canvas.fill_rounded_rect_aa(
-                    MENU_PADDING + 2,
-                    iy + 7,
-                    3,
-                    MENU_ITEM_HEIGHT - 14,
-                    2,
-                    [accent[0], accent[1], accent[2], 245],
+                menu_canvas.stroke_rect(
+                    cx,
+                    cy,
+                    cell_w,
+                    cell_h,
+                    [accent[0], accent[1], accent[2], 150],
                 );
             }
-            let item_kind = match item {
-                LauncherItem::Terminal => crate::icons::VectorIconKind::Terminal,
-                LauncherItem::FileManager => crate::icons::VectorIconKind::Files,
-                LauncherItem::Browser => crate::icons::VectorIconKind::Browser,
-                LauncherItem::SystemMonitor => crate::icons::VectorIconKind::SystemMonitor,
-                LauncherItem::Screenshot => crate::icons::VectorIconKind::Screenshot,
-                LauncherItem::OkaySettings | LauncherItem::ReloadConfig => crate::icons::VectorIconKind::Settings,
-            };
-            crate::icons::draw_app_icon(
-                &mut menu_canvas,
-                MENU_PADDING + 10,
-                iy + 6,
-                22,
-                None,
-                item_kind,
-            );
-            menu_canvas.draw_text_px(
-                MENU_PADDING + 40,
-                iy + 8,
-                item.label(),
-                13.0,
-                [240, 242, 252, 255],
-            );
-            let hint_w = menu_canvas.measure_text_px(item.hint(), 11.0);
-            menu_canvas.fill_rounded_rect_aa(
-                MENU_WIDTH - MENU_PADDING - hint_w - 16,
-                iy + 7,
-                hint_w + 10,
-                18,
-                5,
-                [255, 255, 255, 14],
-            );
-            menu_canvas.draw_text_px(
-                MENU_WIDTH - MENU_PADDING - hint_w - 11,
-                iy + 9,
-                item.hint(),
-                11.0,
-                [172, 178, 202, 240],
-            );
 
-            state
-                .panel
-                .hit_regions
-                .push((item_global, ClickTarget::LaunchItem(item)));
-            row_idx += 1;
-        }
+            let icon_sz = 44;
+            let ix = cx + (cell_w - icon_sz) / 2;
+            let iy = cy + 12;
 
-        // Scanned `.desktop` system applications
-        for app in &matching_desktop {
-            let iy = MENU_HEADER_HEIGHT + MENU_PADDING + row_idx * MENU_ITEM_HEIGHT;
-            let item_global = Rectangle::new(
-                (
-                    output_geo.loc.x + menu_x + MENU_PADDING,
-                    output_geo.loc.y + menu_y + iy + 2,
-                )
-                    .into(),
-                (MENU_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT - 4).into(),
-            );
-            let hovered = rect_contains(item_global, pointer_x, pointer_y);
-            let item_bg = if hovered {
-                [accent[0], accent[1], accent[2], 56]
-            } else {
-                [255, 255, 255, 10]
-            };
-
-            menu_canvas.fill_rounded_rect_aa(
-                MENU_PADDING,
-                iy + 2,
-                MENU_WIDTH - MENU_PADDING * 2,
-                MENU_ITEM_HEIGHT - 4,
-                8,
-                item_bg,
-            );
-            if hovered {
-                menu_canvas.fill_rounded_rect_aa(
-                    MENU_PADDING + 2,
-                    iy + 7,
-                    3,
-                    MENU_ITEM_HEIGHT - 14,
-                    2,
-                    [accent[0], accent[1], accent[2], 245],
-                );
+            match entry {
+                GridEntry::Builtin(item) => {
+                    let kind = match item {
+                        LauncherItem::Terminal => crate::icons::VectorIconKind::Terminal,
+                        LauncherItem::FileManager => crate::icons::VectorIconKind::Files,
+                        LauncherItem::Browser => crate::icons::VectorIconKind::Browser,
+                        LauncherItem::SystemMonitor => crate::icons::VectorIconKind::SystemMonitor,
+                        LauncherItem::Screenshot => crate::icons::VectorIconKind::Screenshot,
+                        LauncherItem::OkaySettings | LauncherItem::ReloadConfig => {
+                            crate::icons::VectorIconKind::Settings
+                        }
+                    };
+                    let sys_hint = match item {
+                        LauncherItem::FileManager => Some(state.panel.default_file_manager.as_str()),
+                        LauncherItem::Terminal => Some(state.panel.default_terminal.as_str()),
+                        LauncherItem::Browser => Some(state.panel.default_browser.as_str()),
+                        _ => None,
+                    };
+                    crate::icons::draw_app_icon(&mut menu_canvas, ix, iy, icon_sz, sys_hint, kind);
+                    let lbl: String = item.label().chars().take(15).collect();
+                    let lw = menu_canvas.measure_text_px(&lbl, 12.0);
+                    menu_canvas.draw_text_px(
+                        cx + (cell_w - lw) / 2,
+                        cy + 64,
+                        &lbl,
+                        12.0,
+                        [240, 242, 252, 255],
+                    );
+                    state
+                        .panel
+                        .hit_regions
+                        .push((cell_global, ClickTarget::LaunchItem(item)));
+                    if state.panel.hidden_builtins.contains(&item) {
+                        // Allow re-pinning if unpinned? Keep UnpinBuiltin if visible
+                    } else {
+                        state
+                            .panel
+                            .right_hit_regions
+                            .push((cell_global, PinContextAction::UnpinBuiltin(item)));
+                    }
+                }
+                GridEntry::Desktop(app) => {
+                    let kind = crate::icons::VectorIconKind::from_hint(&app.name, &app.exec, false);
+                    crate::icons::draw_app_icon(
+                        &mut menu_canvas,
+                        ix,
+                        iy,
+                        icon_sz,
+                        app.icon_name.as_deref(),
+                        kind,
+                    );
+                    let lbl: String = app.name.chars().take(15).collect();
+                    let lw = menu_canvas.measure_text_px(&lbl, 12.0);
+                    menu_canvas.draw_text_px(
+                        cx + (cell_w - lw) / 2,
+                        cy + 64,
+                        &lbl,
+                        12.0,
+                        [240, 242, 252, 255],
+                    );
+                    state
+                        .panel
+                        .hit_regions
+                        .push((cell_global, ClickTarget::LaunchDesktopApp(app.exec.clone())));
+                    let is_pinned = state.panel.custom_pinned.iter().any(|p| p.exec == app.exec);
+                    let pin_act = if is_pinned {
+                        PinContextAction::UnpinCustom(app.exec.clone())
+                    } else {
+                        PinContextAction::PinApp(app)
+                    };
+                    state.panel.right_hit_regions.push((cell_global, pin_act));
+                }
             }
-            let kind = crate::icons::VectorIconKind::from_hint(&app.name, &app.exec, false);
-            crate::icons::draw_app_icon(
-                &mut menu_canvas,
-                MENU_PADDING + 10,
-                iy + 6,
-                22,
-                app.icon_name.as_deref(),
-                kind,
-            );
-            let short_name: String = app.name.chars().take(24).collect();
-            menu_canvas.draw_text_px(
-                MENU_PADDING + 40,
-                iy + 8,
-                &short_name,
-                13.0,
-                [238, 240, 252, 255],
-            );
-            let cat_w = menu_canvas.measure_text_px(&app.category, 11.0);
-            menu_canvas.draw_text_px(
-                MENU_WIDTH - MENU_PADDING - cat_w - 10,
-                iy + 9,
-                &app.category,
-                11.0,
-                [152, 158, 184, 240],
-            );
-
-            state.panel.hit_regions.push((
-                item_global,
-                ClickTarget::LaunchDesktopApp(app.exec.clone()),
-            ));
-            row_idx += 1;
         }
 
-        // Power Footer Bar (`Lock`, `Sleep`, `Reboot`, `Exit`)
-        let fy = menu_h - MENU_FOOTER_HEIGHT + 5;
-        menu_canvas.fill_rect_blend(12, fy - 5, MENU_WIDTH - 24, 1, [255, 255, 255, 24]);
-        let power_btns: [(&str, ClickTarget, [u8; 4]); 4] = [
+        // Bottom Power & Session Bar (`Lock`, `Sleep`, `Reboot`, `Power Off`, `Exit DE`)
+        let fy = menu_h - MENU_FOOTER_HEIGHT + 10;
+        menu_canvas.fill_rect_blend(20, fy - 10, menu_w - 40, 1, [255, 255, 255, 24]);
+        let power_btns: [(&str, ClickTarget, [u8; 4]); 5] = [
             ("Lock", ClickTarget::PowerLock, [255, 255, 255, 20]),
             ("Sleep", ClickTarget::PowerSuspend, [255, 255, 255, 20]),
             ("Reboot", ClickTarget::PowerReboot, [255, 255, 255, 20]),
-            ("Exit", ClickTarget::PowerExit, [220, 68, 92, 165]),
+            ("Power Off", ClickTarget::PowerShutdown, [215, 68, 86, 175]),
+            ("Exit DE", ClickTarget::PowerExit, [255, 255, 255, 20]),
         ];
+        let btn_w = 114i32;
+        let btn_gap = 12i32;
+        let total_btns_w = 5 * btn_w + 4 * btn_gap;
+        let btn_x0 = ((menu_w - total_btns_w) / 2).max(16);
+
         for (pi, (plabel, ptarget, pbg)) in power_btns.into_iter().enumerate() {
-            let pw = 74;
-            let px = 12 + pi as i32 * 80;
+            let px = btn_x0 + pi as i32 * (btn_w + btn_gap);
             let p_global = Rectangle::new(
                 (output_geo.loc.x + menu_x + px, output_geo.loc.y + menu_y + fy).into(),
-                (pw, 30).into(),
+                (btn_w, 34).into(),
             );
             let hovered = rect_contains(p_global, pointer_x, pointer_y);
             let bg = if hovered {
-                if matches!(ptarget, ClickTarget::PowerExit) {
-                    [235, 82, 106, 210]
+                if matches!(ptarget, ClickTarget::PowerShutdown) {
+                    [235, 82, 102, 225]
                 } else {
-                    [accent[0], accent[1], accent[2], 64]
+                    [accent[0], accent[1], accent[2], 74]
                 }
             } else {
                 pbg
             };
-            menu_canvas.fill_rounded_rect_aa(px, fy, pw, 30, 8, bg);
+            menu_canvas.fill_rounded_rect_aa(px, fy, btn_w, 34, 9, bg);
             let tw = menu_canvas.measure_text_px(plabel, 12.0);
-            menu_canvas.draw_text_px(px + (pw - tw) / 2, fy + 8, plabel, 12.0, [244, 246, 255, 255]);
+            menu_canvas.draw_text_px(
+                px + (btn_w - tw) / 2,
+                fy + 10,
+                plabel,
+                12.0,
+                [244, 246, 255, 255],
+            );
             state.panel.hit_regions.push((p_global, ptarget));
         }
 
         let menu_buf = MemoryRenderBuffer::from_slice(
             &menu_canvas.pixels,
             Fourcc::Abgr8888,
-            (MENU_WIDTH, menu_h),
+            (menu_w, menu_h),
             1,
             Transform::Normal,
             None,
@@ -1726,10 +1804,74 @@ pub fn render_panel_elements(
             &menu_buf,
             None,
             None,
-            Some((MENU_WIDTH, menu_h).into()),
+            Some((menu_w, menu_h).into()),
             Kind::Unspecified,
         ) {
             elements.push(OkayRenderElements::Memory(elem));
+        }
+    }
+
+    // 7. Render Pin / Unpin Context Menu for Dock & Launcher Apps
+    if let Some((pos, ref pin_action)) = state.panel.pin_context_menu.clone() {
+        if is_primary {
+            let cw = 168;
+            let ch = 46;
+            let cx = (pos.x - output_geo.loc.x).clamp(8, (output_geo.size.w - cw - 8).max(8));
+            let cy = (pos.y - output_geo.loc.y - ch - 6)
+                .clamp(PANEL_HEIGHT + 6, (output_geo.size.h - ch - 8).max(8));
+
+            let mut ctx = Canvas::new(cw, ch);
+            ctx.fill_glass_panel(0, 0, cw, ch, 10);
+            let label = match pin_action {
+                PinContextAction::PinApp(_) => "Pin to Dock",
+                PinContextAction::UnpinBuiltin(_) | PinContextAction::UnpinCustom(_) => {
+                    "Unpin from Dock"
+                }
+            };
+            let btn_rect = Rectangle::new(
+                (output_geo.loc.x + cx + 6, output_geo.loc.y + cy + 6).into(),
+                (cw - 12, ch - 12).into(),
+            );
+            let hovered = rect_contains(btn_rect, pointer_x, pointer_y);
+            let bg = if hovered {
+                [accent[0], accent[1], accent[2], 225]
+            } else {
+                [255, 255, 255, 18]
+            };
+            let fg = if hovered {
+                contrast_fg(accent)
+            } else {
+                [242, 244, 255, 255]
+            };
+            ctx.fill_rounded_rect_aa(6, 6, cw - 12, ch - 12, 7, bg);
+            let lw = ctx.measure_text_px(label, 12.5);
+            ctx.draw_text_px((cw - lw) / 2, 15, label, 12.5, fg);
+            state
+                .panel
+                .hit_regions
+                .push((btn_rect, ClickTarget::ApplyPinAction(pin_action.clone())));
+
+            let ctx_buf = MemoryRenderBuffer::from_slice(
+                &ctx.pixels,
+                Fourcc::Abgr8888,
+                (cw, ch),
+                1,
+                Transform::Normal,
+                None,
+            );
+            let ctx_phys: Point<f64, Physical> =
+                Point::<i32, Logical>::from((cx, cy)).to_f64().to_physical(scale);
+            if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                ctx_phys,
+                &ctx_buf,
+                None,
+                None,
+                Some((cw, ch).into()),
+                Kind::Unspecified,
+            ) {
+                elements.push(OkayRenderElements::Memory(elem));
+            }
         }
     }
 

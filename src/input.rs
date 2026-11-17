@@ -547,6 +547,11 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
             return;
         }
 
+        // Right-click (0x111) on Dock / Launcher -> Pin/Unpin Context Menu
+        if button == 0x111 && !super_held && crate::panel::handle_panel_right_click(state, pos) {
+            return;
+        }
+
         // Right-click (0x111) on empty desktop -> Open Desktop Context Menu
         if button == 0x111 && !super_held && crate::overlays::handle_desktop_right_click(state, pos) {
             return;

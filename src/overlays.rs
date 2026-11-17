@@ -72,6 +72,8 @@ pub struct OverlaysState {
     pub control_center_open: bool,
     pub cc_wifi_expanded: bool,
     pub cc_bt_expanded: bool,
+    pub cc_volume_track: Option<Rectangle<i32, Logical>>,
+    pub cc_dragging_volume: bool,
     pub clipboard_items: Vec<String>,
     pub alttab_visible_until: Option<Instant>,
     pub locked: bool,
@@ -104,7 +106,6 @@ enum OverlayClick {
     ControlConnectBt(usize),
     ControlToggleTiling,
     ControlCycleMinimize,
-    ControlSetVolume(i32),
     ControlOpenSettings,
     DesktopIconClick(usize),
     IconCtxOpen(usize),
@@ -130,6 +131,8 @@ impl Default for OverlaysState {
             control_center_open: false,
             cc_wifi_expanded: false,
             cc_bt_expanded: false,
+            cc_volume_track: None,
+            cc_dragging_volume: false,
             clipboard_items: vec![
                 "Welcome to OKay DE (Super+V Clipboard)".to_string(),
                 "~/.config/okay-de/config.toml".to_string(),
@@ -499,6 +502,17 @@ pub fn handle_desktop_right_click(state: &mut OkayState, pos: Point<f64, Logical
     let px = pos.x.round() as i32;
     let py = pos.y.round() as i32;
 
+    if state.overlays.control_center_open {
+        if let Some(track) = state.overlays.cc_volume_track {
+            if rect_contains(track, px, py) {
+                let pct = (((px - track.loc.x) * 100) / track.size.w.max(1)).clamp(0, 100);
+                state.panel.set_volume(pct);
+                state.overlays.cc_dragging_volume = true;
+                return true;
+            }
+        }
+    }
+
     // Check if right-click landed on a desktop icon
     for (rect, action) in state.overlays.hit_regions.iter().rev() {
         if let OverlayClick::DesktopIconClick(idx) = action {
@@ -528,6 +542,14 @@ pub fn start_desktop_rubberband(state: &mut OkayState, pos: Point<f64, Logical>)
 
 /// Handles dragging a desktop icon across the desktop grid or dragging the rubber-band box.
 pub fn handle_overlays_motion(state: &mut OkayState, pos: Point<f64, Logical>) -> bool {
+    if state.overlays.cc_dragging_volume {
+        if let Some(track) = state.overlays.cc_volume_track {
+            let px = pos.x.round() as i32;
+            let pct = (((px - track.loc.x) * 100) / track.size.w.max(1)).clamp(0, 100);
+            state.panel.set_volume(pct);
+            return true;
+        }
+    }
     if let Some(idx) = state.overlays.dragging_icon {
         let top_margin = if state.panel.dock_mode || state.panel.panel_top {
             PANEL_HEIGHT + 18
@@ -590,6 +612,10 @@ pub fn handle_overlays_motion(state: &mut OkayState, pos: Point<f64, Logical>) -
 }
 
 pub fn handle_overlays_release(state: &mut OkayState) -> bool {
+    if state.overlays.cc_dragging_volume {
+        state.overlays.cc_dragging_volume = false;
+        return true;
+    }
     if state.overlays.dragging_icon.take().is_some() {
         return true;
     }
@@ -648,6 +674,17 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
 
     let px = pos.x.round() as i32;
     let py = pos.y.round() as i32;
+
+    if state.overlays.control_center_open {
+        if let Some(track) = state.overlays.cc_volume_track {
+            if rect_contains(track, px, py) {
+                let pct = (((px - track.loc.x) * 100) / track.size.w.max(1)).clamp(0, 100);
+                state.panel.set_volume(pct);
+                state.overlays.cc_dragging_volume = true;
+                return true;
+            }
+        }
+    }
 
     let mut matched: Option<OverlayClick> = None;
     for (rect, action) in state.overlays.hit_regions.iter().rev() {
@@ -759,9 +796,6 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
                     state.animations.minimize_effect,
                     &state.settings.xkb_layout,
                 );
-            }
-            OverlayClick::ControlSetVolume(vol) => {
-                state.panel.set_volume(vol);
             }
             OverlayClick::ControlOpenSettings => {
                 state.overlays.control_center_open = false;
@@ -1562,16 +1596,10 @@ pub fn render_top_overlays(
         canvas.fill_rounded_rect_aa(track_x, track_y, fill_w, 10, 5, [accent[0], accent[1], accent[2], 235]);
         let knob_x = (track_x + fill_w).clamp(track_x + 6, track_x + track_w - 6);
         canvas.fill_circle_aa(knob_x as f32, (track_y + 5) as f32, 7.0, [248, 250, 255, 255]);
-        for step in [0, 25, 50, 75, 100] {
-            let sx = track_x + (step * track_w / 100) - (track_w / 10);
-            state.overlays.hit_regions.push((
-                Rectangle::new(
-                    (output_geo.loc.x + cc_x + sx.max(track_x), output_geo.loc.y + cc_y + vol_y + 24).into(),
-                    ((track_w / 5).max(36), 28).into(),
-                ),
-                OverlayClick::ControlSetVolume(step),
-            ));
-        }
+        state.overlays.cc_volume_track = Some(Rectangle::new(
+            (output_geo.loc.x + cc_x + track_x, output_geo.loc.y + cc_y + track_y - 8).into(),
+            (track_w, 26).into(),
+        ));
 
         // Bottom quick actions: Minimize Effect + Open System Settings
         let bot_y = 208 + extra_h;
