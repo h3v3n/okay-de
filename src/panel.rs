@@ -84,6 +84,7 @@ pub struct MaterialPalette {
     pub outline_variant: [u8; 3],
     pub expressive: bool,
     pub appearance_mode: AppearanceMode,
+    pub light_mode: bool,
 }
 
 impl Default for MaterialPalette {
@@ -96,6 +97,73 @@ impl Default for MaterialPalette {
             outline_variant: [88, 98, 128],
             expressive: false,
             appearance_mode: AppearanceMode::GlassBlur,
+            light_mode: false,
+        }
+    }
+}
+
+impl MaterialPalette {
+    pub fn fg_primary(self) -> [u8; 4] {
+        if self.light_mode {
+            [22, 26, 38, 255]
+        } else {
+            [244, 246, 255, 255]
+        }
+    }
+
+    pub fn fg_secondary(self) -> [u8; 4] {
+        if self.light_mode {
+            [78, 88, 116, 240]
+        } else {
+            [168, 176, 204, 235]
+        }
+    }
+
+    pub fn card_bg(self) -> [u8; 4] {
+        if self.light_mode {
+            [255, 255, 255, 210]
+        } else {
+            [30, 33, 46, 235]
+        }
+    }
+
+    pub fn control_bg(self) -> [u8; 4] {
+        if self.light_mode {
+            [218, 224, 238, 235]
+        } else {
+            [44, 46, 68, 255]
+        }
+    }
+
+    pub fn pill_bg(self) -> [u8; 4] {
+        if self.light_mode {
+            [16, 22, 38, 18]
+        } else {
+            [255, 255, 255, 16]
+        }
+    }
+
+    pub fn pill_hover(self) -> [u8; 4] {
+        if self.light_mode {
+            [16, 22, 38, 34]
+        } else {
+            [255, 255, 255, 34]
+        }
+    }
+
+    pub fn divider(self) -> [u8; 4] {
+        if self.light_mode {
+            [16, 22, 38, 26]
+        } else {
+            [255, 255, 255, 24]
+        }
+    }
+
+    pub fn border_edge(self) -> [u8; 4] {
+        if self.light_mode {
+            [255, 255, 255, 190]
+        } else {
+            [255, 255, 255, 48]
         }
     }
 }
@@ -242,6 +310,7 @@ pub struct PanelState {
     pub dynamic_accent: bool,
     pub m3_expressive: bool,
     pub appearance_mode: AppearanceMode,
+    pub light_mode: bool,
     pub wallpaper_accent: Option<[u8; 3]>,
     pub window_gaps: i32,
     pub search_query: String,
@@ -279,6 +348,7 @@ impl Default for PanelState {
             dynamic_accent: false,
             m3_expressive: false,
             appearance_mode: AppearanceMode::GlassBlur,
+            light_mode: false,
             wallpaper_accent: None,
             window_gaps: 10,
             search_query: String::new(),
@@ -368,30 +438,37 @@ impl PanelState {
         let t_out = if is_m3e { 0.44 } else { 0.24 };
         let t_out_var = if is_m3e { 0.36 } else { 0.18 };
 
+        let (base_surf, base_cont, base_out, base_out_var) = if self.light_mode {
+            ([242, 245, 252], [232, 237, 248], [130, 140, 166], [176, 186, 210])
+        } else {
+            ([22, 24, 32], [32, 34, 46], [72, 78, 98], [88, 94, 118])
+        };
+
         MaterialPalette {
             accent,
             surface: [
-                mix(22, accent[0], t_surf),
-                mix(24, accent[1], t_surf),
-                mix(32, accent[2], t_surf),
+                mix(base_surf[0], accent[0], t_surf),
+                mix(base_surf[1], accent[1], t_surf),
+                mix(base_surf[2], accent[2], t_surf),
             ],
             surface_container: [
-                mix(32, accent[0], t_cont),
-                mix(34, accent[1], t_cont),
-                mix(46, accent[2], t_cont),
+                mix(base_cont[0], accent[0], t_cont),
+                mix(base_cont[1], accent[1], t_cont),
+                mix(base_cont[2], accent[2], t_cont),
             ],
             outline: [
-                mix(72, accent[0], t_out),
-                mix(78, accent[1], t_out),
-                mix(98, accent[2], t_out),
+                mix(base_out[0], accent[0], t_out),
+                mix(base_out[1], accent[1], t_out),
+                mix(base_out[2], accent[2], t_out),
             ],
             outline_variant: [
-                mix(88, accent[0], t_out_var),
-                mix(94, accent[1], t_out_var),
-                mix(118, accent[2], t_out_var),
+                mix(base_out_var[0], accent[0], t_out_var),
+                mix(base_out_var[1], accent[1], t_out_var),
+                mix(base_out_var[2], accent[2], t_out_var),
             ],
             expressive: is_m3e,
             appearance_mode: self.appearance_mode,
+            light_mode: self.light_mode,
         }
     }
 
@@ -453,6 +530,7 @@ impl PanelState {
                         self.m3_expressive =
                             self.appearance_mode == AppearanceMode::Material3Expressive;
                     }
+                    "light_mode" => self.light_mode = val == "true",
                     "window_gaps" => {
                         if let Ok(g) = val.parse::<i32>() {
                             self.window_gaps = g.clamp(0, 32);
@@ -576,6 +654,7 @@ impl PanelState {
             xkb_layout,
         );
         body.push_str(&format!("appearance_mode = \"{}\"\n", self.appearance_mode.as_config_str()));
+        body.push_str(&format!("light_mode = {}\n", self.light_mode));
         body.push_str(&format!("adshield_enabled = {}\n", self.adshield_enabled));
         body.push_str(&format!("pointer_accel_disabled = {}\n", self.pointer_accel_disabled));
         for d in &self.adshield_whitelist {
@@ -1244,6 +1323,12 @@ pub fn render_panel_elements(
         })
         .unwrap_or_else(|| "OKay Desktop".to_string());
 
+    let pal = active_m3_palette();
+    let fg_prim = pal.fg_primary();
+    let fg_sec = pal.fg_secondary();
+    let pill_bg = pal.pill_bg();
+    let pill_hov = pal.pill_hover();
+
     if state.panel.dock_mode {
         // ====================================================================
         // 1:1 macOS Sequoia / Sonoma Layout:
@@ -1254,12 +1339,11 @@ pub fn render_panel_elements(
         let mb_h = PANEL_HEIGHT;
         let mut mb = Canvas::new(mb_w, mb_h);
 
-        let pal = active_m3_palette();
         match pal.appearance_mode {
             AppearanceMode::GlassBlur => {
-                // Transparent canvas over Dual-Kawase blur (which provides 0.48 tint + 1px bright edge)
+                // Transparent canvas over Dual-Kawase blur (which provides tint + 1px edge)
                 mb.fill_rect(0, 0, mb_w, mb_h, [0, 0, 0, 0]);
-                mb.fill_rect_blend(0, mb_h - 1, mb_w, 1, [255, 255, 255, 48]);
+                mb.fill_rect_blend(0, mb_h - 1, mb_w, 1, pal.border_edge());
             }
             AppearanceMode::Material3Expressive => {
                 // Opaque/tonal surfaceContainer + clear outlineVariant bottom edge
@@ -1293,15 +1377,15 @@ pub fn render_panel_elements(
         let logo_bg = if state.panel.launcher_open {
             [accent[0], accent[1], accent[2], 215]
         } else if rect_contains(logo_global, pointer_x, pointer_y) {
-            [255, 255, 255, 38]
+            pill_hov
         } else {
-            [255, 255, 255, 18]
+            pill_bg
         };
         mb.fill_rounded_rect_aa(mx, 3, logo_w, logo_h, logo_r, logo_bg);
         let logo_fg = if state.panel.launcher_open {
             contrast_fg(accent)
         } else {
-            [246, 248, 255, 255]
+            fg_prim
         };
         let lw = mb.measure_text_px("OKay", 12.5);
         mb.draw_text_bold_px(mx + (logo_w - lw) / 2, 7, "OKay", 12.5, logo_fg);
@@ -1311,9 +1395,9 @@ pub fn render_panel_elements(
             .push((logo_global, ClickTarget::ToggleLauncher));
         mx += logo_w + 10;
 
-        // Focused App Name (bold-style bright white)
+        // Focused App Name
         let app_w = (mb.measure_text_px(&focused_app_name, 13.5) + 12).clamp(64, 180);
-        mb.draw_text_px(mx, 6, &focused_app_name, 13.5, [255, 255, 255, 255]);
+        mb.draw_text_px(mx, 6, &focused_app_name, 13.5, fg_prim);
         mx += app_w + 8;
 
         // Clean macOS Menu Items: File, View, Window, Help (real interactive dropdown menus)
@@ -1336,9 +1420,9 @@ pub fn render_panel_elements(
             if is_open {
                 mb.fill_rounded_rect_aa(mx, 3, iw, mb_h - 6, 6, [accent[0], accent[1], accent[2], 68]);
             } else if rect_contains(item_rect, pointer_x, pointer_y) {
-                mb.fill_rounded_rect_aa(mx, 3, iw, mb_h - 6, 6, [255, 255, 255, 26]);
+                mb.fill_rounded_rect_aa(mx, 3, iw, mb_h - 6, 6, pill_hov);
             }
-            mb.draw_text_px(mx + 7, 7, label, 12.5, [224, 228, 240, 245]);
+            mb.draw_text_px(mx + 7, 7, label, 12.5, fg_prim);
             state
                 .panel
                 .hit_regions
@@ -1375,7 +1459,7 @@ pub fn render_panel_elements(
                     mb.draw_text_bold_px(mx + (ww - tw) / 2, 7, &lbl, 11.5, contrast_fg(accent));
                 } else {
                     if hovered {
-                        mb.fill_rounded_rect_aa(mx, 4, ww, pill_h, pill_r, [255, 255, 255, 28]);
+                        mb.fill_rounded_rect_aa(mx, 4, ww, pill_h, pill_r, pill_hov);
                     }
                     let dot_r = if hovered {
                         4.5
@@ -1385,9 +1469,11 @@ pub fn render_panel_elements(
                         2.4
                     };
                     let dot_col = if hovered {
-                        [240, 244, 255, 240]
+                        fg_prim
                     } else if is_occ {
-                        [206, 214, 238, 220]
+                        fg_sec
+                    } else if pal.light_mode {
+                        [110, 120, 148, 155]
                     } else {
                         [134, 140, 166, 155]
                     };
@@ -1409,12 +1495,12 @@ pub fn render_panel_elements(
         let clock_bg = if state.overlays.calendar_open {
             [accent[0], accent[1], accent[2], 74]
         } else if rect_contains(clock_global, pointer_x, pointer_y) {
-            [255, 255, 255, 34]
+            pill_hov
         } else {
-            [255, 255, 255, 16]
+            pill_bg
         };
         mb.fill_rounded_rect_aa(clock_x, 4, clock_w, mb_h - 8, 6, clock_bg);
-        mb.draw_text_px(clock_x + 10, 7, &clock_str, 12.0, [244, 246, 255, 255]);
+        mb.draw_text_px(clock_x + 10, 7, &clock_str, 12.0, fg_prim);
         state
             .panel
             .hit_regions
@@ -1430,9 +1516,9 @@ pub fn render_panel_elements(
         let notif_bg = if state.overlays.notif_drawer_open {
             [accent[0], accent[1], accent[2], 74]
         } else if rect_contains(notif_global, pointer_x, pointer_y) {
-            [255, 255, 255, 34]
+            pill_hov
         } else {
-            [255, 255, 255, 16]
+            pill_bg
         };
         mb.fill_rounded_rect_aa(notif_x, 4, notif_w, mb_h - 8, 6, notif_bg);
         crate::icons::draw_bell_glyph(
@@ -1440,7 +1526,7 @@ pub fn render_panel_elements(
             (notif_x + notif_w / 2) as f32,
             (mb_h / 2) as f32,
             0.95,
-            [234, 238, 250, 250],
+            fg_prim,
         );
         if !state.overlays.notifications.is_empty() || !state.overlays.history.is_empty() {
             mb.fill_circle_aa(
@@ -1465,15 +1551,15 @@ pub fn render_panel_elements(
         let cc_bg = if state.overlays.control_center_open {
             [accent[0], accent[1], accent[2], 74]
         } else if rect_contains(cc_global, pointer_x, pointer_y) {
-            [255, 255, 255, 34]
+            pill_hov
         } else {
-            [255, 255, 255, 16]
+            pill_bg
         };
         mb.fill_rounded_rect_aa(cc_x, 4, cc_w, mb_h - 8, 6, cc_bg);
-        mb.fill_rounded_rect_aa(cc_x + 7, 9, 16, 4, 2, [226, 232, 248, 220]);
-        mb.fill_circle_aa((cc_x + 19) as f32, 11.0, 2.5, [252, 253, 255, 255]);
-        mb.fill_rounded_rect_aa(cc_x + 7, 16, 16, 4, 2, [178, 188, 218, 200]);
-        mb.fill_circle_aa((cc_x + 11) as f32, 18.0, 2.5, [252, 253, 255, 255]);
+        mb.fill_rounded_rect_aa(cc_x + 7, 9, 16, 4, 2, fg_prim);
+        mb.fill_circle_aa((cc_x + 19) as f32, 11.0, 2.5, fg_prim);
+        mb.fill_rounded_rect_aa(cc_x + 7, 16, 16, 4, 2, fg_sec);
+        mb.fill_circle_aa((cc_x + 11) as f32, 18.0, 2.5, fg_prim);
         state
             .panel
             .hit_regions
@@ -1498,9 +1584,9 @@ pub fn render_panel_elements(
             (vol_w, mb_h - 6).into(),
         );
         let vol_bg = if rect_contains(vol_global, pointer_x, pointer_y) {
-            [255, 255, 255, 34]
+            pill_hov
         } else {
-            [255, 255, 255, 16]
+            pill_bg
         };
         mb.fill_rounded_rect_aa(vol_x, 4, vol_w, mb_h - 8, 6, vol_bg);
         crate::icons::draw_speaker_glyph(
@@ -1509,13 +1595,13 @@ pub fn render_panel_elements(
             (mb_h / 2) as f32,
             state.panel.volume_muted,
             0.9,
-            [232, 236, 250, 250],
+            fg_prim,
         );
-        mb.draw_text_px(vol_x + 25, 7, &vol_txt, 11.5, [228, 232, 248, 248]);
+        mb.draw_text_px(vol_x + 25, 7, &vol_txt, 11.5, fg_prim);
         if let (Some(bat_pct), Some(b_str)) = (state.panel.battery_percent, bat_txt) {
             let bx = vol_x + 25 + vol_txt_w + 8;
-            crate::icons::draw_battery_glyph(&mut mb, bx, mb_h / 2, bat_pct, [232, 236, 250, 240]);
-            mb.draw_text_px(bx + 20, 7, &b_str, 11.5, [228, 232, 248, 248]);
+            crate::icons::draw_battery_glyph(&mut mb, bx, mb_h / 2, bat_pct, fg_prim);
+            mb.draw_text_px(bx + 20, 7, &b_str, 11.5, fg_prim);
         }
         state
             .panel
@@ -1532,16 +1618,16 @@ pub fn render_panel_elements(
         let tray_bg = if state.panel.tray_open {
             [accent[0], accent[1], accent[2], 78]
         } else if rect_contains(tray_global, pointer_x, pointer_y) {
-            [255, 255, 255, 34]
+            pill_hov
         } else {
-            [255, 255, 255, 16]
+            pill_bg
         };
         mb.fill_rounded_rect_aa(tray_x, 4, tray_w, mb_h - 8, 6, tray_bg);
         let acx = (tray_x + tray_w / 2) as f32;
         let acy = (mb_h / 2) as f32;
         let dy_off = if state.panel.tray_open { -2.2 } else { 2.2 };
-        crate::icons::draw_thick_line(&mut mb, acx - 4.0, acy - dy_off, acx, acy + dy_off, 1.0, [234, 238, 250, 250]);
-        crate::icons::draw_thick_line(&mut mb, acx, acy + dy_off, acx + 4.0, acy - dy_off, 1.0, [234, 238, 250, 250]);
+        crate::icons::draw_thick_line(&mut mb, acx - 4.0, acy - dy_off, acx, acy + dy_off, 1.0, fg_prim);
+        crate::icons::draw_thick_line(&mut mb, acx, acy + dy_off, acx + 4.0, acy - dy_off, 1.0, fg_prim);
         state
             .panel
             .hit_regions
@@ -1567,15 +1653,15 @@ pub fn render_panel_elements(
                 [accent[0], accent[1], accent[2], 54]
             }
         } else if rect_contains(shield_global, pointer_x, pointer_y) {
-            [255, 255, 255, 34]
+            pill_hov
         } else {
-            [255, 255, 255, 16]
+            pill_bg
         };
         mb.fill_rounded_rect_aa(shield_x, 4, shield_w, mb_h - 8, (mb_h - 8) / 2, shield_bg);
         let shield_col = if state.adshield.enabled {
-            [140, 244, 180, 255]
+            if pal.light_mode { [22, 148, 86, 255] } else { [140, 244, 180, 255] }
         } else {
-            [180, 186, 206, 220]
+            fg_sec
         };
         crate::icons::draw_shield_glyph(
             &mut mb,
@@ -1590,7 +1676,7 @@ pub fn render_panel_elements(
             7,
             &shield_txt,
             11.5,
-            [236, 240, 252, 250],
+            fg_prim,
         );
         state
             .panel
@@ -1659,10 +1745,10 @@ pub fn render_panel_elements(
             let ty = PANEL_HEIGHT + 6;
             let mut tcan = Canvas::new(tw, th);
             tcan.fill_frosted_backdrop_panel(0, 0, tw, th, 16);
-            tcan.draw_text_px(14, 12, "Background & Running Apps", 13.5, [244, 246, 255, 255]);
+            tcan.draw_text_px(14, 12, "Background & Running Apps", 13.5, fg_prim);
 
             if bg_rows.is_empty() {
-                tcan.draw_text_px(14, 46, "No active background apps.", 12.0, [164, 170, 198, 235]);
+                tcan.draw_text_px(14, 46, "No active background apps.", 12.0, fg_sec);
             } else {
                 for (ri, (name, status, id_opt)) in bg_rows.into_iter().take(7).enumerate() {
                     let ry = 42 + ri as i32 * 36;
@@ -1677,10 +1763,10 @@ pub fn render_panel_elements(
                         tw - 20,
                         30,
                         8,
-                        if hov { [255, 255, 255, 24] } else { [255, 255, 255, 12] },
+                        if hov { pill_hov } else { pill_bg },
                     );
                     let short_name: String = name.chars().take(20).collect();
-                    tcan.draw_text_px(18, ry + 8, &short_name, 12.0, [238, 240, 252, 255]);
+                    tcan.draw_text_px(18, ry + 8, &short_name, 12.0, fg_prim);
                     let sw = tcan.measure_text_px(&status, 10.5);
                     tcan.draw_text_px(
                         tw - 46 - sw,
@@ -2132,7 +2218,7 @@ pub fn render_panel_elements(
             let mut tip_canvas = Canvas::new(tw, th);
             tip_canvas.fill_glass_panel(0, 0, tw, th, 8);
             let lw = tip_canvas.measure_text_px(&short_tip, 11.5);
-            tip_canvas.draw_text_px((tw - lw) / 2, 6, &short_tip, 11.5, [244, 246, 255, 255]);
+            tip_canvas.draw_text_px((tw - lw) / 2, 6, &short_tip, 11.5, fg_prim);
             let tip_buf = MemoryRenderBuffer::from_slice(
                 &tip_canvas.pixels,
                 Fourcc::Abgr8888,
@@ -2206,8 +2292,8 @@ pub fn render_panel_elements(
                     if hov {
                         mcan.fill_rounded_rect_aa(10, iy, mw - 20, 32, 9, [accent[0], accent[1], accent[2], 225]);
                     }
-                    let fg = if hov { contrast_fg(accent) } else { [240, 242, 254, 255] };
-                    let hfg = if hov { fg } else { [156, 164, 192, 230] };
+                    let fg = if hov { contrast_fg(accent) } else { fg_prim };
+                    let hfg = if hov { fg } else { fg_sec };
                     mcan.draw_text_px(20, iy + 9, lbl, 12.5, fg);
                     if !hint.is_empty() {
                         let hw = mcan.measure_text_px(hint, 11.0);
@@ -2216,7 +2302,7 @@ pub fn render_panel_elements(
                     state.panel.hit_regions.push((r_rect, act));
                     iy += 35;
                     if sep_after {
-                        mcan.fill_rect_blend(16, iy + 4, mw - 32, 1, [255, 255, 255, 24]);
+                        mcan.fill_rect_blend(16, iy + 4, mw - 32, 1, pal.divider());
                         iy += 10;
                     }
                 }
@@ -2496,7 +2582,7 @@ pub fn render_panel_elements(
         menu_canvas.fill_frosted_backdrop_panel(0, 0, menu_w, menu_h, 18);
 
         // Header + Centered Search Bar
-        menu_canvas.draw_text_px(20, 14, "Applications", 16.0, [246, 248, 255, 255]);
+        menu_canvas.draw_text_px(20, 14, "Applications", 16.0, fg_prim);
         let hint_badge = "Right-click app to Pin to Dock";
         let hbw = menu_canvas.measure_text_px(hint_badge, 11.0);
         menu_canvas.fill_rounded_rect_aa(
@@ -2505,18 +2591,18 @@ pub fn render_panel_elements(
             hbw + 16,
             22,
             7,
-            [255, 255, 255, 16],
+            pill_bg,
         );
         menu_canvas.draw_text_px(
             menu_w - hbw - 26,
             17,
             hint_badge,
             11.0,
-            [176, 184, 210, 235],
+            fg_sec,
         );
 
         let search_w = menu_w - 40;
-        menu_canvas.fill_rounded_rect_aa(20, 44, search_w, 34, 10, [255, 255, 255, 18]);
+        menu_canvas.fill_rounded_rect_aa(20, 44, search_w, 34, 10, pill_bg);
         if !state.panel.search_query.is_empty() {
             menu_canvas.stroke_rounded_rect_aa(
                 20,
@@ -2533,9 +2619,9 @@ pub fn render_panel_elements(
             format!("{}|", state.panel.search_query)
         };
         let search_fg = if state.panel.search_query.is_empty() {
-            [148, 154, 180, 235]
+            fg_sec
         } else {
-            [248, 250, 255, 255]
+            fg_prim
         };
         menu_canvas.draw_text_px(34, 53, &search_txt, 13.0, search_fg);
 
@@ -2602,7 +2688,7 @@ pub fn render_panel_elements(
                         cy + 64,
                         &lbl,
                         12.0,
-                        [240, 242, 252, 255],
+                        fg_prim,
                     );
                     state
                         .panel
@@ -2634,7 +2720,7 @@ pub fn render_panel_elements(
                         cy + 64,
                         &lbl,
                         12.0,
-                        [240, 242, 252, 255],
+                        fg_prim,
                     );
                     state
                         .panel
@@ -2653,13 +2739,13 @@ pub fn render_panel_elements(
 
         // Bottom Power & Session Bar (`Lock`, `Sleep`, `Reboot`, `Power Off`, `Exit DE`)
         let fy = menu_h - MENU_FOOTER_HEIGHT + 10;
-        menu_canvas.fill_rect_blend(20, fy - 10, menu_w - 40, 1, [255, 255, 255, 24]);
+        menu_canvas.fill_rect_blend(20, fy - 10, menu_w - 40, 1, pal.divider());
         let power_btns: [(&str, ClickTarget, [u8; 4]); 5] = [
-            ("Lock", ClickTarget::PowerLock, [255, 255, 255, 20]),
-            ("Sleep", ClickTarget::PowerSuspend, [255, 255, 255, 20]),
-            ("Reboot", ClickTarget::PowerReboot, [255, 255, 255, 20]),
+            ("Lock", ClickTarget::PowerLock, pill_bg),
+            ("Sleep", ClickTarget::PowerSuspend, pill_bg),
+            ("Reboot", ClickTarget::PowerReboot, pill_bg),
             ("Power Off", ClickTarget::PowerShutdown, [215, 68, 86, 175]),
-            ("Exit DE", ClickTarget::PowerExit, [255, 255, 255, 20]),
+            ("Exit DE", ClickTarget::PowerExit, pill_bg),
         ];
         let btn_w = 114i32;
         let btn_gap = 12i32;
@@ -2684,12 +2770,17 @@ pub fn render_panel_elements(
             };
             menu_canvas.fill_rounded_rect_aa(px, fy, btn_w, 34, 9, bg);
             let tw = menu_canvas.measure_text_px(plabel, 12.0);
+            let p_fg = if matches!(ptarget, ClickTarget::PowerShutdown) {
+                [255, 255, 255, 255]
+            } else {
+                fg_prim
+            };
             menu_canvas.draw_text_px(
                 px + (btn_w - tw) / 2,
                 fy + 10,
                 plabel,
                 12.0,
-                [244, 246, 255, 255],
+                p_fg,
             );
             state.panel.hit_regions.push((p_global, ptarget));
         }
@@ -2784,16 +2875,17 @@ pub fn render_panel_elements(
                 (output_geo.loc.x + cx + 6, output_geo.loc.y + cy + 6).into(),
                 (cw - 12, ch - 12).into(),
             );
+            let pal_ctx = active_m3_palette();
             let hovered = rect_contains(btn_rect, pointer_x, pointer_y);
             let bg = if hovered {
                 [accent[0], accent[1], accent[2], 225]
             } else {
-                [255, 255, 255, 18]
+                pal_ctx.pill_bg()
             };
             let fg = if hovered {
                 contrast_fg(accent)
             } else {
-                [242, 244, 255, 255]
+                pal_ctx.fg_primary()
             };
             ctx.fill_rounded_rect_aa(6, 6, cw - 12, ch - 12, 7, bg);
             let lw = ctx.measure_text_px(label, 12.5);
@@ -2863,8 +2955,15 @@ pub fn render_titlebar_element(
     let tb_x = local_win_loc.x + win_geo.loc.x;
     let tb_y = local_win_loc.y + win_geo.loc.y - tb_h;
 
+    let pal = active_m3_palette();
     let mut canvas = Canvas::new(tb_w, tb_h);
-    let bg = if is_focused {
+    let bg = if pal.light_mode {
+        if is_focused {
+            [238, 242, 250, 248]
+        } else {
+            [226, 232, 242, 236]
+        }
+    } else if is_focused {
         [30, 32, 44, 240]
     } else {
         [22, 24, 34, 224]
@@ -2876,11 +2975,12 @@ pub fn render_titlebar_element(
         // SDF anti-aliased rounded top corners (18px radius), matching 18px 4-corner offscreen window clip
         canvas.fill_rounded_rect_aa(0, 0, tb_w, tb_h + 18, 18, bg);
         if tb_w > 36 {
-            canvas.fill_rect_blend(18, 1, tb_w - 36, 1, [255, 255, 255, 36]);
+            let top_hi = if pal.light_mode { 140 } else { 36 };
+            canvas.fill_rect_blend(18, 1, tb_w - 36, 1, [255, 255, 255, top_hi]);
         }
     }
     // Subtle 1px separator line at bottom of titlebar
-    canvas.fill_rect_blend(0, tb_h - 1, tb_w, 1, [255, 255, 255, 18]);
+    canvas.fill_rect_blend(0, tb_h - 1, tb_w, 1, pal.divider());
 
     // Check if pointer is hovering over the Traffic Lights cluster on the top-left
     let rel_px = pointer_local.x.round() as i32 - tb_x;
@@ -2894,9 +2994,11 @@ pub fn render_titlebar_element(
         (36.0f32, [254, 188, 46, 255], "-"),
         (56.0f32, [40, 200, 64, 255], "+"),
     ];
-    for (cx, active_col, sym) in lights {
+        for (cx, active_col, sym) in lights {
         let col = if is_focused || lights_hovered {
             active_col
+        } else if pal.light_mode {
+            [184, 190, 206, 225]
         } else {
             [72, 74, 88, 220]
         };
@@ -2917,12 +3019,12 @@ pub fn render_titlebar_element(
             let pill_col = if is_active_tab {
                 [accent[0], accent[1], accent[2], 235]
             } else {
-                [255, 255, 255, 20]
+                pal.pill_bg()
             };
             let fg = if is_active_tab {
                 contrast_fg(accent)
             } else {
-                [206, 210, 224, 220]
+                pal.fg_secondary()
             };
             canvas.fill_rounded_rect_aa(tx, 4, tw, tb_h - 8, 9, pill_col);
             let max_chars = ((tw - 14) / 7).max(1) as usize;
@@ -2933,8 +3035,8 @@ pub fn render_titlebar_element(
         }
         // Unstack button on the right
         if tb_w > 110 {
-            canvas.fill_rounded_rect_aa(tb_w - 30, 5, 22, tb_h - 10, 8, [255, 255, 255, 22]);
-            canvas.draw_text_px(tb_w - 22, 6, "^", 12.0, [220, 224, 238, 230]);
+            canvas.fill_rounded_rect_aa(tb_w - 30, 5, 22, tb_h - 10, 8, pal.pill_bg());
+            canvas.draw_text_px(tb_w - 22, 6, "^", 12.0, pal.fg_primary());
         }
     } else {
         // Centered window title
@@ -2948,9 +3050,9 @@ pub fn render_titlebar_element(
         let title_w = canvas.measure_text_px(&short_title, 13.0);
         let title_x = ((tb_w - title_w) / 2).max(74);
         let title_fg = if is_focused {
-            [238, 240, 250, 255]
+            pal.fg_primary()
         } else {
-            [152, 156, 174, 255]
+            pal.fg_secondary()
         };
         canvas.draw_text_px(title_x, 7, &short_title, 13.0, title_fg);
     }
@@ -3515,7 +3617,7 @@ impl Canvas {
                 }
                 // Subtle 1px bright edge on outline (FBO shader also renders edge when has_fbo_blur)
                 if !has_fbo_blur {
-                    self.stroke_rounded_rect_aa(x, y, w, h, radius, [255, 255, 255, 48]);
+                    self.stroke_rounded_rect_aa(x, y, w, h, radius, pal.border_edge());
                 }
             }
         }
@@ -3649,11 +3751,17 @@ pub fn draw_animated_toggle_pill(
         *entry
     });
 
+    let pal = active_m3_palette();
     let r = (pill_h / 2).max(4);
-    let track_r = (255.0 * (1.0 - t) + accent[0] as f32 * t).round() as u8;
-    let track_g = (255.0 * (1.0 - t) + accent[1] as f32 * t).round() as u8;
-    let track_b = (255.0 * (1.0 - t) + accent[2] as f32 * t).round() as u8;
-    let track_a = (42.0 * (1.0 - t) + 245.0 * t).round() as u8;
+    let (base_r, base_g, base_b) = if pal.light_mode {
+        (16.0f32, 22.0f32, 38.0f32)
+    } else {
+        (255.0f32, 255.0f32, 255.0f32)
+    };
+    let track_r = (base_r * (1.0 - t) + accent[0] as f32 * t).round() as u8;
+    let track_g = (base_g * (1.0 - t) + accent[1] as f32 * t).round() as u8;
+    let track_b = (base_b * (1.0 - t) + accent[2] as f32 * t).round() as u8;
+    let track_a = (46.0 * (1.0 - t) + 245.0 * t).round() as u8;
     canvas.fill_rounded_rect_aa(pill_x, pill_y, pill_w, pill_h, r, [track_r, track_g, track_b, track_a]);
 
     let pad = (pill_h as f32 * 0.5).max(6.0);

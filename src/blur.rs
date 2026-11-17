@@ -83,6 +83,8 @@ uniform vec2 u_size;
 uniform vec2 u_out_size;
 uniform vec2 u_texel_step;
 uniform float u_radius;
+uniform vec3 u_tint;
+uniform float u_tint_alpha;
 uniform float u_edge_alpha;
 #ifdef EXTERNAL
 uniform samplerExternalOES tex;
@@ -119,7 +121,7 @@ void main() {
     vec3 blurred_color = blur_sum / 16.0;
 
     // Lighter frosted glass tint so background colors & shapes show through cleanly
-    vec3 col = mix(blurred_color, vec3(0.10, 0.12, 0.18), 0.26);
+    vec3 col = mix(blurred_color, u_tint, u_tint_alpha);
 
     // Crisp 1px bright border on the SDF perimeter
     float edge = (1.0 - smoothstep(0.0, 1.05, abs(d + 0.5))) * u_edge_alpha;
@@ -209,6 +211,8 @@ fn ensure_shaders(renderer: &mut GlesRenderer) -> Option<(GlesTexProgram, GlesTe
                     UniformName::new("u_out_size", UniformType::_2f),
                     UniformName::new("u_texel_step", UniformType::_2f),
                     UniformName::new("u_radius", UniformType::_1f),
+                    UniformName::new("u_tint", UniformType::_3f),
+                    UniformName::new("u_tint_alpha", UniformType::_1f),
                     UniformName::new("u_edge_alpha", UniformType::_1f),
                 ],
             ) {
@@ -457,8 +461,8 @@ pub fn blur_panel_element(
     _key: &'static str,
     rect: Rectangle<i32, Logical>,
     radius: f32,
-    _tint_rgb: [u8; 3],
-    _tint_alpha: f32,
+    tint_rgb: [u8; 3],
+    tint_alpha: f32,
     edge_alpha: f32,
     alpha: f32,
 ) -> Option<OkayRenderElements> {
@@ -507,6 +511,12 @@ pub fn blur_panel_element(
         1.0 / half_size.h.max(1) as f32,
     ];
 
+    let tint = [
+        tint_rgb[0] as f32 / 255.0,
+        tint_rgb[1] as f32 / 255.0,
+        tint_rgb[2] as f32 / 255.0,
+    ];
+
     Some(OkayRenderElements::TexShader(TextureShaderElement::new(
         tex_elem,
         composite_prog,
@@ -519,6 +529,8 @@ pub fn blur_panel_element(
             ),
             Uniform::new("u_texel_step", texel_step),
             Uniform::new("u_radius", radius),
+            Uniform::new("u_tint", tint),
+            Uniform::new("u_tint_alpha", tint_alpha),
             Uniform::new("u_edge_alpha", edge_alpha),
         ],
     )))

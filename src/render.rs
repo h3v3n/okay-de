@@ -905,6 +905,11 @@ pub fn panel_backdrop_element(
     match state.panel.appearance_mode {
         crate::panel::AppearanceMode::GlassBlur => {
             let pal = crate::panel::active_m3_palette();
+            let (tint_rgb, tint_alpha, edge_alpha) = if pal.light_mode {
+                ([242, 246, 252], 0.46, 0.55)
+            } else {
+                ([26, 30, 46], 0.26, 0.22)
+            };
             crate::blur::blur_panel_element(
                 renderer,
                 output,
@@ -912,9 +917,9 @@ pub fn panel_backdrop_element(
                 key,
                 rect,
                 radius,
-                pal.surface,
-                0.48,
-                0.24,
+                tint_rgb,
+                tint_alpha,
+                edge_alpha,
                 alpha,
             )
         }

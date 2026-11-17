@@ -120,6 +120,7 @@ enum SettingsAction {
     ToggleDynamicAccent,
     ToggleM3Expressive,
     SetAppearanceMode(crate::panel::AppearanceMode),
+    SetLightMode(bool),
     ToggleAnimations,
     AdjustAnimSpeed(f32),
     CycleMinimizeEffect,
@@ -464,6 +465,11 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                 state.panel.appearance_mode = mode;
                 state.panel.m3_expressive =
                     mode == crate::panel::AppearanceMode::Material3Expressive;
+                state.blur_dirty = true;
+                save_all_prefs(state);
+            }
+            SettingsAction::SetLightMode(light) => {
+                state.panel.light_mode = light;
                 state.blur_dirty = true;
                 save_all_prefs(state);
             }
@@ -866,8 +872,8 @@ pub fn render_settings_elements(
     let pointer_x = state.pointer_location.x.round() as i32;
     let pointer_y = state.pointer_location.y.round() as i32;
 
-    let mut canvas = Canvas::new(SETTINGS_WIDTH, SETTINGS_HEIGHT);
-    canvas.fill_frosted_backdrop_panel(0, 0, SETTINGS_WIDTH, SETTINGS_HEIGHT, 18);
+    let mut canvas = SettingsCanvas::new(SETTINGS_WIDTH, SETTINGS_HEIGHT);
+    canvas.inner.fill_frosted_backdrop_panel(0, 0, SETTINGS_WIDTH, SETTINGS_HEIGHT, 18);
 
     // Crisp 1px vertical sidebar divider (no extra stacked background rect)
     canvas.fill_rect_blend(
@@ -883,7 +889,7 @@ pub fn render_settings_elements(
     let close_hovered = rect_contains(close_rect, pointer_x, pointer_y);
     canvas.fill_circle_aa(20.0, 20.0, 6.5, [255, 95, 87, 255]);
     if close_hovered {
-        canvas.draw_text_px(17, 13, "x", 11.0, [24, 18, 18, 220]);
+        canvas.draw_text_raw(17, 13, "x", 11.0, [24, 18, 18, 220]);
     }
     state
         .settings
@@ -922,15 +928,10 @@ pub fn render_settings_elements(
         if !is_selected && hovered {
             canvas.fill_rounded_rect_aa(10, ty, SIDEBAR_WIDTH - 16, 32, 8, [255, 255, 255, 22]);
         }
-        let fg = if is_selected {
-            contrast_fg(accent)
-        } else {
-            [232, 234, 246, 255]
-        };
         if is_selected {
-            canvas.draw_text_bold_px(20, ty + 8, tab.title(), 13.0, fg);
+            canvas.draw_text_bold_raw(20, ty + 8, tab.title(), 13.0, contrast_fg(accent));
         } else {
-            canvas.draw_text_px(20, ty + 8, tab.title(), 13.0, fg);
+            canvas.draw_text_px(20, ty + 8, tab.title(), 13.0, [232, 234, 246, 255]);
         }
         state
             .settings
@@ -960,7 +961,7 @@ pub fn render_settings_elements(
             let ic_rect = Rectangle::new((wx + content_x + 258, wy + cy).into(), (248, 36).into());
             draw_setting_button(&mut canvas, content_x + 258, cy, 248, 36, "Desktop Icons", state.overlays.show_desktop_icons, accent);
             state.settings.hit_regions.push((ic_rect, SettingsAction::ToggleDesktopIcons));
-            cy += 46;
+            cy += 42;
 
             // Row 2: Minimize Animation Effect Selector (Magic Lamp Genie / ScaleGlide / Off)
             let min_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 36).into());
@@ -982,7 +983,7 @@ pub fn render_settings_elements(
                 .settings
                 .hit_regions
                 .push((min_rect, SettingsAction::CycleMinimizeEffect));
-            cy += 46;
+            cy += 42;
 
             // Row 3: Auto Refresh Sync Info + Animation Speed Controls
             let max_refresh_mhz = state
@@ -1011,23 +1012,23 @@ pub fn render_settings_elements(
             canvas.fill_rounded_rect_aa(content_x + 468, cy + 1, 34, 32, 8, [44, 46, 68, 255]);
             canvas.draw_text_px(content_x + 480, cy + 8, "+", 14.0, [240, 242, 252, 255]);
             state.settings.hit_regions.push((s_inc, SettingsAction::AdjustAnimSpeed(0.25)));
-            cy += 44;
+            cy += 40;
 
             // Row 4: Appearance Mode Switcher (Material 3 Expressive vs Glass / Blur)
-            canvas.draw_text_px(content_x, cy, "Appearance Mode", 13.0, [215, 220, 238, 255]);
-            cy += 20;
+            canvas.draw_text_px(content_x, cy, "Appearance Mode", 12.5, [215, 220, 238, 255]);
+            cy += 18;
             let is_m3e = state.panel.appearance_mode
                 == crate::panel::AppearanceMode::Material3Expressive;
             let is_glass =
                 state.panel.appearance_mode == crate::panel::AppearanceMode::GlassBlur;
 
-            let m3e_rect = Rectangle::new((wx + content_x, wy + cy).into(), (248, 36).into());
+            let m3e_rect = Rectangle::new((wx + content_x, wy + cy).into(), (248, 34).into());
             draw_setting_button(
                 &mut canvas,
                 content_x,
                 cy,
                 248,
-                36,
+                34,
                 "Material 3 Expressive",
                 is_m3e,
                 accent,
@@ -1040,14 +1041,14 @@ pub fn render_settings_elements(
             ));
 
             let glass_rect =
-                Rectangle::new((wx + content_x + 258, wy + cy).into(), (248, 36).into());
+                Rectangle::new((wx + content_x + 258, wy + cy).into(), (248, 34).into());
             draw_setting_button(
                 &mut canvas,
                 content_x + 258,
                 cy,
                 248,
-                36,
-                "Glass / Blur (Kawase)",
+                34,
+                "Glass / Blur",
                 is_glass,
                 accent,
             );
@@ -1055,39 +1056,86 @@ pub fn render_settings_elements(
                 glass_rect,
                 SettingsAction::SetAppearanceMode(crate::panel::AppearanceMode::GlassBlur),
             ));
-            cy += 44;
+            cy += 40;
+
+            // Row 5: Theme Mode Switcher (Dark Mode vs Light Mode)
+            canvas.draw_text_px(content_x, cy, "Theme", 12.5, [215, 220, 238, 255]);
+            cy += 18;
+            let dark_rect = Rectangle::new((wx + content_x, wy + cy).into(), (248, 34).into());
+            draw_setting_button(
+                &mut canvas,
+                content_x,
+                cy,
+                248,
+                34,
+                "Dark Mode",
+                !state.panel.light_mode,
+                accent,
+            );
+            state
+                .settings
+                .hit_regions
+                .push((dark_rect, SettingsAction::SetLightMode(false)));
+
+            let light_rect =
+                Rectangle::new((wx + content_x + 258, wy + cy).into(), (248, 34).into());
+            draw_setting_button(
+                &mut canvas,
+                content_x + 258,
+                cy,
+                248,
+                34,
+                "Light Mode",
+                state.panel.light_mode,
+                accent,
+            );
+            state
+                .settings
+                .hit_regions
+                .push((light_rect, SettingsAction::SetLightMode(true)));
+            cy += 40;
 
             // Row 6: Circular Accent Color Swatch Dots with Active Ring
-            canvas.draw_text_px(content_x, cy, "Accent Color", 13.0, [215, 220, 238, 255]);
-            cy += 20;
-            canvas.fill_rounded_rect_aa(content_x, cy - 4, 506, 38, 10, [255, 255, 255, 16]);
+            canvas.draw_text_px(content_x, cy, "Accent Color", 12.5, [215, 220, 238, 255]);
+            cy += 18;
+            canvas.fill_rounded_rect_aa(content_x, cy - 4, 506, 36, 10, [255, 255, 255, 16]);
             for (idx, (name, rgb, _)) in ACCENT_PRESETS.iter().enumerate() {
                 let bx = content_x + 14 + idx as i32 * 82;
-                let preset_rect = Rectangle::new((wx + bx - 4, wy + cy).into(), (78, 30).into());
+                let preset_rect = Rectangle::new((wx + bx - 4, wy + cy).into(), (78, 28).into());
                 let dot_cx = (bx + 12) as f32;
-                let dot_cy = (cy + 15) as f32;
+                let dot_cy = (cy + 14) as f32;
                 if !state.panel.dynamic_accent && state.panel.accent_preset == idx {
-                    canvas.fill_circle_aa(dot_cx, dot_cy, 11.5, [255, 255, 255, 235]);
-                    canvas.fill_circle_aa(dot_cx, dot_cy, 9.5, [24, 26, 36, 255]);
+                    let ring_col = if state.panel.light_mode {
+                        [22, 26, 38, 235]
+                    } else {
+                        [255, 255, 255, 235]
+                    };
+                    let inner_ring = if state.panel.light_mode {
+                        [240, 244, 252, 255]
+                    } else {
+                        [24, 26, 36, 255]
+                    };
+                    canvas.fill_circle_aa(dot_cx, dot_cy, 11.5, ring_col);
+                    canvas.fill_circle_aa(dot_cx, dot_cy, 9.5, inner_ring);
                 }
                 canvas.fill_circle_aa(dot_cx, dot_cy, 8.0, [rgb[0], rgb[1], rgb[2], 255]);
                 canvas.draw_text_px(bx + 26, cy + 7, name, 11.5, [232, 236, 248, 255]);
                 state.settings.hit_regions.push((preset_rect, SettingsAction::SelectAccent(idx)));
             }
-            cy += 40;
+            cy += 38;
 
             // Row 7: Reload Wallpaper + Font Info
-            let wp_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 30).into());
-            canvas.fill_rounded_rect_aa(content_x, cy, 506, 30, 6, [38, 38, 58, 255]);
+            let wp_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 28).into());
+            canvas.fill_rounded_rect_aa(content_x, cy, 506, 28, 6, [38, 38, 58, 255]);
             canvas.draw_text_px(
                 content_x + 14,
-                cy + 7,
+                cy + 6,
                 "Reload Wallpaper (~/.config/okay-de/wallpaper.png)",
                 12.5,
                 [235, 238, 250, 255],
             );
             state.settings.hit_regions.push((wp_rect, SettingsAction::ReloadWallpaper));
-            cy += 34;
+            cy += 32;
 
             let font_info = format!("Active Font: {} (TrueType anti-aliased)", active_font_name());
             canvas.draw_text_px(content_x, cy, &font_info, 12.0, [155, 160, 185, 255]);
@@ -1271,7 +1319,7 @@ pub fn render_settings_elements(
 
                 let ok_rect = Rectangle::new((wx + content_x + 344, wy + cy + 9).into(), (74, 28).into());
                 canvas.fill_rounded_rect_aa(content_x + 344, cy + 9, 74, 28, 6, [accent[0], accent[1], accent[2], 235]);
-                canvas.draw_text_px(content_x + 356, cy + 15, "Join", 12.0, contrast_fg(accent));
+                canvas.draw_text_raw(content_x + 356, cy + 15, "Join", 12.0, contrast_fg(accent));
                 state.settings.hit_regions.push((ok_rect, SettingsAction::SubmitWifiPassword));
 
                 let can_rect = Rectangle::new((wx + content_x + 424, wy + cy + 9).into(), (72, 28).into());
@@ -1832,7 +1880,7 @@ pub fn render_settings_elements(
                 6,
                 [accent[0], accent[1], accent[2], 235],
             );
-            canvas.draw_text_px(
+            canvas.draw_text_raw(
                 content_x + 408,
                 cy + 14,
                 "Update DE",
@@ -1970,7 +2018,11 @@ pub fn render_settings_elements(
             };
             canvas.fill_rounded_rect_aa(content_x + 346, cy, 160, 32, 8, upd_bg);
             let uw = canvas.measure_text_px(upd_lbl, 12.0);
-            canvas.draw_text_bold_px(content_x + 346 + (160 - uw) / 2, cy + 8, upd_lbl, 12.0, upd_fg);
+            if state.adshield.updating {
+                canvas.draw_text_bold_px(content_x + 346 + (160 - uw) / 2, cy + 8, upd_lbl, 12.0, upd_fg);
+            } else {
+                canvas.draw_text_bold_raw(content_x + 346 + (160 - uw) / 2, cy + 8, upd_lbl, 12.0, upd_fg);
+            }
             state.settings.hit_regions.push((upd_rect, SettingsAction::UpdateAdShieldList));
             cy += 42;
 
@@ -2163,8 +2215,90 @@ fn wrap_text_two_lines(canvas: &Canvas, text: &str, px_size: f32, max_w: i32) ->
     ]
 }
 
+struct SettingsCanvas {
+    inner: Canvas,
+    pal: crate::panel::MaterialPalette,
+}
+
+impl std::ops::Deref for SettingsCanvas {
+    type Target = Canvas;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl SettingsCanvas {
+    fn new(w: i32, h: i32) -> Self {
+        Self {
+            inner: Canvas::new(w, h),
+            pal: crate::panel::active_m3_palette(),
+        }
+    }
+
+    fn adapt_bg(&self, c: [u8; 4]) -> [u8; 4] {
+        if !self.pal.light_mode {
+            return c;
+        }
+        if c[0] >= 245 && c[1] >= 245 && c[2] >= 245 && c[3] <= 90 {
+            return [16, 22, 38, c[3].max(16)];
+        }
+        if c[0] < 75 && c[1] < 75 && c[2] < 95 && c[3] >= 180 {
+            if c[0] >= 40 {
+                return self.pal.control_bg();
+            }
+            return self.pal.card_bg();
+        }
+        c
+    }
+
+    fn adapt_fg(&self, c: [u8; 4]) -> [u8; 4] {
+        if !self.pal.light_mode {
+            return c;
+        }
+        if c[0] >= 205 && c[1] >= 205 && c[2] >= 210 {
+            return self.pal.fg_primary();
+        }
+        if c[0] >= 130 && c[1] >= 135 && c[2] >= 150 && (c[2] as i32 - c[0] as i32).abs() <= 45 {
+            return self.pal.fg_secondary();
+        }
+        c
+    }
+
+    fn fill_rounded_rect_aa(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: [u8; 4]) {
+        self.inner.fill_rounded_rect_aa(x, y, w, h, radius, self.adapt_bg(color));
+    }
+
+    fn stroke_rounded_rect_aa(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: [u8; 4]) {
+        self.inner.stroke_rounded_rect_aa(x, y, w, h, radius, self.adapt_bg(color));
+    }
+
+    fn fill_rect_blend(&mut self, x: i32, y: i32, w: i32, h: i32, color: [u8; 4]) {
+        self.inner.fill_rect_blend(x, y, w, h, self.adapt_bg(color));
+    }
+
+    fn fill_circle_aa(&mut self, cx: f32, cy: f32, radius: f32, color: [u8; 4]) {
+        self.inner.fill_circle_aa(cx, cy, radius, color);
+    }
+
+    fn draw_text_px(&mut self, x: i32, y: i32, text: &str, px_size: f32, color: [u8; 4]) {
+        self.inner.draw_text_px(x, y, text, px_size, self.adapt_fg(color));
+    }
+
+    fn draw_text_bold_px(&mut self, x: i32, y: i32, text: &str, px_size: f32, color: [u8; 4]) {
+        self.inner.draw_text_bold_px(x, y, text, px_size, self.adapt_fg(color));
+    }
+
+    fn draw_text_raw(&mut self, x: i32, y: i32, text: &str, px_size: f32, color: [u8; 4]) {
+        self.inner.draw_text_px(x, y, text, px_size, color);
+    }
+
+    fn draw_text_bold_raw(&mut self, x: i32, y: i32, text: &str, px_size: f32, color: [u8; 4]) {
+        self.inner.draw_text_bold_px(x, y, text, px_size, color);
+    }
+}
+
 fn draw_setting_button(
-    canvas: &mut Canvas,
+    canvas: &mut SettingsCanvas,
     x: i32,
     y: i32,
     w: i32,
@@ -2173,7 +2307,7 @@ fn draw_setting_button(
     active: bool,
     accent: [u8; 3],
 ) {
-    // M3 Expressive grouped card with subtle 1px rgba(255, 255, 255, 0.08) hairline outline
+    // M3 Expressive / Light-aware grouped card with subtle 1px hairline outline
     canvas.fill_rounded_rect_aa(x, y, w, h, 10, [255, 255, 255, 20]);
     if w > 2 && h > 2 {
         canvas.fill_rounded_rect_aa(x + 1, y + 1, w - 2, h - 2, 9, [30, 33, 46, 235]);
@@ -2184,7 +2318,7 @@ fn draw_setting_button(
     let pill_x = x + w - pill_w - 10;
     let pill_y = y + (h - pill_h) / 2;
     crate::panel::draw_animated_toggle_pill(
-        canvas,
+        &mut canvas.inner,
         label,
         pill_x,
         pill_y,

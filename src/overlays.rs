@@ -143,6 +143,7 @@ enum OverlayClick {
     ControlToggleTiling,
     ControlToggleAdShield,
     ControlCycleMinimize,
+    ControlToggleLightMode,
     ControlOpenSettings,
     OverviewFocus(ObjectId),
     OverviewClose(ObjectId),
@@ -1001,6 +1002,18 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
                     &state.settings.xkb_layout,
                 );
             }
+            OverlayClick::ControlToggleLightMode => {
+                state.panel.light_mode = !state.panel.light_mode;
+                state.blur_dirty = true;
+                state.panel.save_full_config(
+                    state.pointer_sensitivity,
+                    state.natural_scroll,
+                    state.animations.enabled,
+                    state.animations.speed,
+                    state.animations.minimize_effect,
+                    &state.settings.xkb_layout,
+                );
+            }
             OverlayClick::ControlOpenSettings => {
                 state.overlays.control_center_open = false;
                 state.settings.open = true;
@@ -1330,6 +1343,11 @@ pub fn render_top_overlays(
     let _ = is_primary;
 
     let accent = state.panel.accent_rgb();
+    let pal = crate::panel::active_m3_palette();
+    let fg_prim = pal.fg_primary();
+    let fg_sec = pal.fg_secondary();
+    let pill_bg = pal.pill_bg();
+    let pill_hov = pal.pill_hover();
     let mut elements = Vec::new();
 
     // 0. Area Screenshot Drag-to-Select Overlay (`Super + Shift + S`)
@@ -1617,12 +1635,12 @@ pub fn render_top_overlays(
             let fg = if hovered {
                 contrast_fg(accent)
             } else {
-                [240, 242, 254, 255]
+                fg_prim
             };
             let hint_fg = if hovered {
                 contrast_fg(accent)
             } else {
-                [154, 162, 190, 225]
+                fg_sec
             };
             canvas.draw_text_px(20, iy + 9, label, 13.0, fg);
             if !hint.is_empty() {
@@ -1632,7 +1650,7 @@ pub fn render_top_overlays(
             state.overlays.hit_regions.push((row_rect, act));
             iy += 36;
             if sep_after {
-                canvas.fill_rect_blend(16, iy + 4, mw - 32, 1, [255, 255, 255, 24]);
+                canvas.fill_rect_blend(16, iy + 4, mw - 32, 1, pal.divider());
                 iy += 10;
             }
         }
@@ -1698,14 +1716,14 @@ pub fn render_top_overlays(
                     contrast_fg(accent)
                 }
             } else if is_danger {
-                [248, 128, 138, 255]
+                if pal.light_mode { [198, 42, 56, 255] } else { [248, 128, 138, 255] }
             } else {
-                [238, 240, 252, 255]
+                fg_prim
             };
             let hint_fg = if hovered {
                 fg
             } else {
-                [150, 158, 185, 220]
+                fg_sec
             };
             canvas.draw_text_px(18, iy + 7, label, 12.5, fg);
             if !hint.is_empty() {
@@ -1715,7 +1733,7 @@ pub fn render_top_overlays(
             state.overlays.hit_regions.push((row_rect, act));
             iy += 32;
             if sep_after {
-                canvas.fill_rect_blend(14, iy + 3, mw - 28, 1, [255, 255, 255, 24]);
+                canvas.fill_rect_blend(14, iy + 3, mw - 28, 1, pal.divider());
                 iy += 8;
             }
         }
@@ -1790,15 +1808,15 @@ pub fn render_top_overlays(
             let fg = if hovered {
                 if is_danger { [255, 255, 255, 255] } else { contrast_fg(accent) }
             } else if is_danger {
-                [248, 128, 138, 255]
+                if pal.light_mode { [198, 42, 56, 255] } else { [248, 128, 138, 255] }
             } else {
-                [238, 240, 252, 255]
+                fg_prim
             };
             canvas.draw_text_px(18, iy + 7, label, 12.5, fg);
             state.overlays.hit_regions.push((row_rect, act));
             iy += 32;
             if sep_after {
-                canvas.fill_rect_blend(14, iy + 3, mw - 28, 1, [255, 255, 255, 24]);
+                canvas.fill_rect_blend(14, iy + 3, mw - 28, 1, pal.divider());
                 iy += 8;
             }
         }
@@ -1831,7 +1849,7 @@ pub fn render_top_overlays(
 
         let mut canvas = Canvas::new(pw, ph);
         canvas.fill_frosted_backdrop_panel(0, 0, pw, ph, 18);
-        canvas.draw_text_px(18, 14, "Properties", 15.0, [246, 248, 255, 255]);
+        canvas.draw_text_px(18, 14, "Properties", 15.0, fg_prim);
 
         let close_rect = Rectangle::new(
             (output_geo.loc.x + px + pw - 74, output_geo.loc.y + py + 12).into(),
@@ -1840,10 +1858,10 @@ pub fn render_top_overlays(
         let cbg = if rect_contains(close_rect, ptr_x, ptr_y) {
             [accent[0], accent[1], accent[2], 74]
         } else {
-            [255, 255, 255, 20]
+            pill_bg
         };
         canvas.fill_rounded_rect_aa(pw - 74, 12, 58, 24, 7, cbg);
-        canvas.draw_text_px(pw - 60, 16, "Close", 11.5, [240, 242, 252, 255]);
+        canvas.draw_text_px(pw - 60, 16, "Close", 11.5, fg_prim);
         state
             .overlays
             .hit_regions
@@ -1857,10 +1875,10 @@ pub fn render_top_overlays(
         ];
         for (i, (k, v)) in rows.into_iter().enumerate() {
             let ry = 52 + i as i32 * 40;
-            canvas.fill_rounded_rect_aa(14, ry, pw - 28, 34, 8, [255, 255, 255, 14]);
-            canvas.draw_text_px(24, ry + 10, k, 12.0, [164, 172, 198, 245]);
+            canvas.fill_rounded_rect_aa(14, ry, pw - 28, 34, 8, pill_bg);
+            canvas.draw_text_px(24, ry + 10, k, 12.0, fg_sec);
             let val: String = v.chars().take(34).collect();
-            canvas.draw_text_px(108, ry + 10, &val, 12.0, [242, 244, 255, 255]);
+            canvas.draw_text_px(108, ry + 10, &val, 12.0, fg_prim);
         }
 
         if let Some(elem) = upload_canvas(&canvas, (px, py), renderer, scale) {
@@ -1910,7 +1928,7 @@ pub fn render_top_overlays(
                 14,
                 "Window Switcher (Alt+Tab)",
                 14.0,
-                [244, 246, 254, 255],
+                fg_prim,
             );
 
             for (i, (title, ws, focused, is_min)) in wins.iter().enumerate() {
@@ -1918,12 +1936,12 @@ pub fn render_top_overlays(
                 let bg = if *focused {
                     [accent[0], accent[1], accent[2], 230]
                 } else {
-                    [255, 255, 255, 14]
+                    pill_bg
                 };
                 let fg = if *focused {
                     contrast_fg(accent)
                 } else {
-                    [235, 238, 250, 255]
+                    fg_prim
                 };
                 canvas.fill_rounded_rect_aa(12, ry, sw - 24, 34, 9, bg);
                 let kind = crate::icons::VectorIconKind::from_hint(title, title, false);
@@ -1975,7 +1993,7 @@ pub fn render_top_overlays(
             14,
             "Clipboard History",
             14.5,
-            [244, 246, 254, 255],
+            fg_prim,
         );
 
         let clear_rect = Rectangle::new(
@@ -1985,17 +2003,17 @@ pub fn render_top_overlays(
         let clear_bg = if rect_contains(clear_rect, ptr_x, ptr_y) {
             [225, 76, 92, 185]
         } else {
-            [255, 255, 255, 18]
+            pill_bg
         };
         canvas.fill_rounded_rect_aa(cw - 82, 12, 68, 22, 6, clear_bg);
-        canvas.draw_text_px(cw - 71, 16, "Clear All", 11.0, [242, 244, 255, 255]);
+        canvas.draw_text_px(cw - 71, 16, "Clear All", 11.0, fg_prim);
         state
             .overlays
             .hit_regions
             .push((clear_rect, OverlayClick::ClearClipboard));
 
         if state.overlays.clipboard_items.is_empty() {
-            canvas.draw_text_px(18, 56, "Clipboard history is empty", 12.5, [156, 164, 190, 235]);
+            canvas.draw_text_px(18, 56, "Clipboard history is empty", 12.5, fg_sec);
         } else {
             for (idx, item) in state.overlays.clipboard_items.iter().enumerate() {
                 let iy = 48 + idx as i32 * 36;
@@ -2011,23 +2029,23 @@ pub fn render_top_overlays(
                 let row_bg = if hovered {
                     [accent[0], accent[1], accent[2], 54]
                 } else {
-                    [255, 255, 255, 14]
+                    pill_bg
                 };
                 canvas.fill_rounded_rect_aa(12, iy, cw - 24, 30, 8, row_bg);
                 if hovered || idx == 0 {
                     canvas.fill_rounded_rect_aa(14, iy + 5, 3, 20, 2, [accent[0], accent[1], accent[2], 235]);
                 }
                 let short: String = item.chars().take(38).collect();
-                canvas.draw_text_px(24, iy + 7, &short, 12.5, [238, 240, 252, 255]);
+                canvas.draw_text_px(24, iy + 7, &short, 12.5, fg_prim);
 
                 let del_hovered = rect_contains(del_rect, ptr_x, ptr_y);
                 let dbg = if del_hovered {
                     [225, 76, 92, 220]
                 } else {
-                    [255, 255, 255, 16]
+                    pill_bg
                 };
                 canvas.fill_rounded_rect_aa(cw - 36, iy + 3, 24, 24, 6, dbg);
-                canvas.draw_text_px(cw - 27, iy + 8, "x", 11.5, [236, 240, 252, 245]);
+                canvas.draw_text_px(cw - 27, iy + 8, "x", 11.5, fg_prim);
 
                 state
                     .overlays
@@ -2075,7 +2093,7 @@ pub fn render_top_overlays(
 
         let (date_header, start_mon_0, days_in_month, today_opt) =
             calendar_grid_info(state.overlays.cal_month_offset);
-        canvas.draw_text_px(16, 14, &date_header, 14.0, [246, 248, 255, 255]);
+        canvas.draw_text_px(16, 14, &date_header, 14.0, fg_prim);
 
         let prev_rect = Rectangle::new(
             (output_geo.loc.x + cal_x + cal_w - 94, output_geo.loc.y + cal_y + 11).into(),
@@ -2098,20 +2116,20 @@ pub fn render_top_overlays(
             let bg = if rect_contains(r, ptr_x, ptr_y) {
                 [accent[0], accent[1], accent[2], 78]
             } else {
-                [255, 255, 255, 18]
+                pill_bg
             };
             canvas.fill_rounded_rect_aa(x_off, 11, r.size.w, 22, 6, bg);
-            canvas.draw_text_px(x_off + (r.size.w - 6) / 2, 15, lbl, 11.5, [240, 242, 255, 255]);
+            canvas.draw_text_px(x_off + (r.size.w - 6) / 2, 15, lbl, 11.5, fg_prim);
             state.overlays.hit_regions.push((r, act));
         }
 
-        canvas.fill_rounded_rect_aa(12, 42, cal_w - 24, 24, 6, [255, 255, 255, 12]);
+        canvas.fill_rounded_rect_aa(12, 42, cal_w - 24, 24, 6, pill_bg);
         canvas.draw_text_px(
             20,
             47,
             "Mo   Tu   We   Th   Fr   Sa   Su",
             12.0,
-            [168, 174, 200, 245],
+            fg_sec,
         );
 
         for day in 1..=days_in_month {
@@ -2125,11 +2143,7 @@ pub fn render_top_overlays(
                 canvas.fill_rounded_rect_aa(dx - 4, dy - 3, 28, 24, 7, [accent[0], accent[1], accent[2], 240]);
                 canvas.draw_text_px(dx + 2, dy, &format!("{:2}", day), 12.5, contrast_fg(accent));
             } else {
-                let col_fg = if col >= 5 {
-                    [172, 180, 208, 225]
-                } else {
-                    [232, 236, 248, 250]
-                };
+                let col_fg = if col >= 5 { fg_sec } else { fg_prim };
                 canvas.draw_text_px(dx + 2, dy, &format!("{:2}", day), 12.5, col_fg);
             }
         }
@@ -2249,7 +2263,7 @@ pub fn render_top_overlays(
             14,
             "Notification Center",
             14.5,
-            [246, 248, 255, 255],
+            fg_prim,
         );
 
         let clear_rect = Rectangle::new(
@@ -2259,29 +2273,29 @@ pub fn render_top_overlays(
         let clear_bg = if rect_contains(clear_rect, ptr_x, ptr_y) {
             [accent[0], accent[1], accent[2], 78]
         } else {
-            [255, 255, 255, 22]
+            pill_bg
         };
         canvas.fill_rounded_rect_aa(nw - 90, 11, 76, 24, 8, clear_bg);
-        canvas.draw_text_px(nw - 79, 15, "Clear All", 12.0, [238, 240, 252, 255]);
+        canvas.draw_text_px(nw - 79, 15, "Clear All", 12.0, fg_prim);
         state
             .overlays
             .hit_regions
             .push((clear_rect, OverlayClick::ClearNotifications));
 
         if prepared_cards.is_empty() {
-            canvas.draw_text_px(16, 62, "No recent notifications.", 12.5, [156, 162, 188, 235]);
+            canvas.draw_text_px(16, 62, "No recent notifications.", 12.5, fg_sec);
         } else {
             let mut iy = 48;
             for (title, lines, card_h) in prepared_cards {
                 if iy + card_h > nh - 8 {
                     break;
                 }
-                canvas.fill_rounded_rect_aa(12, iy, nw - 24, card_h, 12, [255, 255, 255, 14]);
+                canvas.fill_rounded_rect_aa(12, iy, nw - 24, card_h, 12, pill_bg);
                 canvas.fill_rounded_rect_aa(14, iy + 8, 3, card_h - 16, 2, [accent[0], accent[1], accent[2], 235]);
                 let st: String = title.chars().take(38).collect();
-                canvas.draw_text_bold_px(24, iy + 8, &st, 12.5, [242, 244, 255, 255]);
+                canvas.draw_text_bold_px(24, iy + 8, &st, 12.5, fg_prim);
                 for (li, line) in lines.iter().enumerate() {
-                    canvas.draw_text_px(24, iy + 27 + li as i32 * 16, line, 11.5, [182, 188, 212, 240]);
+                    canvas.draw_text_px(24, iy + 27 + li as i32 * 16, line, 11.5, fg_sec);
                 }
                 iy += card_h + 8;
             }
@@ -2367,7 +2381,7 @@ pub fn render_top_overlays(
         canvas.fill_frosted_backdrop_panel(0, 0, cc_w, cc_h, 18);
 
         // Connectivity & AdShield card (Wi-Fi, Bluetooth, AdShield, Layout)
-        canvas.fill_rounded_rect_aa(12, 12, cc_w - 24, 151, 12, [255, 255, 255, 14]);
+        canvas.fill_rounded_rect_aa(12, 12, cc_w - 24, 151, 12, pill_bg);
         let wifi_on = !state.settings.wifi_status.to_lowercase().contains("off");
         let adshield_sub = if state.adshield.enabled {
             format!("Active • {} blocked", state.adshield.blocked_count)
@@ -2412,10 +2426,10 @@ pub fn render_top_overlays(
                 (main_w, 32).into(),
             );
             if rect_contains(row_rect, ptr_x, ptr_y) {
-                canvas.fill_rounded_rect_aa(16, ry, main_w, 32, 8, [255, 255, 255, 18]);
+                canvas.fill_rounded_rect_aa(16, ry, main_w, 32, 8, pill_hov);
             }
-            let pill_col = if active { [accent[0], accent[1], accent[2], 240] } else { [255, 255, 255, 30] };
-            let pill_fg = if active { contrast_fg(accent) } else { [220, 224, 240, 255] };
+            let pill_col = if active { [accent[0], accent[1], accent[2], 240] } else { pill_hov };
+            let pill_fg = if active { contrast_fg(accent) } else { fg_prim };
             canvas.fill_circle_aa(34.0, (ry + 16) as f32, 12.0, pill_col);
             match i {
                 0 => crate::icons::draw_wifi_glyph(&mut canvas, 34.0, (ry + 21) as f32, 0.9, pill_fg),
@@ -2423,8 +2437,8 @@ pub fn render_top_overlays(
                 2 => crate::icons::draw_shield_glyph(&mut canvas, 34.0, (ry + 16) as f32, active, 0.95, pill_fg),
                 _ => crate::icons::draw_tiling_glyph(&mut canvas, 34.0, (ry + 16) as f32, 0.95, pill_fg),
             }
-            canvas.draw_text_px(54, ry + 3, lbl, 12.5, [244, 246, 255, 255]);
-            canvas.draw_text_px(54, ry + 18, &sub, 10.5, [158, 166, 192, 230]);
+            canvas.draw_text_px(54, ry + 3, lbl, 12.5, fg_prim);
+            canvas.draw_text_px(54, ry + 18, &sub, 10.5, fg_sec);
             state.overlays.hit_regions.push((row_rect, act));
 
             if let Some((is_exp, exp_act)) = expand_opt {
@@ -2436,13 +2450,13 @@ pub fn render_top_overlays(
                 let exp_bg = if is_exp {
                     [accent[0], accent[1], accent[2], 78]
                 } else if rect_contains(exp_rect, ptr_x, ptr_y) {
-                    [255, 255, 255, 32]
+                    pill_hov
                 } else {
-                    [255, 255, 255, 16]
+                    pill_bg
                 };
                 canvas.fill_rounded_rect_aa(exp_x, ry + 3, 30, 26, 7, exp_bg);
                 let glyph = if is_exp { "v" } else { ">" };
-                canvas.draw_text_px(exp_x + 11, ry + 8, glyph, 12.0, [238, 240, 252, 255]);
+                canvas.draw_text_px(exp_x + 11, ry + 8, glyph, 12.0, fg_prim);
                 state.overlays.hit_regions.push((exp_rect, exp_act));
             }
         }
@@ -2451,7 +2465,7 @@ pub fn render_top_overlays(
         if wifi_expanded || bt_expanded {
             let sub_y = 171;
             let sub_h = extra_h - 8;
-            canvas.fill_rounded_rect_aa(12, sub_y, cc_w - 24, sub_h, 12, [255, 255, 255, 12]);
+            canvas.fill_rounded_rect_aa(12, sub_y, cc_w - 24, sub_h, 12, pill_bg);
             let header_txt = if wifi_expanded {
                 &state.settings.wifi_status
             } else {
@@ -2462,7 +2476,7 @@ pub fn render_top_overlays(
 
             if wifi_expanded {
                 if state.settings.wifi_networks.is_empty() {
-                    canvas.draw_text_px(22, sub_y + 34, "Scanning Wi-Fi networks...", 11.5, [168, 174, 200, 235]);
+                    canvas.draw_text_px(22, sub_y + 34, "Scanning Wi-Fi networks...", 11.5, fg_sec);
                 } else {
                     for (idx, net) in state.settings.wifi_networks.iter().take(5).enumerate() {
                         let iy = sub_y + 28 + idx as i32 * 32;
@@ -2474,25 +2488,25 @@ pub fn render_top_overlays(
                         let row_bg = if net.in_use {
                             [accent[0], accent[1], accent[2], 54]
                         } else if hovered {
-                            [255, 255, 255, 22]
+                            pill_hov
                         } else {
-                            [255, 255, 255, 10]
+                            pill_bg
                         };
                         canvas.fill_rounded_rect_aa(18, iy, cc_w - 36, 28, 7, row_bg);
                         let short_ssid: String = net.ssid.chars().take(20).collect();
-                        canvas.draw_text_px(26, iy + 7, &short_ssid, 12.0, [240, 242, 252, 255]);
+                        canvas.draw_text_px(26, iy + 7, &short_ssid, 12.0, fg_prim);
                         let sig = if net.in_use {
                             format!("{}% *", net.signal)
                         } else {
                             format!("{}%", net.signal)
                         };
                         let sw = canvas.measure_text_px(&sig, 11.0);
-                        canvas.draw_text_px(cc_w - 26 - sw, iy + 8, &sig, 11.0, [178, 186, 212, 240]);
+                        canvas.draw_text_px(cc_w - 26 - sw, iy + 8, &sig, 11.0, fg_sec);
                         state.overlays.hit_regions.push((item_rect, OverlayClick::ControlConnectWifi(idx)));
                     }
                 }
             } else if state.settings.bt_devices.is_empty() {
-                canvas.draw_text_px(22, sub_y + 34, "No paired Bluetooth devices", 11.5, [168, 174, 200, 235]);
+                canvas.draw_text_px(22, sub_y + 34, "No paired Bluetooth devices", 11.5, fg_sec);
             } else {
                 for (idx, dev) in state.settings.bt_devices.iter().take(5).enumerate() {
                     let iy = sub_y + 28 + idx as i32 * 32;
@@ -2504,16 +2518,16 @@ pub fn render_top_overlays(
                     let row_bg = if dev.connected {
                         [accent[0], accent[1], accent[2], 54]
                     } else if hovered {
-                        [255, 255, 255, 22]
+                        pill_hov
                     } else {
-                        [255, 255, 255, 10]
+                        pill_bg
                     };
                     canvas.fill_rounded_rect_aa(18, iy, cc_w - 36, 28, 7, row_bg);
                     let short_name: String = dev.name.chars().take(20).collect();
-                    canvas.draw_text_px(26, iy + 7, &short_name, 12.0, [240, 242, 252, 255]);
+                    canvas.draw_text_px(26, iy + 7, &short_name, 12.0, fg_prim);
                     let st = if dev.connected { "On" } else { "Pair" };
                     let sw = canvas.measure_text_px(st, 11.0);
-                    canvas.draw_text_px(cc_w - 26 - sw, iy + 8, st, 11.0, [178, 186, 212, 240]);
+                    canvas.draw_text_px(cc_w - 26 - sw, iy + 8, st, 11.0, fg_sec);
                     state.overlays.hit_regions.push((item_rect, OverlayClick::ControlConnectBt(idx)));
                 }
             }
@@ -2521,17 +2535,17 @@ pub fn render_top_overlays(
 
         // Sound Volume Slider Card
         let vol_y = 171 + extra_h;
-        canvas.fill_rounded_rect_aa(12, vol_y, cc_w - 24, 64, 12, [255, 255, 255, 14]);
+        canvas.fill_rounded_rect_aa(12, vol_y, cc_w - 24, 64, 12, pill_bg);
         let vol_lbl = if state.panel.volume_muted {
             "Sound  (Muted)".to_string()
         } else {
             format!("Sound  ({}%)", state.panel.volume_percent)
         };
-        canvas.draw_text_px(24, vol_y + 8, &vol_lbl, 12.0, [240, 242, 252, 255]);
+        canvas.draw_text_px(24, vol_y + 8, &vol_lbl, 12.0, fg_prim);
         let track_x = 24;
         let track_y = vol_y + 35;
         let track_w = cc_w - 48;
-        canvas.fill_rounded_rect_aa(track_x, track_y, track_w, 10, 5, [255, 255, 255, 28]);
+        canvas.fill_rounded_rect_aa(track_x, track_y, track_w, 10, 5, pill_hov);
         let fill_w = ((track_w as f32 * state.panel.volume_percent as f32 / 100.0).round() as i32).max(10);
         canvas.fill_rounded_rect_aa(track_x, track_y, fill_w, 10, 5, [accent[0], accent[1], accent[2], 235]);
         let knob_x = (track_x + fill_w).clamp(track_x + 6, track_x + track_w - 6);
@@ -2541,8 +2555,8 @@ pub fn render_top_overlays(
             (track_w, 26).into(),
         ));
 
-        // Bottom quick actions: Minimize Effect + Open System Settings
-        let bot_y = 208 + extra_h;
+        // Bottom quick actions: Minimize Effect + Light/Dark Mode + Open System Settings (cleanly below vol_y)
+        let bot_y = 245 + extra_h;
         let min_lbl = match state.animations.minimize_effect {
             crate::animation::MinimizeEffect::MagicLamp => "FX: Genie",
             crate::animation::MinimizeEffect::ScaleGlide => "FX: Scale",
@@ -2550,27 +2564,49 @@ pub fn render_top_overlays(
         };
         let fx_rect = Rectangle::new(
             (output_geo.loc.x + cc_x + 12, output_geo.loc.y + cc_y + bot_y).into(),
-            (136, 42).into(),
+            (90, 42).into(),
         );
         let fx_bg = if rect_contains(fx_rect, ptr_x, ptr_y) {
-            [255, 255, 255, 32]
+            pill_hov
         } else {
-            [255, 255, 255, 16]
+            pill_bg
         };
-        canvas.fill_rounded_rect_aa(12, bot_y, 136, 42, 10, fx_bg);
-        canvas.draw_text_px(28, bot_y + 14, min_lbl, 12.0, [240, 242, 252, 255]);
+        canvas.fill_rounded_rect_aa(12, bot_y, 90, 42, 10, fx_bg);
+        let fx_w = canvas.measure_text_px(min_lbl, 11.5);
+        canvas.draw_text_px(12 + (90 - fx_w) / 2, bot_y + 14, min_lbl, 11.5, fg_prim);
         state
             .overlays
             .hit_regions
             .push((fx_rect, OverlayClick::ControlCycleMinimize));
 
+        let theme_lbl = if state.panel.light_mode { "Light" } else { "Dark" };
+        let theme_rect = Rectangle::new(
+            (output_geo.loc.x + cc_x + 108, output_geo.loc.y + cc_y + bot_y).into(),
+            (92, 42).into(),
+        );
+        let theme_bg = if state.panel.light_mode {
+            [accent[0], accent[1], accent[2], 64]
+        } else if rect_contains(theme_rect, ptr_x, ptr_y) {
+            pill_hov
+        } else {
+            pill_bg
+        };
+        canvas.fill_rounded_rect_aa(108, bot_y, 92, 42, 10, theme_bg);
+        let th_w = canvas.measure_text_px(theme_lbl, 11.5);
+        canvas.draw_text_px(108 + (92 - th_w) / 2, bot_y + 14, theme_lbl, 11.5, fg_prim);
+        state
+            .overlays
+            .hit_regions
+            .push((theme_rect, OverlayClick::ControlToggleLightMode));
+
         let set_rect = Rectangle::new(
-            (output_geo.loc.x + cc_x + 156, output_geo.loc.y + cc_y + bot_y).into(),
-            (142, 42).into(),
+            (output_geo.loc.x + cc_x + 206, output_geo.loc.y + cc_y + bot_y).into(),
+            (92, 42).into(),
         );
         let set_alpha = if rect_contains(set_rect, ptr_x, ptr_y) { 250 } else { 225 };
-        canvas.fill_rounded_rect_aa(156, bot_y, 142, 42, 10, [accent[0], accent[1], accent[2], set_alpha]);
-        canvas.draw_text_px(184, bot_y + 14, "Settings...", 12.0, contrast_fg(accent));
+        canvas.fill_rounded_rect_aa(206, bot_y, 92, 42, 10, [accent[0], accent[1], accent[2], set_alpha]);
+        let st_w = canvas.measure_text_px("Settings", 11.5);
+        canvas.draw_text_px(206 + (92 - st_w) / 2, bot_y + 14, "Settings", 11.5, contrast_fg(accent));
         state
             .overlays
             .hit_regions
@@ -2641,8 +2677,8 @@ pub fn render_top_overlays(
         canvas.fill_rounded_rect_aa(6, 10, 3, th - 20, 2, [accent[0], accent[1], accent[2], 235]);
         let st: String = toast.title.chars().take(32).collect();
         let sb: String = toast.body.chars().take(38).collect();
-        canvas.draw_text_px(16, 12, &st, 13.0, [246, 248, 255, 255]);
-        canvas.draw_text_px(16, 33, &sb, 11.5, [186, 194, 218, 240]);
+        canvas.draw_text_px(16, 12, &st, 13.0, fg_prim);
+        canvas.draw_text_px(16, 33, &sb, 11.5, fg_sec);
 
         state.overlays.hit_regions.push((
             Rectangle::new(
@@ -2677,12 +2713,12 @@ pub fn render_top_overlays(
         let oy = (output_geo.size.h - 140).max(PANEL_HEIGHT + 24);
         let mut canvas = Canvas::new(ow, oh);
         canvas.fill_frosted_backdrop_panel(0, 0, ow, oh, 14);
-        canvas.draw_text_px(16, 12, &osd.title, 12.5, [176, 184, 212, 245]);
+        canvas.draw_text_px(16, 12, &osd.title, 12.5, fg_sec);
         let vw = canvas.measure_text_px(&osd.value, 13.0);
-        canvas.draw_text_px(ow - 16 - vw, 12, &osd.value, 13.0, [246, 248, 255, 255]);
+        canvas.draw_text_px(ow - 16 - vw, 12, &osd.value, 13.0, fg_prim);
         if let Some(pct) = osd.progress {
             let tw = ow - 32;
-            canvas.fill_rounded_rect_aa(16, 38, tw, 8, 4, [255, 255, 255, 28]);
+            canvas.fill_rounded_rect_aa(16, 38, tw, 8, 4, pill_hov);
             let fw = ((tw * pct) / 100).max(6);
             canvas.fill_rounded_rect_aa(16, 38, fw, 8, 4, [accent[0], accent[1], accent[2], 240]);
         }
