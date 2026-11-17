@@ -124,8 +124,8 @@ void main() {
     blur_sum += texture2D(tex, clamp(screen_uv + vec2( u_texel_step.x,  u_texel_step.y), vec2(0.001), vec2(0.999))).rgb;
     vec3 blurred_color = blur_sum / 16.0;
 
-    // Uniform frosted glass tint across the entire surface
-    vec3 col = mix(blurred_color, vec3(0.10, 0.12, 0.18), 0.45);
+    // Lighter frosted glass tint so background colors & shapes show through cleanly
+    vec3 col = mix(blurred_color, vec3(0.10, 0.12, 0.18), 0.26);
 
     // Subtle procedural grain prevents 8-bit color banding
     float grain = (hash12(px + u_pos) - 0.5) * 0.018;
@@ -150,15 +150,12 @@ struct BlurPyramid {
     half_size: Size<i32, Physical>,
     quarter_size: Size<i32, Physical>,
     eighth_size: Size<i32, Physical>,
-    sixteenth_size: Size<i32, Physical>,
     tex_full: GlesTexture,
     tex_half_a: GlesTexture,
     tex_half_b: GlesTexture,
     tex_quarter_a: GlesTexture,
     tex_quarter_b: GlesTexture,
     tex_eighth_a: GlesTexture,
-    tex_eighth_b: GlesTexture,
-    tex_sixteenth: GlesTexture,
 }
 
 struct OutputBlurState {
@@ -255,22 +252,18 @@ fn create_pyramid(renderer: &mut GlesRenderer, phys_size: Size<i32, Physical>) -
     let half_size: Size<i32, Physical> = ((phys_size.w / 2).max(1), (phys_size.h / 2).max(1)).into();
     let quarter_size: Size<i32, Physical> = ((phys_size.w / 4).max(1), (phys_size.h / 4).max(1)).into();
     let eighth_size: Size<i32, Physical> = ((phys_size.w / 8).max(1), (phys_size.h / 8).max(1)).into();
-    let sixteenth_size: Size<i32, Physical> = ((phys_size.w / 16).max(1), (phys_size.h / 16).max(1)).into();
 
     Some(BlurPyramid {
         full_size,
         half_size,
         quarter_size,
         eighth_size,
-        sixteenth_size,
         tex_full: create_offscreen(renderer, full_size)?,
         tex_half_a: create_offscreen(renderer, half_size)?,
         tex_half_b: create_offscreen(renderer, half_size)?,
         tex_quarter_a: create_offscreen(renderer, quarter_size)?,
         tex_quarter_b: create_offscreen(renderer, quarter_size)?,
         tex_eighth_a: create_offscreen(renderer, eighth_size)?,
-        tex_eighth_b: create_offscreen(renderer, eighth_size)?,
-        tex_sixteenth: create_offscreen(renderer, sixteenth_size)?,
     })
 }
 
@@ -347,7 +340,7 @@ fn run_dual_kawase_passes(
         let _ = frame.finish().ok()?;
     }
 
-    // 2. Multi-pass Downsample (1/1 -> 1/2 -> 1/4 -> 1/8 -> 1/16)
+    // 2. Multi-pass Downsample (1/1 -> 1/2 -> 1/4 -> 1/8)
     blit_kawase(
         renderer,
         &pyramid.tex_full,
@@ -355,7 +348,7 @@ fn run_dual_kawase_passes(
         &mut pyramid.tex_half_a,
         pyramid.half_size,
         down_prog.clone(),
-        1.5,
+        1.25,
     )?;
     blit_kawase(
         renderer,
@@ -364,7 +357,7 @@ fn run_dual_kawase_passes(
         &mut pyramid.tex_quarter_a,
         pyramid.quarter_size,
         down_prog.clone(),
-        2.0,
+        1.5,
     )?;
     blit_kawase(
         renderer,
@@ -373,36 +366,18 @@ fn run_dual_kawase_passes(
         &mut pyramid.tex_eighth_a,
         pyramid.eighth_size,
         down_prog.clone(),
-        2.5,
+        1.75,
     )?;
+
+    // 3. Multi-pass Upsample (1/8 -> 1/4 -> 1/2)
     blit_kawase(
         renderer,
         &pyramid.tex_eighth_a,
         pyramid.eighth_size,
-        &mut pyramid.tex_sixteenth,
-        pyramid.sixteenth_size,
-        down_prog.clone(),
-        3.0,
-    )?;
-
-    // 3. Multi-pass Upsample (1/16 -> 1/8 -> 1/4 -> 1/2)
-    blit_kawase(
-        renderer,
-        &pyramid.tex_sixteenth,
-        pyramid.sixteenth_size,
-        &mut pyramid.tex_eighth_b,
-        pyramid.eighth_size,
-        up_prog.clone(),
-        3.0,
-    )?;
-    blit_kawase(
-        renderer,
-        &pyramid.tex_eighth_b,
-        pyramid.eighth_size,
         &mut pyramid.tex_quarter_b,
         pyramid.quarter_size,
         up_prog.clone(),
-        2.5,
+        1.75,
     )?;
     blit_kawase(
         renderer,
@@ -411,7 +386,7 @@ fn run_dual_kawase_passes(
         &mut pyramid.tex_half_b,
         pyramid.half_size,
         up_prog.clone(),
-        2.0,
+        1.5,
     )?;
 
     Some(())
@@ -538,8 +513,8 @@ pub fn blur_panel_element(
     );
 
     let texel_step = [
-        2.0 / half_size.w.max(1) as f32,
-        2.0 / half_size.h.max(1) as f32,
+        1.0 / half_size.w.max(1) as f32,
+        1.0 / half_size.h.max(1) as f32,
     ];
 
     Some(OkayRenderElements::TexShader(TextureShaderElement::new(
