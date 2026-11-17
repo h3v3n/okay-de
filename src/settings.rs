@@ -147,6 +147,7 @@ enum SettingsAction {
 pub struct SettingsState {
     pub open: bool,
     pub active_tab: SettingsTab,
+    anim_tab_y: f32,
     pub position: Point<i32, Logical>,
     pub dragging: Option<Point<f64, Logical>>,
     dragging_slider: Option<(SliderKind, Rectangle<i32, Logical>)>,
@@ -178,6 +179,7 @@ impl Default for SettingsState {
         let mut s = Self {
             open: false,
             active_tab: SettingsTab::Appearance,
+            anim_tab_y: (HEADER_HEIGHT + 10) as f32,
             position: Point::from((120, 75)),
             dragging: None,
             dragging_slider: None,
@@ -759,7 +761,26 @@ pub fn render_settings_elements(
         .hit_regions
         .push((close_rect, SettingsAction::CloseWindow));
 
-    canvas.draw_text_px(38, 13, "System Settings", 14.0, [242, 244, 252, 255]);
+    canvas.draw_text_bold_px(38, 12, "System Settings", 15.0, [244, 246, 255, 255]);
+
+    // Smoothly interpolate sidebar active pill indicator toward selected tab Y
+    let active_idx = SettingsTab::ALL
+        .iter()
+        .position(|t| *t == state.settings.active_tab)
+        .unwrap_or(0);
+    let target_tab_y = (HEADER_HEIGHT + 10 + active_idx as i32 * 38) as f32;
+    state.settings.anim_tab_y += (target_tab_y - state.settings.anim_tab_y) * 0.28;
+    if (target_tab_y - state.settings.anim_tab_y).abs() < 0.5 {
+        state.settings.anim_tab_y = target_tab_y;
+    }
+    canvas.fill_rounded_rect_aa(
+        10,
+        state.settings.anim_tab_y.round() as i32,
+        SIDEBAR_WIDTH - 16,
+        32,
+        8,
+        [accent[0], accent[1], accent[2], 235],
+    );
 
     for (i, tab) in SettingsTab::ALL.iter().enumerate() {
         let ty = HEADER_HEIGHT + 10 + i as i32 * 38;
@@ -769,20 +790,19 @@ pub fn render_settings_elements(
         );
         let is_selected = state.settings.active_tab == *tab;
         let hovered = rect_contains(tab_rect, pointer_x, pointer_y);
-        let bg = if is_selected {
-            [accent[0], accent[1], accent[2], 235]
-        } else if hovered {
-            [255, 255, 255, 24]
-        } else {
-            [255, 255, 255, 8]
-        };
+        if !is_selected && hovered {
+            canvas.fill_rounded_rect_aa(10, ty, SIDEBAR_WIDTH - 16, 32, 8, [255, 255, 255, 22]);
+        }
         let fg = if is_selected {
             contrast_fg(accent)
         } else {
             [232, 234, 246, 255]
         };
-        canvas.fill_rounded_rect_aa(10, ty, SIDEBAR_WIDTH - 16, 32, 8, bg);
-        canvas.draw_text_px(20, ty + 8, tab.title(), 13.0, fg);
+        if is_selected {
+            canvas.draw_text_bold_px(20, ty + 8, tab.title(), 13.0, fg);
+        } else {
+            canvas.draw_text_px(20, ty + 8, tab.title(), 13.0, fg);
+        }
         state
             .settings
             .hit_regions
@@ -794,14 +814,14 @@ pub fn render_settings_elements(
 
     match state.settings.active_tab {
         SettingsTab::Appearance => {
-            canvas.draw_text_px(
+            canvas.draw_text_bold_px(
                 content_x,
                 cy,
                 "Appearance, Dock & Animations",
-                15.0,
+                16.0,
                 [accent[0], accent[1], accent[2], 255],
             );
-            cy += 28;
+            cy += 30;
 
             // Row 1: 3 balanced Dock / Panel / Desktop toggles (162px each, 10px gap = 506px)
             let pos_rect = Rectangle::new((wx + content_x, wy + cy).into(), (162, 34).into());
@@ -1782,9 +1802,12 @@ fn draw_setting_button(
     active: bool,
     accent: [u8; 3],
 ) {
-    // macOS grouped card: rgba(255, 255, 255, 0.06)
-    canvas.fill_rounded_rect_aa(x, y, w, h, 10, [255, 255, 255, 16]);
-    // Pill-shaped macOS toggle switch (40x20)
+    // M3 Expressive grouped card with subtle 1px rgba(255, 255, 255, 0.08) hairline outline
+    canvas.fill_rounded_rect_aa(x, y, w, h, 10, [255, 255, 255, 20]);
+    if w > 2 && h > 2 {
+        canvas.fill_rounded_rect_aa(x + 1, y + 1, w - 2, h - 2, 9, [30, 33, 46, 235]);
+    }
+    // Pill-shaped toggle switch (40x20)
     let pill_w = 40;
     let pill_h = 20;
     let pill_x = x + w - pill_w - 10;
@@ -1801,7 +1824,7 @@ fn draw_setting_button(
         (pill_x + 10) as f32
     };
     canvas.fill_circle_aa(knob_cx, (pill_y + pill_h / 2) as f32, 7.5, [250, 252, 255, 255]);
-    canvas.draw_text_px(x + 12, y + (h - 14) / 2, label, 12.5, [238, 240, 252, 255]);
+    canvas.draw_text_px(x + 12, y + (h - 14) / 2, label, 13.0, [238, 240, 252, 255]);
 }
 
 fn read_os_release() -> String {

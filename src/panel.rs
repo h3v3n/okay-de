@@ -2633,9 +2633,10 @@ pub fn window_title_str(window: &Window) -> String {
 // ============================================================================
 
 struct FontEngine {
-    font: Option<Font>,
+    font_regular: Option<Font>,
+    font_bold: Option<Font>,
     font_name: String,
-    cache: HashMap<(char, u16), (Metrics, Vec<u8>)>,
+    cache: HashMap<(char, u16, bool), (Metrics, Vec<u8>)>,
 }
 
 static FONT_ENGINE: OnceLock<Mutex<FontEngine>> = OnceLock::new();
@@ -2668,18 +2669,22 @@ impl FontEngine {
         }
 
         let tiers: [(&str, fn(&str) -> bool); 4] = [
-            ("Maple Mono", |name| {
-                name.contains("maplemono") || (name.contains("maple") && name.contains("mono"))
-            }),
-            ("JetBrains Mono", |name| name.contains("jetbrainsmono") || name.contains("jetbrains")),
+            ("Liberation Sans", |name| name.contains("liberationsans")),
             ("Noto Sans", |name| {
                 name.contains("notosans-")
                     || name.contains("notosansregular")
+                    || name.contains("notosansbold")
                     || name.contains("dejavusans")
-                    || name.contains("liberationsans")
+            }),
+            ("JetBrains / Maple", |name| {
+                name.contains("jetbrainsmono") || name.contains("maplemono")
             }),
             ("System TrueType", |name| name.ends_with(".ttf")),
         ];
+
+        let mut font_regular: Option<Font> = None;
+        let mut font_bold: Option<Font> = None;
+        let mut font_name = "Built-in Sans".to_string();
 
         for (label, matcher) in tiers {
             let mut candidates: Vec<&PathBuf> = all_fonts
@@ -2691,13 +2696,13 @@ impl FontEngine {
                         .unwrap_or(false)
                 })
                 .collect();
+            if candidates.is_empty() {
+                continue;
+            }
 
+            // Pick Regular first
             candidates.sort_by_key(|p| {
-                let s = p
-                    .file_name()
-                    .and_then(|x| x.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
+                let s = p.file_name().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
                 if s.contains("regular") {
                     0
                 } else if !s.contains("italic") && !s.contains("bold") && !s.contains("light") {
@@ -2707,35 +2712,63 @@ impl FontEngine {
                 }
             });
 
-            for path in candidates {
-                if let Ok(bytes) = fs::read(path) {
-                    if let Ok(font) = Font::from_bytes(bytes, FontSettings::default()) {
-                        let file_label = path
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or(label)
-                            .to_string();
-                        tracing::info!(?path, font = %file_label, "Loaded TrueType UI font");
-                        return Self {
-                            font: Some(font),
-                            font_name: file_label,
-                            cache: HashMap::new(),
-                        };
+            if font_regular.is_none() {
+                for path in &candidates {
+                    if let Ok(bytes) = fs::read(path) {
+                        if let Ok(font) = Font::from_bytes(bytes, FontSettings::default()) {
+                            font_name = path
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or(label)
+                                .to_string();
+                            tracing::info!(?path, font = %font_name, "Loaded Regular UI font");
+                            font_regular = Some(font);
+                            break;
+                        }
                     }
                 }
+            }
+
+            // Pick matching Bold weight
+            if font_bold.is_none() {
+                for path in &candidates {
+                    let s = path
+                        .file_name()
+                        .and_then(|x| x.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if s.contains("bold") && !s.contains("italic") {
+                        if let Ok(bytes) = fs::read(path) {
+                            if let Ok(font) = Font::from_bytes(bytes, FontSettings::default()) {
+                                tracing::info!(?path, "Loaded Bold UI font");
+                                font_bold = Some(font);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if font_regular.is_some() {
+                break;
             }
         }
 
         Self {
-            font: None,
-            font_name: "Built-in Sans".to_string(),
+            font_regular,
+            font_bold,
+            font_name,
             cache: HashMap::new(),
         }
     }
 
-    fn rasterize_cached(&mut self, ch: char, px_size: f32) -> Option<(Metrics, &[u8])> {
-        let font = self.font.as_ref()?;
-        let key = (ch, (px_size * 10.0).round() as u16);
+    fn rasterize_cached(&mut self, ch: char, px_size: f32, bold: bool) -> Option<(Metrics, &[u8])> {
+        let font = if bold {
+            self.font_bold.as_ref().or(self.font_regular.as_ref())?
+        } else {
+            self.font_regular.as_ref()?
+        };
+        let key = (ch, (px_size * 10.0).round() as u16, bold);
         if !self.cache.contains_key(&key) {
             let (metrics, bitmap) = font.rasterize(ch, px_size);
             self.cache.insert(key, (metrics, bitmap));
@@ -2826,17 +2859,21 @@ impl Canvas {
             return;
         }
         let idx = ((y * self.width + x) as usize) * 4;
+        // Canvas stores premultiplied RGBA so GLES (GL_ONE, GL_ONE_MINUS_SRC_ALPHA) never produces bright halos.
+        let src_r = (color[0] as u32 * alpha + 127) / 255;
+        let src_g = (color[1] as u32 * alpha + 127) / 255;
+        let src_b = (color[2] as u32 * alpha + 127) / 255;
         if alpha == 255 || self.pixels[idx + 3] == 0 {
-            self.pixels[idx] = color[0];
-            self.pixels[idx + 1] = color[1];
-            self.pixels[idx + 2] = color[2];
-            self.pixels[idx + 3] = color[3];
+            self.pixels[idx] = src_r as u8;
+            self.pixels[idx + 1] = src_g as u8;
+            self.pixels[idx + 2] = src_b as u8;
+            self.pixels[idx + 3] = alpha as u8;
         } else {
             let inv = 255 - alpha;
-            self.pixels[idx] = ((color[0] as u32 * alpha + self.pixels[idx] as u32 * inv) / 255) as u8;
-            self.pixels[idx + 1] = ((color[1] as u32 * alpha + self.pixels[idx + 1] as u32 * inv) / 255) as u8;
-            self.pixels[idx + 2] = ((color[2] as u32 * alpha + self.pixels[idx + 2] as u32 * inv) / 255) as u8;
-            self.pixels[idx + 3] = (self.pixels[idx + 3] as u32 + ((255 - self.pixels[idx + 3] as u32) * alpha) / 255) as u8;
+            self.pixels[idx] = (src_r + (self.pixels[idx] as u32 * inv + 127) / 255).min(255) as u8;
+            self.pixels[idx + 1] = (src_g + (self.pixels[idx + 1] as u32 * inv + 127) / 255).min(255) as u8;
+            self.pixels[idx + 2] = (src_b + (self.pixels[idx + 2] as u32 * inv + 127) / 255).min(255) as u8;
+            self.pixels[idx + 3] = (alpha + (self.pixels[idx + 3] as u32 * inv + 127) / 255).min(255) as u8;
         }
     }
 
@@ -2848,13 +2885,17 @@ impl Canvas {
         let y0 = y.clamp(0, self.height);
         let x1 = (x + w).clamp(0, self.width);
         let y1 = (y + h).clamp(0, self.height);
+        let a = color[3] as u32;
+        let pr = ((color[0] as u32 * a + 127) / 255) as u8;
+        let pg = ((color[1] as u32 * a + 127) / 255) as u8;
+        let pb = ((color[2] as u32 * a + 127) / 255) as u8;
 
         for py in y0..y1 {
             for px in x0..x1 {
                 let idx = ((py * self.width + px) as usize) * 4;
-                self.pixels[idx] = color[0];
-                self.pixels[idx + 1] = color[1];
-                self.pixels[idx + 2] = color[2];
+                self.pixels[idx] = pr;
+                self.pixels[idx + 1] = pg;
+                self.pixels[idx + 2] = pb;
                 self.pixels[idx + 3] = color[3];
             }
         }
@@ -2874,6 +2915,10 @@ impl Canvas {
         let x1 = (x + w).clamp(0, self.width);
         let y1 = (y + h).clamp(0, self.height);
         let r_sq = r * r;
+        let a = color[3] as u32;
+        let pr = ((color[0] as u32 * a + 127) / 255) as u8;
+        let pg = ((color[1] as u32 * a + 127) / 255) as u8;
+        let pb = ((color[2] as u32 * a + 127) / 255) as u8;
 
         for py in y0..y1 {
             for px in x0..x1 {
@@ -2897,9 +2942,9 @@ impl Canvas {
                     continue;
                 }
                 let idx = ((py * self.width + px) as usize) * 4;
-                self.pixels[idx] = color[0];
-                self.pixels[idx + 1] = color[1];
-                self.pixels[idx + 2] = color[2];
+                self.pixels[idx] = pr;
+                self.pixels[idx + 1] = pg;
+                self.pixels[idx + 2] = pb;
                 self.pixels[idx + 3] = color[3];
             }
         }
@@ -3002,23 +3047,18 @@ impl Canvas {
     }
 
     /// Draws a clean Material 3 tonal surface panel tinted by the active Material You palette
-    /// (opaque enough to eliminate bleed-through artifacts from underlying layers) with a 1px outline.
+    /// with subtle 1.5% tonal grain noise, soft drop shadow, and 1px `rgba(255, 255, 255, 0.08)` outline.
     pub fn fill_glass_panel(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32) {
+        if w <= 0 || h <= 0 {
+            return;
+        }
         let pal = active_m3_palette();
-        // Soft drop shadow
-        self.fill_rounded_rect_aa(x - 2, y + 3, w + 4, h + 4, radius + 2, [0, 0, 0, 56]);
-        self.fill_rounded_rect_aa(x - 1, y + 1, w + 2, h + 2, radius + 1, [0, 0, 0, 74]);
-        // 1px Material 3 tonal outline border
-        let border_alpha = if pal.expressive { 165 } else { 105 };
-        self.fill_rounded_rect_aa(
-            x,
-            y,
-            w,
-            h,
-            radius,
-            [pal.outline[0], pal.outline[1], pal.outline[2], border_alpha],
-        );
-        // Clean Material 3 tonal surface body (high opacity prevents bleed-through)
+        // Multi-layer analytical soft drop shadow
+        self.fill_rounded_rect_aa(x - 2, y + 3, w + 4, h + 4, radius + 2, [0, 0, 0, 48]);
+        self.fill_rounded_rect_aa(x - 1, y + 1, w + 2, h + 2, radius + 1, [0, 0, 0, 72]);
+        // Crisp 1px rgba(255, 255, 255, 0.08) + tonal outline border
+        self.fill_rounded_rect_aa(x, y, w, h, radius, [255, 255, 255, 22]);
+        // Clean Material 3 tonal surface body
         if w > 2 && h > 2 {
             self.fill_rounded_rect_aa(
                 x + 1,
@@ -3026,13 +3066,34 @@ impl Canvas {
                 w - 2,
                 h - 2,
                 (radius - 1).max(2),
-                [pal.surface[0], pal.surface[1], pal.surface[2], 250],
+                [pal.surface[0], pal.surface[1], pal.surface[2], 246],
             );
+            // Subtle 1.5% tonal grain noise on interior pixels to prevent flat banding
+            let x0 = (x + 2).clamp(0, self.width);
+            let y0 = (y + 2).clamp(0, self.height);
+            let x1 = (x + w - 2).clamp(0, self.width);
+            let y1 = (y + h - 2).clamp(0, self.height);
+            for py in y0..y1 {
+                for px in x0..x1 {
+                    let hval = ((px as u32).wrapping_mul(374761393)
+                        ^ (py as u32).wrapping_mul(668265263))
+                        .wrapping_mul(1274126177);
+                    let delta = ((hval >> 24) & 3) as i16 - 1;
+                    if delta != 0 {
+                        let idx = ((py * self.width + px) as usize) * 4;
+                        if self.pixels[idx + 3] > 200 {
+                            self.pixels[idx] = (self.pixels[idx] as i16 + delta).clamp(0, 255) as u8;
+                            self.pixels[idx + 1] = (self.pixels[idx + 1] as i16 + delta).clamp(0, 255) as u8;
+                            self.pixels[idx + 2] = (self.pixels[idx + 2] as i16 + delta).clamp(0, 255) as u8;
+                        }
+                    }
+                }
+            }
         }
         // Subtle 1px inner top highlight
         let inset = (radius / 2).max(4);
         if w > inset * 2 {
-            let hi_alpha = if pal.expressive { 58 } else { 36 };
+            let hi_alpha = if pal.expressive { 42 } else { 24 };
             self.fill_rect_blend(x + inset, y + 1, w - inset * 2, 1, [255, 255, 255, hi_alpha]);
         }
     }
@@ -3056,17 +3117,26 @@ impl Canvas {
         self.fill_rect(x + w - 1, y, 1, h, color);
     }
 
+    /// Dark drop shadow exclusively for desktop wallpaper icon labels (`rgba(0, 0, 0, 0.65)`).
     pub fn draw_text_shadowed(&mut self, start_x: i32, start_y: i32, text: &str, px_size: f32, color: [u8; 4]) {
-        self.draw_text_px(start_x, start_y + 1, text, px_size, [0, 0, 0, 145]);
+        self.draw_text_px(start_x, start_y + 1, text, px_size, [0, 0, 0, 166]);
         self.draw_text_px(start_x, start_y, text, px_size, color);
     }
 
     pub fn measure_text_px(&self, text: &str, px_size: f32) -> i32 {
+        self.measure_text_weight(text, px_size, false)
+    }
+
+    pub fn measure_text_bold_px(&self, text: &str, px_size: f32) -> i32 {
+        self.measure_text_weight(text, px_size, true)
+    }
+
+    fn measure_text_weight(&self, text: &str, px_size: f32, bold: bool) -> i32 {
         let mut width = 0.0f32;
         with_font_engine(|engine| {
-            if engine.font.is_some() {
+            if engine.font_regular.is_some() {
                 for ch in text.chars() {
-                    if let Some((metrics, _)) = engine.rasterize_cached(ch, px_size) {
+                    if let Some((metrics, _)) = engine.rasterize_cached(ch, px_size, bold) {
                         width += metrics.advance_width;
                     }
                 }
@@ -3076,21 +3146,38 @@ impl Canvas {
     }
 
     pub fn draw_text_px(&mut self, start_x: i32, start_y: i32, text: &str, px_size: f32, color: [u8; 4]) {
+        self.draw_text_weight(start_x, start_y, text, px_size, color, false);
+    }
+
+    pub fn draw_text_bold_px(&mut self, start_x: i32, start_y: i32, text: &str, px_size: f32, color: [u8; 4]) {
+        self.draw_text_weight(start_x, start_y, text, px_size, color, true);
+    }
+
+    fn draw_text_weight(
+        &mut self,
+        start_x: i32,
+        start_y: i32,
+        text: &str,
+        px_size: f32,
+        color: [u8; 4],
+        bold: bool,
+    ) {
         let baseline_y = start_y + (px_size * 0.85).round() as i32;
         let mut cursor_x = start_x as f32;
 
         with_font_engine(|engine| {
-            if engine.font.is_some() {
+            if engine.font_regular.is_some() {
                 for ch in text.chars() {
-                    if let Some((metrics, bitmap)) = engine.rasterize_cached(ch, px_size) {
+                    if let Some((metrics, bitmap)) = engine.rasterize_cached(ch, px_size, bold) {
+                        // Snap glyph origin to exact integer pixels to prevent subpixel blur
                         let gx = cursor_x.round() as i32 + metrics.xmin;
                         let gy = baseline_y - metrics.height as i32 - metrics.ymin;
 
                         for row in 0..metrics.height {
                             for col in 0..metrics.width {
                                 let cov = bitmap[row * metrics.width + col];
-                                if cov > 8 {
-                                    let a = ((color[3] as u32 * cov as u32) / 255) as u8;
+                                if cov > 0 {
+                                    let a = ((color[3] as u32 * cov as u32 + 127) / 255) as u8;
                                     self.blend_pixel(
                                         gx + col as i32,
                                         gy + row as i32,

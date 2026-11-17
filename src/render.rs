@@ -235,16 +235,22 @@ pub fn collect_output_elements(
             if let Some(rounded_elem) = rendered_offscreen {
                 elements.push(rounded_elem);
 
-                // Soft ambient drop shadow behind all 4 rounded corners (skipped when maximized)
+                // Multi-layer analytical SDF drop shadow (deeper for active window, lighter for background)
                 if corner_radius > 0.0 {
-                    let pad = 14;
+                    let pad = if is_focused { 18 } else { 13 };
+                    let shadow_strength = if is_focused { 1.15f32 } else { 0.65f32 };
                     let shadow_area = Rectangle::new(
                         local_loc + win_geo.loc - Point::from((pad, pad + tb_h)),
                         (full_w + pad * 2, full_h + pad * 2).into(),
                     );
-                    if let Some(sdf_elem) =
-                        sdf_rounded_window_element(renderer, shadow_area, corner_radius, pad as f32, 0.0, alpha)
-                    {
+                    if let Some(sdf_elem) = sdf_rounded_window_element(
+                        renderer,
+                        shadow_area,
+                        corner_radius,
+                        pad as f32,
+                        0.0,
+                        alpha * shadow_strength,
+                    ) {
                         elements.push(sdf_elem);
                     }
                 }
@@ -666,11 +672,14 @@ void main() {
 
     float shadow = 0.0;
     if (d > 0.0) {
-        shadow = exp(-d * 0.28) * 0.38;
+        // Two-layer analytical SDF drop shadow: tight contact + soft ambient penumbra
+        float contact = exp(-d * 0.42) * 0.34;
+        float ambient = exp(-d * 0.14) * 0.22;
+        shadow = contact + ambient;
     }
 
-    float border = (1.0 - smoothstep(0.0, 1.1, abs(d + 0.5))) * u_border_alpha;
-    float a = clamp(shadow + border, 0.0, 1.0) * alpha;
+    float border = (1.0 - smoothstep(0.0, 1.0, abs(d + 0.5))) * u_border_alpha;
+    float a = clamp((shadow + border) * alpha, 0.0, 1.0);
     gl_FragColor = vec4(vec3(border * alpha), a);
 }
 "#;

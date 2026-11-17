@@ -329,14 +329,14 @@ impl AnimationManager {
             self.workspace_slide_x = 0.0;
         }
 
-        // Popup animations
-        step_towards(&mut self.launcher_open_anim, if launcher_open { 1.0 } else { 0.0 }, dt * 6.5);
-        step_towards(&mut self.calendar_open_anim, if calendar_open { 1.0 } else { 0.0 }, dt * 6.5);
-        step_towards(&mut self.notif_open_anim, if notif_open { 1.0 } else { 0.0 }, dt * 6.5);
-        step_towards(&mut self.clipboard_open_anim, if clipboard_open { 1.0 } else { 0.0 }, dt * 6.5);
-        step_towards(&mut self.control_center_open_anim, if control_center_open { 1.0 } else { 0.0 }, dt * 6.5);
-        step_towards(&mut self.top_menu_open_anim, if top_menu_open { 1.0 } else { 0.0 }, dt * 7.5);
-        step_towards(&mut self.tray_open_anim, if tray_open { 1.0 } else { 0.0 }, dt * 7.0);
+        // Material 3 Emphasized Decelerate popup animations (~190-210 ms)
+        step_towards(&mut self.launcher_open_anim, if launcher_open { 1.0 } else { 0.0 }, dt * 5.2);
+        step_towards(&mut self.calendar_open_anim, if calendar_open { 1.0 } else { 0.0 }, dt * 5.2);
+        step_towards(&mut self.notif_open_anim, if notif_open { 1.0 } else { 0.0 }, dt * 5.2);
+        step_towards(&mut self.clipboard_open_anim, if clipboard_open { 1.0 } else { 0.0 }, dt * 5.2);
+        step_towards(&mut self.control_center_open_anim, if control_center_open { 1.0 } else { 0.0 }, dt * 5.2);
+        step_towards(&mut self.top_menu_open_anim, if top_menu_open { 1.0 } else { 0.0 }, dt * 5.5);
+        step_towards(&mut self.tray_open_anim, if tray_open { 1.0 } else { 0.0 }, dt * 5.2);
 
         for anim in self.windows.values_mut() {
             if anim.open_progress < 1.0 {
@@ -747,49 +747,33 @@ uniform samplerExternalOES tex;
 uniform sampler2D tex;
 #endif
 
-float genieS(float x) {
-    float c = clamp(x, 0.0, 1.0);
-    float cos_s = 0.5 - 0.5 * cos(3.14159265 * c);
-    float bez_s = c * c * (3.0 - 2.0 * c);
-    return mix(cos_s, bez_s, 0.4);
+// Material 3 Emphasized Decelerate approximation: fast initial burst, gentle settle
+float m3EmphasizedDecel(float t) {
+    float x = clamp(t, 0.0, 1.0);
+    float inv = 1.0 - x;
+    return 1.0 - inv * inv * inv * inv;
 }
 
 void main() {
     vec2 px = v_coords * u_size;
-    float t = genieS(u_t);
+    float ease = m3EmphasizedDecel(u_t);
+    float s = mix(0.95, 1.00, ease);
 
-    // Unfold smoothly downward from Top Bar anchor (y=0) to full height (u_size.y)
-    float bot_y = mix(6.0, u_size.y, smoothstep(0.0, 0.78, t));
-    float span_y = max(bot_y, 2.0);
-    float v = px.y / span_y;
-    float vc = clamp(v, 0.0, 1.0);
+    // Uniform scale anchored cleanly at the Top Bar button (u_anchor_x, 0.0) without mesh bending
+    vec2 pivot = vec2(clamp(u_anchor_x, 16.0, max(u_size.x - 16.0, 16.0)), 0.0);
+    vec2 src_px = pivot + (px - pivot) / s;
+    vec2 uv = src_px / u_size;
 
-    // Genie funnel: top near anchor starts narrow, unfolding smoothly to full width
-    float funnel = clamp(t * 1.45 - vc * 0.45, 0.0, 1.0);
-    float s = genieS(funnel);
-    float half_src = 22.0;
-    float ax = clamp(u_anchor_x, 24.0, max(u_size.x - 24.0, 24.0));
-    float left_x = mix(ax - half_src, 0.0, s);
-    float right_x = mix(ax + half_src, u_size.x, s);
-    float span_x = max(right_x - left_x, 2.0);
-    float u = (px.x - left_x) / span_x;
-
-    float mask_x = smoothstep(left_x - 1.0, left_x + 0.8, px.x) *
-                   (1.0 - smoothstep(right_x - 0.8, right_x + 1.0, px.x));
-    float mask_y = smoothstep(-0.5, 0.5, px.y) *
-                   (1.0 - smoothstep(bot_y - 1.0, bot_y + 1.0, px.y));
-    float mask = mask_x * mask_y;
-    if (mask <= 0.001) {
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         gl_FragColor = vec4(0.0);
         return;
     }
 
-    vec4 col = texture2D(tex, clamp(vec2(u, vc), 0.0, 1.0));
+    vec4 col = texture2D(tex, uv);
     #ifdef NO_ALPHA
     col.a = 1.0;
     #endif
-    float fade = smoothstep(0.0, 0.45, u_t);
-    gl_FragColor = col * (mask * alpha * fade);
+    gl_FragColor = col * (alpha * ease);
 }
 "#;
 
@@ -875,49 +859,32 @@ uniform samplerExternalOES tex;
 uniform sampler2D tex;
 #endif
 
-float genieS(float x) {
-    float c = clamp(x, 0.0, 1.0);
-    float cos_s = 0.5 - 0.5 * cos(3.14159265 * c);
-    float bez_s = c * c * (3.0 - 2.0 * c);
-    return mix(cos_s, bez_s, 0.35);
+float m3EmphasizedDecel(float t) {
+    float x = clamp(t, 0.0, 1.0);
+    float inv = 1.0 - x;
+    return 1.0 - inv * inv * inv * inv;
 }
 
 void main() {
     vec2 px = v_coords * u_size;
-    float t = genieS(u_t);
+    float ease = m3EmphasizedDecel(u_t);
+    float s = mix(0.95, 1.00, ease);
 
-    // Bloom upward from bottom-center dock anchor (y = u_size.y)
-    float top_y = mix(u_size.y - 16.0, 0.0, smoothstep(0.0, 0.82, t));
-    float bot_y = u_size.y;
-    float span_y = max(bot_y - top_y, 2.0);
-    float v = (px.y - top_y) / span_y;
-    float vc = clamp(v, 0.0, 1.0);
+    // Clean M3 Emphasized Decelerate scale from bottom-center Dock anchor
+    vec2 pivot = vec2(u_size.x * 0.5, u_size.y);
+    vec2 src_px = pivot + (px - pivot) / s;
+    vec2 uv = src_px / u_size;
 
-    float funnel = clamp(t * 1.4 - (1.0 - vc) * 0.4, 0.0, 1.0);
-    float s = genieS(funnel);
-    float cx = u_size.x * 0.5;
-    float half_src = 70.0;
-    float left_x = mix(cx - half_src, 0.0, s);
-    float right_x = mix(cx + half_src, u_size.x, s);
-    float span_x = max(right_x - left_x, 2.0);
-    float u = (px.x - left_x) / span_x;
-
-    float mask_x = smoothstep(left_x - 1.0, left_x + 0.8, px.x) *
-                   (1.0 - smoothstep(right_x - 0.8, right_x + 1.0, px.x));
-    float mask_y = smoothstep(top_y - 1.0, top_y + 0.8, px.y) *
-                   (1.0 - smoothstep(bot_y - 0.8, bot_y + 1.0, px.y));
-    float mask = mask_x * mask_y;
-    if (mask <= 0.001) {
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         gl_FragColor = vec4(0.0);
         return;
     }
 
-    vec4 col = texture2D(tex, clamp(vec2(u, vc), 0.0, 1.0));
+    vec4 col = texture2D(tex, uv);
     #ifdef NO_ALPHA
     col.a = 1.0;
     #endif
-    float fade = smoothstep(0.0, 0.45, u_t);
-    gl_FragColor = col * (mask * alpha * fade);
+    gl_FragColor = col * (alpha * ease);
 }
 "#;
 
