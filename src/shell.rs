@@ -27,7 +27,7 @@ use smithay::{
             Client, Resource,
         },
     },
-    utils::{Rectangle, Serial},
+    utils::{IsAlive, Rectangle, Serial},
     wayland::{
         buffer::BufferHandler,
         compositor::{

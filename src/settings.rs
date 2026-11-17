@@ -176,7 +176,7 @@ pub struct SettingsState {
 
 impl Default for SettingsState {
     fn default() -> Self {
-        let mut s = Self {
+        let s = Self {
             open: false,
             active_tab: SettingsTab::Appearance,
             anim_tab_y: (HEADER_HEIGHT + 10) as f32,

@@ -14,7 +14,7 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::Resource,
     },
-    utils::{Logical, Point, Size, SERIAL_COUNTER},
+    utils::{IsAlive, Logical, Point, Size, SERIAL_COUNTER},
 };
 
 use crate::{
