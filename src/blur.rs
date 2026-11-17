@@ -146,10 +146,12 @@ struct BlurShaders {
 }
 
 struct BlurPyramid {
+    full_size: Size<i32, Physical>,
     half_size: Size<i32, Physical>,
     quarter_size: Size<i32, Physical>,
     eighth_size: Size<i32, Physical>,
     sixteenth_size: Size<i32, Physical>,
+    tex_full: GlesTexture,
     tex_half_a: GlesTexture,
     tex_half_b: GlesTexture,
     tex_quarter_a: GlesTexture,
@@ -249,16 +251,19 @@ fn create_offscreen(renderer: &mut GlesRenderer, size: Size<i32, Physical>) -> O
 }
 
 fn create_pyramid(renderer: &mut GlesRenderer, phys_size: Size<i32, Physical>) -> Option<BlurPyramid> {
+    let full_size: Size<i32, Physical> = (phys_size.w.max(1), phys_size.h.max(1)).into();
     let half_size: Size<i32, Physical> = ((phys_size.w / 2).max(1), (phys_size.h / 2).max(1)).into();
     let quarter_size: Size<i32, Physical> = ((phys_size.w / 4).max(1), (phys_size.h / 4).max(1)).into();
     let eighth_size: Size<i32, Physical> = ((phys_size.w / 8).max(1), (phys_size.h / 8).max(1)).into();
     let sixteenth_size: Size<i32, Physical> = ((phys_size.w / 16).max(1), (phys_size.h / 16).max(1)).into();
 
     Some(BlurPyramid {
+        full_size,
         half_size,
         quarter_size,
         eighth_size,
         sixteenth_size,
+        tex_full: create_offscreen(renderer, full_size)?,
         tex_half_a: create_offscreen(renderer, half_size)?,
         tex_half_b: create_offscreen(renderer, half_size)?,
         tex_quarter_a: create_offscreen(renderer, quarter_size)?,
@@ -278,7 +283,6 @@ fn blit_kawase(
     program: GlesTexProgram,
     offset: f32,
 ) -> Option<()> {
-    // Explicit `src = src_size` ensures v_coords spans [0..1, 0..1] across the entire source FBO
     let src_rect: Rectangle<f64, Logical> =
         Rectangle::from_size(Size::from((src_size.w.max(1) as f64, src_size.h.max(1) as f64)));
     let tex_elem = TextureRenderElement::from_texture_with_damage(
@@ -327,26 +331,32 @@ fn run_dual_kawase_passes(
     down_prog: &GlesTexProgram,
     up_prog: &GlesTexProgram,
     capture_elements: &[OkayRenderElements],
-    logical_size: Size<i32, Logical>,
+    scale: Scale<f64>,
     clear_color: Color32F,
 ) -> Option<()> {
-    // 1. Capture background scene into 1/2-res FBO
-    let half_scale = Scale {
-        x: pyramid.half_size.w as f64 / logical_size.w.max(1) as f64,
-        y: pyramid.half_size.h as f64 / logical_size.h.max(1) as f64,
-    };
+    // 1. Capture background scene at exact 1:1 output physical resolution & scale
+    //    so every window/icon Physical location matches the FBO 1:1 with zero shift.
     {
-        let mut target = renderer.bind(&mut pyramid.tex_half_a).ok()?;
+        let mut target = renderer.bind(&mut pyramid.tex_full).ok()?;
         let mut frame = renderer
-            .render(&mut target, pyramid.half_size, Transform::Normal)
+            .render(&mut target, pyramid.full_size, Transform::Normal)
             .ok()?;
-        let dmg = Rectangle::from_size(pyramid.half_size);
+        let dmg = Rectangle::from_size(pyramid.full_size);
         let _ = frame.clear(clear_color, &[dmg]);
-        let _ = draw_render_elements(&mut frame, half_scale, capture_elements, &[dmg]);
+        let _ = draw_render_elements(&mut frame, scale, capture_elements, &[dmg]);
         let _ = frame.finish().ok()?;
     }
 
-    // 2. Multi-pass Downsample (1/2 -> 1/4 -> 1/8 -> 1/16)
+    // 2. Multi-pass Downsample (1/1 -> 1/2 -> 1/4 -> 1/8 -> 1/16)
+    blit_kawase(
+        renderer,
+        &pyramid.tex_full,
+        pyramid.full_size,
+        &mut pyramid.tex_half_a,
+        pyramid.half_size,
+        down_prog.clone(),
+        1.5,
+    )?;
     blit_kawase(
         renderer,
         &pyramid.tex_half_a,
@@ -407,8 +417,8 @@ fn run_dual_kawase_passes(
     Some(())
 }
 
-/// Captures `bg_elements` into an offscreen FBO and runs the 6-pass Dual-Kawase blur
-/// unconditionally on every frame.
+/// Captures `bg_elements` at full 1:1 output scale into an offscreen FBO and runs
+/// the 7-pass Dual-Kawase blur unconditionally on every frame.
 pub fn update_output_blur(
     renderer: &mut GlesRenderer,
     output: &Output,
@@ -459,7 +469,7 @@ pub fn update_output_blur(
             &down_prog,
             &up_prog,
             bg_elements,
-            logical_size,
+            scale,
             clear_color,
         )
         .is_some()
@@ -507,8 +517,6 @@ pub fn blur_panel_element(
         return None;
     }
 
-    // Explicit `src = half_size` ensures v_coords spans [0..1, 0..1] over `rect`
-    // regardless of `rect.size` (Dock, Top Bar, Launcher, Notification Center, Settings).
     let src_rect: Rectangle<f64, Logical> = Rectangle::from_size(Size::from((
         half_size.w.max(1) as f64,
         half_size.h.max(1) as f64,
