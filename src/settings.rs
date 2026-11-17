@@ -85,6 +85,18 @@ pub struct BluetoothDevice {
 }
 
 #[derive(Debug, Clone)]
+pub struct SystemInfoSnapshot {
+    pub os_name: String,
+    pub kernel_ver: String,
+    pub cpu_model: String,
+    pub cpu_load: String,
+    pub ram_summary: String,
+    pub disk_summary: String,
+    pub gpu_renderer: String,
+    pub input_devices: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 enum SettingsAction {
     CloseWindow,
     SelectTab(SettingsTab),
@@ -172,8 +184,25 @@ impl Default for SettingsState {
             input_devices: Vec::new(),
             hit_regions: Vec::new(),
         };
-        s.refresh_system_info();
+        let snap = collect_system_info_snapshot();
+        s.apply_system_info_snapshot(snap);
         s
+    }
+}
+
+pub fn collect_system_info_snapshot() -> SystemInfoSnapshot {
+    SystemInfoSnapshot {
+        os_name: read_os_release(),
+        kernel_ver: fs::read_to_string("/proc/sys/kernel/osrelease")
+            .unwrap_or_else(|_| "Linux".to_string())
+            .trim()
+            .to_string(),
+        cpu_model: read_cpu_model(),
+        cpu_load: read_cpu_load(),
+        ram_summary: read_ram_summary(),
+        disk_summary: read_disk_summary(),
+        gpu_renderer: read_gpu_name(),
+        input_devices: read_input_devices(),
     }
 }
 
@@ -182,111 +211,29 @@ impl SettingsState {
         Self::default()
     }
 
+    pub fn apply_system_info_snapshot(&mut self, snap: SystemInfoSnapshot) {
+        self.os_name = snap.os_name;
+        self.kernel_ver = snap.kernel_ver;
+        self.cpu_model = snap.cpu_model;
+        self.cpu_load = snap.cpu_load;
+        self.ram_summary = snap.ram_summary;
+        self.disk_summary = snap.disk_summary;
+        self.gpu_renderer = snap.gpu_renderer;
+        self.input_devices = snap.input_devices;
+    }
+
     pub fn refresh_system_info(&mut self) {
-        self.os_name = read_os_release();
-        self.kernel_ver = fs::read_to_string("/proc/sys/kernel/osrelease")
-            .unwrap_or_else(|_| "Linux".to_string())
-            .trim()
-            .to_string();
-        self.cpu_model = read_cpu_model();
-        self.cpu_load = read_cpu_load();
-        self.ram_summary = read_ram_summary();
-        self.disk_summary = read_disk_summary();
-        self.gpu_renderer = read_gpu_name();
-        self.input_devices = read_input_devices();
+        crate::worker::dispatch(crate::worker::WorkerRequest::RefreshSystemInfo);
     }
 
     pub fn refresh_wifi(&mut self, force_rescan: bool) {
-        let rescan_arg = if force_rescan { "yes" } else { "no" };
-        let output = Command::new("nmcli")
-            .args([
-                "-t",
-                "-f",
-                "IN-USE,SSID,SIGNAL,SECURITY",
-                "dev",
-                "wifi",
-                "list",
-                "--rescan",
-                rescan_arg,
-            ])
-            .output();
-
-        match output {
-            Ok(out) if out.status.success() => {
-                let text = String::from_utf8_lossy(&out.stdout);
-                let mut nets = Vec::new();
-                let mut active_ssid = None;
-                for line in text.lines() {
-                    let parts: Vec<&str> = line.splitn(4, ':').collect();
-                    if parts.len() >= 4 {
-                        let in_use = parts[0].trim() == "*";
-                        let ssid = parts[1].trim();
-                        if ssid.is_empty() {
-                            continue;
-                        }
-                        if in_use {
-                            active_ssid = Some(ssid.to_string());
-                        }
-                        if nets.iter().any(|n: &WifiNetwork| n.ssid == ssid) {
-                            continue;
-                        }
-                        nets.push(WifiNetwork {
-                            in_use,
-                            ssid: ssid.to_string(),
-                            signal: parts[2].trim().to_string(),
-                            security: if parts[3].trim().is_empty() {
-                                "Open".to_string()
-                            } else {
-                                parts[3].trim().to_string()
-                            },
-                        });
-                        if nets.len() >= 6 {
-                            break;
-                        }
-                    }
-                }
-                self.wifi_status = match active_ssid {
-                    Some(s) => format!("Connected to {}", s),
-                    None => format!("Found {} Wi-Fi networks", nets.len()),
-                };
-                self.wifi_networks = nets;
-            }
-            Ok(out) => {
-                let err = String::from_utf8_lossy(&out.stderr);
-                self.wifi_status = format!("nmcli: {}", err.lines().next().unwrap_or("unavailable"));
-            }
-            Err(_) => {
-                self.wifi_status = "NetworkManager (nmcli) not installed".to_string();
-            }
-        }
+        self.wifi_status = "Scanning Wi-Fi networks...".to_string();
+        crate::worker::dispatch(crate::worker::WorkerRequest::RefreshWifi { force_rescan });
     }
 
     pub fn refresh_bluetooth(&mut self) {
-        let out = Command::new("bluetoothctl").arg("devices").output();
-        match out {
-            Ok(res) if res.status.success() => {
-                let text = String::from_utf8_lossy(&res.stdout);
-                let mut devs = Vec::new();
-                for line in text.lines() {
-                    // Format: `Device XX:XX:XX:XX:XX:XX Name`
-                    let mut parts = line.splitn(3, ' ');
-                    if parts.next() == Some("Device") {
-                        if let (Some(mac), Some(name)) = (parts.next(), parts.next()) {
-                            devs.push(BluetoothDevice {
-                                mac: mac.to_string(),
-                                name: name.trim().to_string(),
-                                connected: false,
-                            });
-                        }
-                    }
-                }
-                self.bt_status = format!("Found {} Bluetooth devices", devs.len());
-                self.bt_devices = devs;
-            }
-            _ => {
-                self.bt_status = "bluetoothctl service not active or unavailable".to_string();
-            }
-        }
+        self.bt_status = "Scanning Bluetooth devices...".to_string();
+        crate::worker::dispatch(crate::worker::WorkerRequest::RefreshBluetooth);
     }
 }
 
@@ -448,14 +395,15 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
             SettingsAction::ToggleWifi(idx) => {
                 if let Some(net) = state.settings.wifi_networks.get(idx).cloned() {
                     if net.in_use {
-                        let _ = Command::new("nmcli")
-                            .args(["dev", "wifi", "disconnect"])
-                            .spawn();
+                        crate::worker::dispatch(crate::worker::WorkerRequest::RunCommand {
+                            program: "nmcli".to_string(),
+                            args: vec!["dev".into(), "wifi".into(), "disconnect".into()],
+                        });
                         state.settings.wifi_status = format!("Disconnecting from {}...", net.ssid);
                     } else {
-                        let _ = Command::new("nmcli")
-                            .args(["dev", "wifi", "connect", &net.ssid])
-                            .spawn();
+                        crate::worker::dispatch(crate::worker::WorkerRequest::ConnectWifi {
+                            ssid: net.ssid.clone(),
+                        });
                         state.settings.wifi_status = format!("Connecting to {}...", net.ssid);
                     }
                 }
@@ -463,7 +411,9 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
             SettingsAction::ToggleBluetoothPower => {
                 state.settings.bt_powered = !state.settings.bt_powered;
                 let arg = if state.settings.bt_powered { "on" } else { "off" };
-                let _ = Command::new("bluetoothctl").args(["power", arg]).spawn();
+                crate::worker::dispatch(crate::worker::WorkerRequest::ToggleBluetoothPower {
+                    enable: state.settings.bt_powered,
+                });
                 state.settings.bt_status = format!("Bluetooth power {}", arg);
             }
             SettingsAction::RefreshBluetooth => {
@@ -471,9 +421,13 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
             }
             SettingsAction::ToggleBluetoothDevice(idx) => {
                 if let Some(dev) = state.settings.bt_devices.get_mut(idx) {
-                    let sub = if dev.connected { "disconnect" } else { "connect" };
-                    let _ = Command::new("bluetoothctl").args([sub, &dev.mac]).spawn();
-                    dev.connected = !dev.connected;
+                    let connect = !dev.connected;
+                    let sub = if connect { "connect" } else { "disconnect" };
+                    crate::worker::dispatch(crate::worker::WorkerRequest::ToggleBluetoothDevice {
+                        mac: dev.mac.clone(),
+                        connect,
+                    });
+                    dev.connected = connect;
                     state.settings.bt_status = format!("{} {}...", sub, dev.name);
                 }
             }

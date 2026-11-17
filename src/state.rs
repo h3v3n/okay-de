@@ -24,7 +24,10 @@ use smithay::{
     wayland::{
         compositor::{CompositorClientState, CompositorState},
         output::OutputManagerState,
-        selection::data_device::DataDeviceState,
+        selection::{
+            data_device::{set_data_device_selection, DataDeviceState},
+            wlr_data_control::DataControlState,
+        },
         shell::{
             wlr_layer::{Layer, WlrLayerShellState},
             xdg::{decoration::XdgDecorationState, XdgShellState},
@@ -235,6 +238,8 @@ pub struct OkayState {
     pub output_manager_state: OutputManagerState,
     pub seat_state: SeatState<Self>,
     pub data_device_state: DataDeviceState,
+    #[allow(dead_code)]
+    pub data_control_state: DataControlState,
 
     // Seat & input tracking
     pub seat: Seat<Self>,
@@ -244,6 +249,8 @@ pub struct OkayState {
     pub super_pressed: bool,
     pub pointer_sensitivity: f64,
     pub natural_scroll: bool,
+    pub active_clipboard_text: String,
+    pub pending_screencopies: Vec<crate::screencopy::PendingScreencopy>,
 
     // Desktop, window registry & workspaces
     pub space: Space<Window>,
@@ -279,6 +286,8 @@ impl OkayState {
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&display_handle);
         let mut seat_state = SeatState::new();
         let data_device_state = DataDeviceState::new::<Self>(&display_handle);
+        let data_control_state = DataControlState::new::<Self, _>(&display_handle, None, |_| true);
+        crate::screencopy::init_screencopy_global(&display_handle);
 
         let mut seat = seat_state.new_wl_seat(&display_handle, "seat-0");
         if let Err(err) = seat.add_keyboard(XkbConfig::default(), 250, 35) {
@@ -313,6 +322,7 @@ impl OkayState {
             output_manager_state,
             seat_state,
             data_device_state,
+            data_control_state,
             seat,
             pointer_location: Point::from((0.0, 0.0)),
             cursor_status: CursorImageStatus::default_named(),
@@ -320,6 +330,8 @@ impl OkayState {
             super_pressed: false,
             pointer_sensitivity: cfg.pointer_speed,
             natural_scroll: cfg.natural_scroll,
+            active_clipboard_text: String::new(),
+            pending_screencopies: Vec::new(),
             space: Space::default(),
             popups: PopupManager::default(),
             workspaces: WorkspaceManager::default(),
@@ -331,6 +343,37 @@ impl OkayState {
             settings,
             animations,
             overlays: crate::overlays::OverlaysState::new(),
+        }
+    }
+
+    /// Sets the compositor-owned Wayland clipboard selection so any Wayland app can paste it.
+    pub fn set_compositor_clipboard(&mut self, text: String) {
+        self.active_clipboard_text = text;
+        set_data_device_selection(
+            &self.display_handle,
+            &self.seat,
+            vec![
+                "text/plain;charset=utf-8".to_string(),
+                "text/plain".to_string(),
+                "UTF8_STRING".to_string(),
+            ],
+            (),
+        );
+    }
+
+    /// Spawns user-configured `autostart` commands in the background after `WAYLAND_DISPLAY` is set.
+    pub fn spawn_autostart(&self) {
+        for cmd in &self.panel.autostart_cmds {
+            let trimmed = cmd.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            tracing::info!(cmd = %trimmed, "Launching autostart command");
+            let _ = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(trimmed)
+                .env("WAYLAND_DISPLAY", &self.socket_name)
+                .spawn();
         }
     }
 

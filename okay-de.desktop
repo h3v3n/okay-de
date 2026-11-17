@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=OKay DE
+Comment=Standalone Wayland Desktop Environment compositor built on Smithay
+Exec=okay-de --drm
+TryExec=okay-de
+Type=Application
+DesktopNames=OKayDE
+Keywords=wayland;compositor;desktop;

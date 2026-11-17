@@ -1,7 +1,9 @@
+use std::{io::Write, os::fd::OwnedFd};
+
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
-    delegate_compositor, delegate_data_device, delegate_layer_shell, delegate_output,
-    delegate_seat, delegate_shm, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_compositor, delegate_data_control, delegate_data_device, delegate_layer_shell,
+    delegate_output, delegate_seat, delegate_shm, delegate_xdg_decoration, delegate_xdg_shell,
     desktop::{
         layer_map_for_output, LayerSurface, PopupKind, Window,
     },
@@ -35,10 +37,11 @@ use smithay::{
         output::OutputHandler,
         selection::{
             data_device::{
-                set_data_device_focus, ClientDndGrabHandler, DataDeviceHandler,
-                DataDeviceState, ServerDndGrabHandler,
+                request_data_device_client_selection, set_data_device_focus,
+                ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
             },
-            SelectionHandler,
+            wlr_data_control::{DataControlHandler, DataControlState},
+            SelectionHandler, SelectionSource, SelectionTarget,
         },
         shell::{
             wlr_layer::{
@@ -452,11 +455,54 @@ impl OutputHandler for OkayState {}
 
 impl SelectionHandler for OkayState {
     type SelectionUserData = ();
+
+    fn new_selection(
+        &mut self,
+        ty: SelectionTarget,
+        source: Option<SelectionSource>,
+        seat: Seat<Self>,
+    ) {
+        if ty == SelectionTarget::Clipboard && source.is_some() {
+            if let Ok((read_fd, write_fd)) = smithay::reexports::rustix::pipe::pipe() {
+                if request_data_device_client_selection(
+                    &seat,
+                    "text/plain;charset=utf-8".to_string(),
+                    write_fd,
+                )
+                .is_ok()
+                {
+                    crate::worker::dispatch(crate::worker::WorkerRequest::ReadClipboardPipe {
+                        fd: read_fd,
+                    });
+                }
+            }
+        }
+    }
+
+    fn send_selection(
+        &mut self,
+        ty: SelectionTarget,
+        _mime_type: String,
+        fd: OwnedFd,
+        _seat: Seat<Self>,
+        _user_data: &Self::SelectionUserData,
+    ) {
+        if ty == SelectionTarget::Clipboard {
+            let mut file = std::fs::File::from(fd);
+            let _ = file.write_all(self.active_clipboard_text.as_bytes());
+        }
+    }
 }
 
 impl DataDeviceHandler for OkayState {
     fn data_device_state(&self) -> &DataDeviceState {
         &self.data_device_state
+    }
+}
+
+impl DataControlHandler for OkayState {
+    fn data_control_state(&self) -> &DataControlState {
+        &self.data_control_state
     }
 }
 
@@ -471,3 +517,4 @@ delegate_layer_shell!(OkayState);
 delegate_seat!(OkayState);
 delegate_output!(OkayState);
 delegate_data_device!(OkayState);
+delegate_data_control!(OkayState);

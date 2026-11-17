@@ -57,11 +57,17 @@ impl VectorIconKind {
     }
 }
 
-static ICON_CACHE: OnceLock<Mutex<HashMap<String, Option<DecodedIcon>>>> = OnceLock::new();
+#[derive(Debug, Clone)]
+enum IconCacheEntry {
+    Loading,
+    Ready(DecodedIcon),
+    Missing,
+}
 
-/// Resolves an icon name or path from standard XDG icon themes (`/usr/share/icons/{Papirus,Adwaita,hicolor}`,
-/// `/usr/share/pixmaps`, `~/.local/share/icons`), decodes `.png` or rasterizes `.svg` via `rsvg-convert`,
-/// scales to `target_size x target_size`, and caches the RGBA buffer.
+static ICON_CACHE: OnceLock<Mutex<HashMap<String, IconCacheEntry>>> = OnceLock::new();
+
+/// Non-blocking icon lookup: returns cached RGBA icon if ready, or schedules background
+/// decoding (PNG / SVG via `rsvg-convert`) on the worker thread and returns `None` meanwhile.
 pub fn load_system_icon(icon_name: &str, target_size: i32) -> Option<DecodedIcon> {
     let trimmed = icon_name.trim();
     if trimmed.is_empty() {
@@ -69,17 +75,42 @@ pub fn load_system_icon(icon_name: &str, target_size: i32) -> Option<DecodedIcon
     }
     let key = format!("{}@{}", trimmed, target_size);
     let cache = ICON_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(guard) = cache.lock() {
-        if let Some(cached) = guard.get(&key) {
-            return cached.clone();
+    if let Ok(mut guard) = cache.lock() {
+        match guard.get(&key) {
+            Some(IconCacheEntry::Ready(icon)) => return Some(icon.clone()),
+            Some(IconCacheEntry::Loading) | Some(IconCacheEntry::Missing) => return None,
+            None => {
+                guard.insert(key, IconCacheEntry::Loading);
+            }
         }
     }
 
-    let loaded = find_icon_path(trimmed).and_then(|p| decode_icon_file(&p, target_size));
-    if let Ok(mut guard) = cache.lock() {
-        guard.insert(key, loaded.clone());
+    crate::worker::dispatch(crate::worker::WorkerRequest::LoadIcon {
+        name: trimmed.to_string(),
+        target_size,
+    });
+    None
+}
+
+/// Synchronous icon loader executed on the background worker thread.
+pub fn load_system_icon_sync(icon_name: &str, target_size: i32) {
+    let trimmed = icon_name.trim();
+    if trimmed.is_empty() {
+        return;
     }
-    loaded
+    let key = format!("{}@{}", trimmed, target_size);
+    let loaded = find_icon_path(trimmed).and_then(|p| decode_icon_file(&p, target_size));
+    let cache = ICON_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = cache.lock() {
+        match loaded {
+            Some(icon) => {
+                guard.insert(key, IconCacheEntry::Ready(icon));
+            }
+            None => {
+                guard.insert(key, IconCacheEntry::Missing);
+            }
+        }
+    }
 }
 
 fn find_icon_path(icon_name: &str) -> Option<PathBuf> {

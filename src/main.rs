@@ -5,18 +5,22 @@ mod input;
 mod overlays;
 mod panel;
 mod render;
+mod screencopy;
 mod settings;
 mod shell;
 mod state;
+mod worker;
 
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     path::Path,
+    rc::Rc,
     sync::Arc,
     time::Duration,
 };
 
-use calloop::EventLoop;
+use calloop::{EventLoop, LoopHandle};
 use smithay::{
     backend::{
         allocator::{
@@ -125,6 +129,16 @@ fn init_wayland_loop() -> Result<
             }
         })?;
 
+    let (worker_tx, worker_rx) = calloop::channel::channel::<crate::worker::WorkerResponse>();
+    crate::worker::init_worker(worker_tx);
+    event_loop
+        .handle()
+        .insert_source(worker_rx, |event, _, state| {
+            if let calloop::channel::Event::Msg(resp) = event {
+                crate::worker::handle_response(state, resp);
+            }
+        })?;
+
     let state = OkayState::new(&display, event_loop.get_signal(), socket_name);
 
     Ok((event_loop, display, state))
@@ -140,6 +154,7 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
 
     let (mut event_loop, mut display, mut state) = init_wayland_loop()?;
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
+    state.spawn_autostart();
 
     let size = backend.window_size();
     let mode = OutputMode {
@@ -218,6 +233,15 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
                         &output,
                         age,
                     );
+                    if !state.pending_screencopies.is_empty() {
+                        let scale = Scale::from(output.current_scale().fractional_scale());
+                        crate::screencopy::process_pending_screencopies(
+                            state,
+                            renderer,
+                            &output,
+                            scale,
+                        );
+                    }
                 }
                 if let Err(err) = backend.submit(None) {
                     tracing::warn!(?err, "Winit submit failed");
@@ -255,6 +279,7 @@ type OkayDrmCompositor = DrmCompositor<
 >;
 
 struct DrmOutputState {
+    connector: connector::Handle,
     output: Output,
     compositor: OkayDrmCompositor,
     #[allow(dead_code)]
@@ -264,15 +289,13 @@ struct DrmOutputState {
 struct DrmBackendData {
     session: LibSeatSession,
     devices: HashMap<DrmNode, DrmDeviceData>,
+    dev_to_node: HashMap<smithay::reexports::rustix::fs::Dev, DrmNode>,
     primary_gpu: Option<DrmNode>,
     used_crtcs: HashSet<(DrmNode, crtc::Handle)>,
-    next_output_x: i32,
 }
 
 struct DrmDeviceData {
-    #[allow(dead_code)]
     drm_device: DrmDevice,
-    #[allow(dead_code)]
     gbm: GbmDevice<DrmDeviceFd>,
     renderer: GlesRenderer,
     outputs: HashMap<crtc::Handle, DrmOutputState>,
@@ -281,6 +304,7 @@ struct DrmDeviceData {
 fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
     let (mut event_loop, mut display, mut state) = init_wayland_loop()?;
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
+    state.spawn_autostart();
 
     let (session, notifier) = LibSeatSession::new()?;
     let seat_name = session.seat();
@@ -299,36 +323,60 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
             process_input_event(state, event);
         })?;
 
-    let mut drm_data = DrmBackendData {
+    let drm_data = Rc::new(RefCell::new(DrmBackendData {
         session: session.clone(),
         devices: HashMap::new(),
+        dev_to_node: HashMap::new(),
         primary_gpu: udev::primary_gpu(&seat_name)
             .ok()
             .flatten()
             .and_then(|p| DrmNode::from_path(p).ok()),
         used_crtcs: HashSet::new(),
-        next_output_x: 0,
-    };
+    }));
 
+    let loop_handle = event_loop.handle();
     for (dev_id, path) in udev_backend.device_list() {
-        if let Err(err) = on_drm_device_added(&event_loop, &mut state, &mut drm_data, dev_id, path) {
+        let mut data = drm_data.borrow_mut();
+        if let Err(err) = on_drm_device_added(&loop_handle, &mut state, &mut data, dev_id, path) {
             tracing::warn!(?err, ?path, "Failed to initialize DRM device");
         }
     }
+    rearrange_drm_outputs(&mut state, &drm_data.borrow());
 
-    // Monitor hotplug udev events
-    let loop_handle = event_loop.handle();
+    // Monitor hotplug udev events (Added / Changed / Removed)
+    let drm_data_udev = Rc::clone(&drm_data);
+    let udev_loop_handle = event_loop.handle();
     event_loop
         .handle()
-        .insert_source(udev_backend, move |event, _, _state| match event {
-            UdevEvent::Added { device_id: _, path: _ } => {
-                tracing::info!("Udev device added");
-            }
-            UdevEvent::Changed { device_id: _ } => {
-                tracing::info!("Udev device changed");
-            }
-            UdevEvent::Removed { device_id: _ } => {
-                tracing::info!("Udev device removed");
+        .insert_source(udev_backend, move |event, _, state| {
+            let mut data = drm_data_udev.borrow_mut();
+            match event {
+                UdevEvent::Added { device_id, path } => {
+                    tracing::info!(?path, "Udev DRM device added");
+                    if let Err(err) =
+                        on_drm_device_added(&udev_loop_handle, state, &mut data, device_id, &path)
+                    {
+                        tracing::warn!(?err, ?path, "Failed to hotplug-add DRM device");
+                    } else {
+                        rearrange_drm_outputs(state, &data);
+                        state.retile_workspace();
+                    }
+                }
+                UdevEvent::Changed { device_id } => {
+                    tracing::info!(?device_id, "Udev DRM device changed (connector hotplug)");
+                    if let Err(err) = on_drm_device_changed(state, &mut data, device_id) {
+                        tracing::warn!(?err, "Failed to handle DRM connector hotplug");
+                    } else {
+                        rearrange_drm_outputs(state, &data);
+                        state.retile_workspace();
+                    }
+                }
+                UdevEvent::Removed { device_id } => {
+                    tracing::info!(?device_id, "Udev DRM device removed");
+                    on_drm_device_removed(state, &mut data, device_id);
+                    rearrange_drm_outputs(state, &data);
+                    state.retile_workspace();
+                }
             }
         })?;
 
@@ -348,40 +396,50 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
             }
         })?;
 
-    let _ = loop_handle;
-
     // Main DRM frame & Wayland event loop
     while state.running {
         event_loop.dispatch(Some(Duration::from_millis(16)), &mut state)?;
 
         // Render active DRM outputs
-        for dev in drm_data.devices.values_mut() {
-            for out_state in dev.outputs.values_mut() {
-                let scale = Scale::from(out_state.output.current_scale().fractional_scale());
-                let elements = crate::render::collect_output_elements(
-                    &mut state,
-                    &mut dev.renderer,
-                    &out_state.output,
-                    scale,
-                );
-                let clear_color = smithay::backend::renderer::Color32F::from(
-                    state.theme.background_color,
-                );
+        {
+            let mut data = drm_data.borrow_mut();
+            for dev in data.devices.values_mut() {
+                for out_state in dev.outputs.values_mut() {
+                    let scale = Scale::from(out_state.output.current_scale().fractional_scale());
+                    let elements = crate::render::collect_output_elements(
+                        &mut state,
+                        &mut dev.renderer,
+                        &out_state.output,
+                        scale,
+                    );
+                    let clear_color = smithay::backend::renderer::Color32F::from(
+                        state.theme.background_color,
+                    );
 
-                match out_state.compositor.render_frame(
-                    &mut dev.renderer,
-                    &elements,
-                    clear_color,
-                    FrameFlags::DEFAULT,
-                ) {
-                    Ok(res) => {
-                        if !res.is_empty {
-                            let _ = out_state.compositor.queue_frame(());
+                    match out_state.compositor.render_frame(
+                        &mut dev.renderer,
+                        &elements,
+                        clear_color,
+                        FrameFlags::DEFAULT,
+                    ) {
+                        Ok(res) => {
+                            if !res.is_empty {
+                                let _ = out_state.compositor.queue_frame(());
+                            }
+                            send_frame_callbacks(&state, &out_state.output);
                         }
-                        send_frame_callbacks(&state, &out_state.output);
+                        Err(err) => {
+                            tracing::debug!(?err, "DRM render_frame skipped/failed");
+                        }
                     }
-                    Err(err) => {
-                        tracing::debug!(?err, "DRM render_frame skipped/failed");
+
+                    if !state.pending_screencopies.is_empty() {
+                        crate::screencopy::process_pending_screencopies(
+                            &mut state,
+                            &mut dev.renderer,
+                            &out_state.output,
+                            scale,
+                        );
                     }
                 }
             }
@@ -396,11 +454,145 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn init_drm_connector_output(
+    state: &mut OkayState,
+    node: DrmNode,
+    drm_device: &mut DrmDevice,
+    gbm: &GbmDevice<DrmDeviceFd>,
+    renderer: &GlesRenderer,
+    res_handles: &smithay::reexports::drm::control::ResourceHandles,
+    conn_handle: connector::Handle,
+    used_crtcs: &mut HashSet<(DrmNode, crtc::Handle)>,
+) -> Result<Option<(crtc::Handle, DrmOutputState)>, Box<dyn std::error::Error>> {
+    let conn = drm_device.get_connector(conn_handle, false)?;
+    if conn.state() != connector::State::Connected {
+        return Ok(None);
+    }
+    let Some(mode) = conn.modes().first().copied() else {
+        return Ok(None);
+    };
+
+    let Some(encoder_handle) = conn
+        .current_encoder()
+        .or_else(|| conn.encoders().first().copied())
+    else {
+        return Ok(None);
+    };
+    let encoder = drm_device.get_encoder(encoder_handle)?;
+    let crtc_handle = encoder
+        .crtc()
+        .filter(|c| !used_crtcs.contains(&(node, *c)))
+        .or_else(|| {
+            res_handles
+                .filter_crtcs(encoder.possible_crtcs())
+                .into_iter()
+                .find(|c| !used_crtcs.contains(&(node, *c)))
+        });
+    let Some(crtc_handle) = crtc_handle else {
+        tracing::warn!(connector = ?conn.interface(), "No free CRTC available for connected output");
+        return Ok(None);
+    };
+    used_crtcs.insert((node, crtc_handle));
+
+    let surface = drm_device.create_surface(crtc_handle, mode, &[conn.handle()])?;
+    let allocator = GbmAllocator::new(
+        gbm.clone(),
+        GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+    );
+    let exporter = GbmFramebufferExporter::new(gbm.clone(), Some(node));
+
+    let phys_size = conn.size().unwrap_or((0, 0));
+    let output_name = format!("{:?}-{}", conn.interface(), conn.interface_id());
+    let output = Output::new(
+        output_name.clone(),
+        PhysicalProperties {
+            size: (phys_size.0 as i32, phys_size.1 as i32).into(),
+            subpixel: Subpixel::Unknown,
+            make: "OKay DE".into(),
+            model: "DRM/KMS Output".into(),
+        },
+    );
+    let wl_mode = OutputMode::from(mode);
+    output.create_global::<OkayState>(&state.display_handle);
+    output.change_current_state(
+        Some(wl_mode),
+        Some(Transform::Normal),
+        None,
+        Some((0, 0).into()),
+    );
+    output.set_preferred(wl_mode);
+    state.space.map_output(&output, (0, 0));
+
+    let renderer_formats = renderer
+        .egl_context()
+        .dmabuf_render_formats()
+        .iter()
+        .copied();
+
+    let compositor = DrmCompositor::new(
+        &output,
+        surface,
+        None,
+        allocator,
+        exporter,
+        SUPPORTED_COLOR_FORMATS.iter().copied(),
+        renderer_formats,
+        drm_device.cursor_size(),
+        Some(gbm.clone()),
+    )?;
+
+    let damage_tracker = OutputDamageTracker::from_output(&output);
+    tracing::info!(
+        output = %output_name,
+        ?crtc_handle,
+        w = wl_mode.size.w,
+        h = wl_mode.size.h,
+        "Initialized DRM/KMS output"
+    );
+
+    Ok(Some((
+        crtc_handle,
+        DrmOutputState {
+            connector: conn_handle,
+            output,
+            compositor,
+            damage_tracker,
+        },
+    )))
+}
+
+fn rearrange_drm_outputs(state: &mut OkayState, drm_data: &DrmBackendData) {
+    let mut x = 0i32;
+    let mut max_w = 1280i32;
+    let mut max_h = 720i32;
+
+    for dev in drm_data.devices.values() {
+        for out_state in dev.outputs.values() {
+            let mode_size = out_state
+                .output
+                .current_mode()
+                .map(|m| m.size)
+                .unwrap_or_else(|| (1280, 720).into());
+            out_state
+                .output
+                .change_current_state(None, None, None, Some((x, 0).into()));
+            state.space.map_output(&out_state.output, (x, 0));
+            layer_map_for_output(&out_state.output).arrange();
+            x += mode_size.w;
+            max_w = x.max(1);
+            max_h = max_h.max(mode_size.h);
+        }
+    }
+
+    state.pointer_location.x = state.pointer_location.x.clamp(0.0, (max_w - 1) as f64);
+    state.pointer_location.y = state.pointer_location.y.clamp(0.0, (max_h - 1) as f64);
+}
+
 fn on_drm_device_added(
-    event_loop: &EventLoop<'static, OkayState>,
+    loop_handle: &LoopHandle<'static, OkayState>,
     state: &mut OkayState,
     drm_data: &mut DrmBackendData,
-    _dev_id: smithay::reexports::rustix::fs::Dev,
+    dev_id: smithay::reexports::rustix::fs::Dev,
     path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let node = match DrmNode::from_path(path) {
@@ -408,6 +600,10 @@ fn on_drm_device_added(
         Ok(_) => return Ok(()),
         Err(err) => return Err(Box::new(err)),
     };
+
+    if drm_data.devices.contains_key(&node) {
+        return Ok(());
+    }
 
     if drm_data.primary_gpu.is_some() && drm_data.primary_gpu != Some(node) {
         tracing::info!(?node, "Skipping secondary GPU");
@@ -430,110 +626,28 @@ fn on_drm_device_added(
     let res_handles = drm_device.resource_handles()?;
 
     for conn_handle in res_handles.connectors() {
-        let conn = drm_device.get_connector(*conn_handle, false)?;
-        if conn.state() != connector::State::Connected {
-            continue;
+        if let Some((crtc_handle, out_state)) = init_drm_connector_output(
+            state,
+            node,
+            &mut drm_device,
+            &gbm,
+            &renderer,
+            &res_handles,
+            *conn_handle,
+            &mut drm_data.used_crtcs,
+        )? {
+            outputs.insert(crtc_handle, out_state);
         }
-        let Some(mode) = conn.modes().first().copied() else {
-            continue;
-        };
-
-        let Some(encoder_handle) = conn.current_encoder().or_else(|| conn.encoders().first().copied()) else {
-            continue;
-        };
-        let encoder = drm_device.get_encoder(encoder_handle)?;
-        let crtc_handle = encoder
-            .crtc()
-            .filter(|c| !drm_data.used_crtcs.contains(&(node, *c)))
-            .or_else(|| {
-                res_handles
-                    .filter_crtcs(encoder.possible_crtcs())
-                    .into_iter()
-                    .find(|c| !drm_data.used_crtcs.contains(&(node, *c)))
-            });
-        let Some(crtc_handle) = crtc_handle else {
-            tracing::warn!(connector = ?conn.interface(), "No free CRTC available for connected output");
-            continue;
-        };
-        drm_data.used_crtcs.insert((node, crtc_handle));
-
-        let surface = drm_device.create_surface(crtc_handle, mode, &[conn.handle()])?;
-        let allocator = GbmAllocator::new(
-            gbm.clone(),
-            GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
-        );
-        let exporter = GbmFramebufferExporter::new(gbm.clone(), Some(node));
-
-        let phys_size = conn.size().unwrap_or((0, 0));
-        let output_name = format!("{:?}-{}", conn.interface(), conn.interface_id());
-        let output = Output::new(
-            output_name.clone(),
-            PhysicalProperties {
-                size: (phys_size.0 as i32, phys_size.1 as i32).into(),
-                subpixel: Subpixel::Unknown,
-                make: "OKay DE".into(),
-                model: "DRM/KMS Output".into(),
-            },
-        );
-        let wl_mode = OutputMode::from(mode);
-        let output_loc = (drm_data.next_output_x, 0);
-        output.create_global::<OkayState>(&state.display_handle);
-        output.change_current_state(
-            Some(wl_mode),
-            Some(Transform::Normal),
-            None,
-            Some(output_loc.into()),
-        );
-        output.set_preferred(wl_mode);
-        state.space.map_output(&output, output_loc);
-        drm_data.next_output_x += wl_mode.size.w;
-
-        let renderer_formats = renderer
-            .egl_context()
-            .dmabuf_render_formats()
-            .iter()
-            .copied();
-
-        let compositor = DrmCompositor::new(
-            &output,
-            surface,
-            None,
-            allocator,
-            exporter,
-            SUPPORTED_COLOR_FORMATS.iter().copied(),
-            renderer_formats,
-            drm_device.cursor_size(),
-            Some(gbm.clone()),
-        )?;
-
-        let damage_tracker = OutputDamageTracker::from_output(&output);
-        outputs.insert(
-            crtc_handle,
-            DrmOutputState {
-                output,
-                compositor,
-                damage_tracker,
-            },
-        );
-        tracing::info!(
-            output = %output_name,
-            ?crtc_handle,
-            x = output_loc.0,
-            w = wl_mode.size.w,
-            h = wl_mode.size.h,
-            "Initialized DRM/KMS output"
-        );
     }
 
-    event_loop
-        .handle()
-        .insert_source(drm_notifier, |event, _meta, _state| match event {
-            DrmEvent::VBlank(_crtc) => {}
-            DrmEvent::Error(err) => {
-                tracing::error!(?err, "DRM error event");
-            }
-        })?;
+    loop_handle.insert_source(drm_notifier, |event, _meta, _state| match event {
+        DrmEvent::VBlank(_crtc) => {}
+        DrmEvent::Error(err) => {
+            tracing::error!(?err, "DRM error event");
+        }
+    })?;
 
+    drm_data.dev_to_node.insert(dev_id, node);
     drm_data.devices.insert(
         node,
         DrmDeviceData {
@@ -545,4 +659,75 @@ fn on_drm_device_added(
     );
 
     Ok(())
+}
+
+fn on_drm_device_changed(
+    state: &mut OkayState,
+    drm_data: &mut DrmBackendData,
+    dev_id: smithay::reexports::rustix::fs::Dev,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(&node) = drm_data.dev_to_node.get(&dev_id) else {
+        return Ok(());
+    };
+    let Some(dev) = drm_data.devices.get_mut(&node) else {
+        return Ok(());
+    };
+
+    let res_handles = dev.drm_device.resource_handles()?;
+    let mut disconnected_crtcs = Vec::new();
+    let mut active_connectors = HashSet::new();
+
+    for (&crtc_handle, out_state) in &dev.outputs {
+        let conn = dev.drm_device.get_connector(out_state.connector, false)?;
+        if conn.state() != connector::State::Connected {
+            disconnected_crtcs.push(crtc_handle);
+        } else {
+            active_connectors.insert(out_state.connector);
+        }
+    }
+
+    for crtc_handle in disconnected_crtcs {
+        if let Some(out_state) = dev.outputs.remove(&crtc_handle) {
+            tracing::info!(output = %out_state.output.name(), "Unplugged DRM output");
+            state.space.unmap_output(&out_state.output);
+            drm_data.used_crtcs.remove(&(node, crtc_handle));
+        }
+    }
+
+    for &conn_handle in res_handles.connectors() {
+        if active_connectors.contains(&conn_handle) {
+            continue;
+        }
+        if let Some((crtc_handle, out_state)) = init_drm_connector_output(
+            state,
+            node,
+            &mut dev.drm_device,
+            &dev.gbm,
+            &dev.renderer,
+            &res_handles,
+            conn_handle,
+            &mut drm_data.used_crtcs,
+        )? {
+            dev.outputs.insert(crtc_handle, out_state);
+        }
+    }
+
+    Ok(())
+}
+
+fn on_drm_device_removed(
+    state: &mut OkayState,
+    drm_data: &mut DrmBackendData,
+    dev_id: smithay::reexports::rustix::fs::Dev,
+) {
+    let Some(node) = drm_data.dev_to_node.remove(&dev_id) else {
+        return;
+    };
+    if let Some(mut dev) = drm_data.devices.remove(&node) {
+        for (crtc_handle, out_state) in dev.outputs.drain() {
+            tracing::info!(output = %out_state.output.name(), "Removed DRM output");
+            state.space.unmap_output(&out_state.output);
+            drm_data.used_crtcs.remove(&(node, crtc_handle));
+        }
+    }
 }

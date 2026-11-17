@@ -1,6 +1,5 @@
 use std::{
-    fs::{self, File},
-    io::BufWriter,
+    fs,
     path::PathBuf,
     process::Command,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -327,19 +326,19 @@ impl OverlaysState {
         }
     }
 
-    pub fn poll_clipboard_now(&mut self) {
-        if let Ok(out) = Command::new("wl-paste").arg("--no-newline").output() {
-            if out.status.success() {
-                let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !text.is_empty() && self.clipboard_items.first() != Some(&text) {
-                    self.clipboard_items.retain(|x| x != &text);
-                    self.clipboard_items.insert(0, text);
-                    if self.clipboard_items.len() > 10 {
-                        self.clipboard_items.truncate(10);
-                    }
-                }
+    pub fn push_clipboard_text(&mut self, text: String) {
+        let trimmed = text.trim().to_string();
+        if !trimmed.is_empty() && self.clipboard_items.first() != Some(&trimmed) {
+            self.clipboard_items.retain(|x| x != &trimmed);
+            self.clipboard_items.insert(0, trimmed);
+            if self.clipboard_items.len() > 20 {
+                self.clipboard_items.truncate(20);
             }
         }
+    }
+
+    pub fn poll_clipboard_now(&mut self) {
+        crate::worker::dispatch(crate::worker::WorkerRequest::PollExternalClipboard);
     }
 }
 
@@ -356,48 +355,41 @@ pub fn take_screenshot(state: &mut OkayState) {
     let filename = format!("okay-screenshot-{}.png", ts);
     let path = dir.join(&filename);
 
-    // Try grim first if installed on host/session; otherwise write a crisp compositor snapshot PNG
-    let grim_ok = Command::new("grim")
-        .env("WAYLAND_DISPLAY", &state.socket_name)
-        .arg(&path)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    // Prepare compositor snapshot PNG bytes as fallback if `grim` is unavailable.
+    let mut canvas = Canvas::new(640, 360);
+    let accent = state.panel.accent_rgb();
+    canvas.fill_rect(0, 0, 640, 360, [18, 18, 28, 255]);
+    canvas.stroke_rect(0, 0, 640, 360, [accent[0], accent[1], accent[2], 255]);
+    canvas.draw_text_px(
+        24,
+        24,
+        "OKay DE Screenshot Snapshot",
+        18.0,
+        [accent[0], accent[1], accent[2], 255],
+    );
+    let info = format!(
+        "Workspace {}  |  Active Windows: {}",
+        state.workspaces.active,
+        state.space.elements().count()
+    );
+    canvas.draw_text_px(24, 58, &info, 14.0, [230, 232, 246, 255]);
 
-    if !grim_ok {
-        let mut canvas = Canvas::new(640, 360);
-        let accent = state.panel.accent_rgb();
-        canvas.fill_rect(0, 0, 640, 360, [18, 18, 28, 255]);
-        canvas.stroke_rect(0, 0, 640, 360, [accent[0], accent[1], accent[2], 255]);
-        canvas.draw_text_px(
-            24,
-            24,
-            "OKay DE Screenshot Snapshot",
-            18.0,
-            [accent[0], accent[1], accent[2], 255],
-        );
-        let info = format!(
-            "Workspace {}  |  Active Windows: {}",
-            state.workspaces.active,
-            state.space.elements().count()
-        );
-        canvas.draw_text_px(24, 58, &info, 14.0, [230, 232, 246, 255]);
-
-        if let Ok(file) = File::create(&path) {
-            let w = BufWriter::new(file);
-            let mut encoder = png::Encoder::new(w, 640, 360);
-            encoder.set_color(png::ColorType::Rgba);
-            encoder.set_depth(png::BitDepth::Eight);
-            if let Ok(mut writer) = encoder.write_header() {
-                let _ = writer.write_image_data(&canvas.pixels);
-            }
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, 640, 360);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        if let Ok(mut writer) = encoder.write_header() {
+            let _ = writer.write_image_data(&canvas.pixels);
         }
     }
 
-    state.overlays.push_notification(
-        "Screenshot Saved",
-        format!("Saved to ~/Pictures/Screenshots/{}", filename),
-    );
+    // Run `grim` on the worker thread so it never deadlocks or blocks the compositor loop.
+    crate::worker::dispatch(crate::worker::WorkerRequest::TakeScreenshot {
+        path,
+        socket_name: state.socket_name.clone(),
+        fallback_png: if png_bytes.is_empty() { None } else { Some(png_bytes) },
+    });
 }
 
 /// Handles right-click on the desktop background or on a desktop icon.
@@ -561,7 +553,8 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
             }
             OverlayClick::SelectClipboard(idx) => {
                 if let Some(text) = state.overlays.clipboard_items.get(idx).cloned() {
-                    let _ = Command::new("wl-copy").arg(&text).spawn();
+                    state.overlays.push_clipboard_text(text.clone());
+                    state.set_compositor_clipboard(text);
                     state
                         .overlays
                         .push_notification("Clipboard", "Copied selected entry to clipboard");

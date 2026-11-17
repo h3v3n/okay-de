@@ -153,6 +153,7 @@ pub struct PanelState {
     pub volume_percent: i32,
     pub volume_muted: bool,
     pub battery_percent: Option<i32>,
+    pub autostart_cmds: Vec<String>,
     hit_regions: Vec<(Rectangle<i32, Logical>, ClickTarget)>,
 }
 
@@ -174,6 +175,7 @@ impl Default for PanelState {
             volume_percent: 75,
             volume_muted: false,
             battery_percent: read_battery_percent(),
+            autostart_cmds: Vec::new(),
             hit_regions: Vec::new(),
         }
     }
@@ -220,14 +222,25 @@ impl PanelState {
         let Ok(content) = fs::read_to_string(path) else {
             return cfg;
         };
+        let mut in_autostart_section = false;
         for line in content.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
+            if line.starts_with('[') && line.ends_with(']') {
+                in_autostart_section = line.eq_ignore_ascii_case("[autostart]");
+                continue;
+            }
             if let Some((k, v)) = line.split_once('=') {
                 let key = k.trim();
                 let val = v.trim().trim_matches('"');
+                if in_autostart_section && (key == "exec" || key == "cmd" || key == "autostart") {
+                    if !val.is_empty() && !self.autostart_cmds.iter().any(|c| c == val) {
+                        self.autostart_cmds.push(val.to_string());
+                    }
+                    continue;
+                }
                 match key {
                     "dock_mode" => self.dock_mode = val == "true",
                     "panel_top" => self.panel_top = val == "true",
@@ -289,6 +302,11 @@ impl PanelState {
                             }
                         }
                     }
+                    "autostart" => {
+                        if !val.is_empty() && !self.autostart_cmds.iter().any(|c| c == val) {
+                            self.autostart_cmds.push(val.to_string());
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -336,6 +354,9 @@ impl PanelState {
                 p.exec,
                 p.icon_name.as_deref().unwrap_or("")
             ));
+        }
+        for cmd in &self.autostart_cmds {
+            body.push_str(&format!("autostart = \"{}\"\n", cmd));
         }
         let _ = fs::write(path, body);
     }
