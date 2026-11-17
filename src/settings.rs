@@ -268,6 +268,10 @@ impl SettingsState {
     pub fn cancel_wifi_password(&mut self) {
         self.wifi_password_prompt = None;
     }
+
+    pub fn is_dragging_slider(&self) -> bool {
+        self.dragging_slider.is_some()
+    }
 }
 
 fn save_all_prefs(state: &OkayState) {

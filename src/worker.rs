@@ -154,7 +154,7 @@ pub fn handle_response(state: &mut OkayState, resp: WorkerResponse) {
             sinks,
         } => {
             if let Some(v) = volume_percent {
-                if !state.overlays.cc_dragging_volume && state.settings.dragging_slider.is_none() {
+                if !state.overlays.cc_dragging_volume && !state.settings.is_dragging_slider() {
                     state.panel.volume_percent = v.clamp(0, 100);
                 }
             }
