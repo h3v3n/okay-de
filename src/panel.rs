@@ -242,7 +242,7 @@ impl PanelState {
                     continue;
                 }
                 match key {
-                    "dock_mode" => self.dock_mode = val == "true",
+                    "dock_mode" => self.dock_mode = true,
                     "panel_top" => self.panel_top = val == "true",
                     "show_workspaces" => self.show_workspaces = val != "false",
                     "accent_preset" => {

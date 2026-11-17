@@ -100,7 +100,6 @@ pub struct SystemInfoSnapshot {
 enum SettingsAction {
     CloseWindow,
     SelectTab(SettingsTab),
-    ToggleDockMode,
     TogglePanelPosition,
     ToggleShowWorkspaces,
     ToggleDesktopIcons,
@@ -313,10 +312,6 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                     }
                     _ => {}
                 }
-            }
-            SettingsAction::ToggleDockMode => {
-                state.panel.dock_mode = !state.panel.dock_mode;
-                save_all_prefs(state);
             }
             SettingsAction::TogglePanelPosition => {
                 state.panel.panel_top = !state.panel.panel_top;
@@ -632,35 +627,26 @@ pub fn render_settings_elements(
             canvas.draw_text_px(
                 content_x,
                 cy,
-                "Appearance, Taskbar & Animations (Wyglad i animacje)",
+                "Appearance, Dock & Animations (Wyglad i animacje)",
                 15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
-            cy += 26;
+            cy += 28;
 
-            // Row 1: Dock Mode + Panel Position
-            let dock_rect = Rectangle::new((wx + content_x, wy + cy).into(), (248, 32).into());
-            let dock_lbl = if state.panel.dock_mode { "Style: Floating Dock" } else { "Style: Full Taskbar" };
-            draw_setting_button(&mut canvas, content_x, cy, 248, 32, dock_lbl, state.panel.dock_mode, accent);
-            state.settings.hit_regions.push((dock_rect, SettingsAction::ToggleDockMode));
-
-            let pos_rect = Rectangle::new((wx + content_x + 258, wy + cy).into(), (248, 32).into());
-            let pos_lbl = if state.panel.panel_top { "Panel Edge: Top" } else { "Panel Edge: Bottom" };
-            draw_setting_button(&mut canvas, content_x + 258, cy, 248, 32, pos_lbl, state.panel.panel_top, accent);
+            // Row 1: 3 balanced Dock / Panel / Desktop toggles (162px each, 10px gap = 506px)
+            let pos_rect = Rectangle::new((wx + content_x, wy + cy).into(), (162, 34).into());
+            let pos_lbl = if state.panel.panel_top { "Top Bar" } else { "Bottom Bar" };
+            draw_setting_button(&mut canvas, content_x, cy, 162, 34, pos_lbl, state.panel.panel_top, accent);
             state.settings.hit_regions.push((pos_rect, SettingsAction::TogglePanelPosition));
-            cy += 38;
 
-            // Row 2: Show Workspaces + Desktop Icons
-            let ws_rect = Rectangle::new((wx + content_x, wy + cy).into(), (248, 32).into());
-            let ws_lbl = if state.panel.show_workspaces { "Workspaces (1..9): Shown" } else { "Workspaces (1..9): Hidden" };
-            draw_setting_button(&mut canvas, content_x, cy, 248, 32, ws_lbl, state.panel.show_workspaces, accent);
+            let ws_rect = Rectangle::new((wx + content_x + 172, wy + cy).into(), (162, 34).into());
+            draw_setting_button(&mut canvas, content_x + 172, cy, 162, 34, "Workspaces", state.panel.show_workspaces, accent);
             state.settings.hit_regions.push((ws_rect, SettingsAction::ToggleShowWorkspaces));
 
-            let ic_rect = Rectangle::new((wx + content_x + 258, wy + cy).into(), (248, 32).into());
-            let ic_lbl = if state.overlays.show_desktop_icons { "Desktop Icons: Shown" } else { "Desktop Icons: Hidden" };
-            draw_setting_button(&mut canvas, content_x + 258, cy, 248, 32, ic_lbl, state.overlays.show_desktop_icons, accent);
+            let ic_rect = Rectangle::new((wx + content_x + 344, wy + cy).into(), (162, 34).into());
+            draw_setting_button(&mut canvas, content_x + 344, cy, 162, 34, "Desk Icons", state.overlays.show_desktop_icons, accent);
             state.settings.hit_regions.push((ic_rect, SettingsAction::ToggleDesktopIcons));
-            cy += 40;
+            cy += 44;
 
             // Row 3: Minimize Animation Effect Selector (Magic Lamp Genie / ScaleGlide / Off)
             let min_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 34).into());
@@ -693,12 +679,12 @@ pub fn render_settings_elements(
             let spd_txt = format!("Speed: {:.2}x", state.animations.speed);
             canvas.draw_text_px(content_x + 244, cy + 8, &spd_txt, 13.0, [225, 228, 245, 255]);
             let s_dec = Rectangle::new((wx + content_x + 365, wy + cy).into(), (32, 32).into());
-            canvas.fill_rounded_rect(content_x + 365, cy, 32, 32, 5, [44, 44, 66, 255]);
+            canvas.fill_rounded_rect_aa(content_x + 365, cy, 32, 32, 5, [44, 44, 66, 255]);
             canvas.draw_text_px(content_x + 377, cy + 7, "-", 14.0, [240, 242, 252, 255]);
             state.settings.hit_regions.push((s_dec, SettingsAction::AdjustAnimSpeed(-0.25)));
 
             let s_inc = Rectangle::new((wx + content_x + 405, wy + cy).into(), (32, 32).into());
-            canvas.fill_rounded_rect(content_x + 405, cy, 32, 32, 5, [44, 44, 66, 255]);
+            canvas.fill_rounded_rect_aa(content_x + 405, cy, 32, 32, 5, [44, 44, 66, 255]);
             canvas.draw_text_px(content_x + 416, cy + 7, "+", 14.0, [240, 242, 252, 255]);
             state.settings.hit_regions.push((s_inc, SettingsAction::AdjustAnimSpeed(0.25)));
             cy += 40;
@@ -707,24 +693,24 @@ pub fn render_settings_elements(
             let gaps_txt = format!("Window Gaps: {}px", state.panel.window_gaps);
             canvas.draw_text_px(content_x, cy + 8, &gaps_txt, 13.0, [225, 228, 245, 255]);
             let g_dec = Rectangle::new((wx + content_x + 150, wy + cy).into(), (30, 30).into());
-            canvas.fill_rounded_rect(content_x + 150, cy, 30, 30, 5, [44, 44, 66, 255]);
+            canvas.fill_rounded_rect_aa(content_x + 150, cy, 30, 30, 5, [44, 44, 66, 255]);
             canvas.draw_text_px(content_x + 161, cy + 6, "-", 14.0, [240, 242, 252, 255]);
             state.settings.hit_regions.push((g_dec, SettingsAction::AdjustWindowGaps(-2)));
 
             let g_inc = Rectangle::new((wx + content_x + 186, wy + cy).into(), (30, 30).into());
-            canvas.fill_rounded_rect(content_x + 186, cy, 30, 30, 5, [44, 44, 66, 255]);
+            canvas.fill_rounded_rect_aa(content_x + 186, cy, 30, 30, 5, [44, 44, 66, 255]);
             canvas.draw_text_px(content_x + 196, cy + 6, "+", 14.0, [240, 242, 252, 255]);
             state.settings.hit_regions.push((g_inc, SettingsAction::AdjustWindowGaps(2)));
 
             let bw_txt = format!("Border: {}px", state.theme.border_width);
             canvas.draw_text_px(content_x + 250, cy + 8, &bw_txt, 13.0, [225, 228, 245, 255]);
             let b_dec = Rectangle::new((wx + content_x + 365, wy + cy).into(), (30, 30).into());
-            canvas.fill_rounded_rect(content_x + 365, cy, 30, 30, 5, [44, 44, 66, 255]);
+            canvas.fill_rounded_rect_aa(content_x + 365, cy, 30, 30, 5, [44, 44, 66, 255]);
             canvas.draw_text_px(content_x + 376, cy + 6, "-", 14.0, [240, 242, 252, 255]);
             state.settings.hit_regions.push((b_dec, SettingsAction::AdjustBorderWidth(-1)));
 
             let b_inc = Rectangle::new((wx + content_x + 401, wy + cy).into(), (30, 30).into());
-            canvas.fill_rounded_rect(content_x + 401, cy, 30, 30, 5, [44, 44, 66, 255]);
+            canvas.fill_rounded_rect_aa(content_x + 401, cy, 30, 30, 5, [44, 44, 66, 255]);
             canvas.draw_text_px(content_x + 411, cy + 6, "+", 14.0, [240, 242, 252, 255]);
             state.settings.hit_regions.push((b_inc, SettingsAction::AdjustBorderWidth(1)));
             cy += 40;
@@ -750,7 +736,7 @@ pub fn render_settings_elements(
 
             // Row 7: Reload Wallpaper + Font Info
             let wp_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 32).into());
-            canvas.fill_rounded_rect(content_x, cy, 506, 32, 6, [38, 38, 58, 255]);
+            canvas.fill_rounded_rect_aa(content_x, cy, 506, 32, 6, [38, 38, 58, 255]);
             canvas.draw_text_px(
                 content_x + 14,
                 cy + 8,
@@ -784,7 +770,7 @@ pub fn render_settings_elements(
                     .map(|m| m.refresh as f64 / 1000.0)
                     .unwrap_or(60.0);
 
-                canvas.fill_rounded_rect(content_x, cy, 506, 78, 7, [28, 28, 44, 245]);
+                canvas.fill_rounded_rect_aa(content_x, cy, 506, 78, 7, [28, 28, 44, 245]);
                 let title = format!(
                     "Monitor #{}: {}  ({}x{} @ {:.0}Hz, Pos +{},+{})",
                     idx + 1,
@@ -818,7 +804,7 @@ pub fn render_settings_elements(
                     } else {
                         [230, 232, 246, 255]
                     };
-                    canvas.fill_rounded_rect(sx, cy + 38, 68, 28, 5, bg);
+                    canvas.fill_rounded_rect_aa(sx, cy + 38, 68, 28, 5, bg);
                     canvas.draw_text_px(sx + 14, cy + 44, &format!("{:.2}x", s_val), 12.0, fg);
                     state
                         .settings
@@ -830,7 +816,7 @@ pub fn render_settings_elements(
 
             if outputs.len() >= 2 {
                 let swap_rect = Rectangle::new((wx + content_x, wy + cy).into(), (280, 34).into());
-                canvas.fill_rounded_rect(content_x, cy, 280, 34, 6, [44, 44, 68, 255]);
+                canvas.fill_rounded_rect_aa(content_x, cy, 280, 34, 6, [44, 44, 68, 255]);
                 canvas.draw_text_px(
                     content_x + 16,
                     cy + 9,
@@ -864,7 +850,7 @@ pub fn render_settings_elements(
             );
 
             let scan_rect = Rectangle::new((wx + content_x + 380, wy + cy - 6).into(), (126, 28).into());
-            canvas.fill_rounded_rect(content_x + 380, cy - 6, 126, 28, 5, [48, 48, 72, 255]);
+            canvas.fill_rounded_rect_aa(content_x + 380, cy - 6, 126, 28, 5, [48, 48, 72, 255]);
             canvas.draw_text_px(
                 content_x + 394,
                 cy,
@@ -879,7 +865,7 @@ pub fn render_settings_elements(
             cy += 34;
 
             if state.settings.wifi_networks.is_empty() {
-                canvas.fill_rounded_rect(content_x, cy, 506, 64, 6, [28, 28, 42, 240]);
+                canvas.fill_rounded_rect_aa(content_x, cy, 506, 64, 6, [28, 28, 42, 240]);
                 canvas.draw_text_px(
                     content_x + 14,
                     cy + 22,
@@ -895,7 +881,7 @@ pub fn render_settings_elements(
                     } else {
                         [30, 30, 46, 240]
                     };
-                    canvas.fill_rounded_rect(content_x, row_y, 506, 40, 6, row_bg);
+                    canvas.fill_rounded_rect_aa(content_x, row_y, 506, 40, 6, row_bg);
 
                     let ssid_line = format!("{}  ({}%  /  {})", net.ssid, net.signal, net.security);
                     canvas.draw_text_px(
@@ -915,7 +901,7 @@ pub fn render_settings_elements(
                     } else {
                         ([52, 86, 72, 255], "Connect")
                     };
-                    canvas.fill_rounded_rect(content_x + 396, row_y + 6, 98, 28, 5, btn_bg);
+                    canvas.fill_rounded_rect_aa(content_x + 396, row_y + 6, 98, 28, 5, btn_bg);
                     canvas.draw_text_px(
                         content_x + 410,
                         row_y + 11,
@@ -963,7 +949,7 @@ pub fn render_settings_elements(
                 .push((pwr_rect, SettingsAction::ToggleBluetoothPower));
 
             let scan_rect = Rectangle::new((wx + content_x + 356, wy + cy).into(), (150, 34).into());
-            canvas.fill_rounded_rect(content_x + 356, cy, 150, 34, 6, [48, 48, 72, 255]);
+            canvas.fill_rounded_rect_aa(content_x + 356, cy, 150, 34, 6, [48, 48, 72, 255]);
             canvas.draw_text_px(
                 content_x + 376,
                 cy + 9,
@@ -981,7 +967,7 @@ pub fn render_settings_elements(
             cy += 28;
 
             if state.settings.bt_devices.is_empty() {
-                canvas.fill_rounded_rect(content_x, cy, 506, 60, 6, [28, 28, 42, 240]);
+                canvas.fill_rounded_rect_aa(content_x, cy, 506, 60, 6, [28, 28, 42, 240]);
                 canvas.draw_text_px(
                     content_x + 14,
                     cy + 20,
@@ -992,13 +978,13 @@ pub fn render_settings_elements(
             } else {
                 for (idx, dev) in state.settings.bt_devices.iter().take(5).enumerate() {
                     let ry = cy + idx as i32 * 44;
-                    canvas.fill_rounded_rect(content_x, ry, 506, 38, 6, [30, 30, 46, 240]);
+                    canvas.fill_rounded_rect_aa(content_x, ry, 506, 38, 6, [30, 30, 46, 240]);
                     let line = format!("{}  ({})", dev.name, dev.mac);
                     canvas.draw_text_px(content_x + 14, ry + 10, &line, 13.0, [238, 240, 252, 255]);
 
                     let b_rect = Rectangle::new((wx + content_x + 396, wy + ry + 5).into(), (98, 28).into());
                     let b_lbl = if dev.connected { "Disconnect" } else { "Connect" };
-                    canvas.fill_rounded_rect(content_x + 396, ry + 5, 98, 28, 5, [48, 72, 86, 255]);
+                    canvas.fill_rounded_rect_aa(content_x + 396, ry + 5, 98, 28, 5, [48, 72, 86, 255]);
                     canvas.draw_text_px(content_x + 412, ry + 10, b_lbl, 12.0, [242, 244, 252, 255]);
                     state
                         .settings
@@ -1037,9 +1023,9 @@ pub fn render_settings_elements(
             cy += 24;
 
             let bar_w = 380;
-            canvas.fill_rounded_rect(content_x, cy + 6, bar_w, 16, 6, [28, 28, 42, 255]);
+            canvas.fill_rounded_rect_aa(content_x, cy + 6, bar_w, 16, 6, [28, 28, 42, 255]);
             let fill_w = ((state.panel.volume_percent as f32 / 100.0) * bar_w as f32).round() as i32;
-            canvas.fill_rounded_rect(
+            canvas.fill_rounded_rect_aa(
                 content_x,
                 cy + 6,
                 fill_w.max(8),
@@ -1058,7 +1044,7 @@ pub fn render_settings_elements(
 
             let mute_rect = Rectangle::new((wx + content_x + 396, wy + cy).into(), (110, 28).into());
             let mute_lbl = if state.panel.volume_muted { "Unmute" } else { "Mute Out" };
-            canvas.fill_rounded_rect(content_x + 396, cy, 110, 28, 5, [48, 48, 72, 255]);
+            canvas.fill_rounded_rect_aa(content_x + 396, cy, 110, 28, 5, [48, 48, 72, 255]);
             canvas.draw_text_px(content_x + 414, cy + 6, mute_lbl, 12.5, [238, 240, 252, 255]);
             state
                 .settings
@@ -1075,9 +1061,9 @@ pub fn render_settings_elements(
             canvas.draw_text_px(content_x, cy, &mic_lbl, 14.0, [238, 240, 252, 255]);
             cy += 24;
 
-            canvas.fill_rounded_rect(content_x, cy + 6, bar_w, 16, 6, [28, 28, 42, 255]);
+            canvas.fill_rounded_rect_aa(content_x, cy + 6, bar_w, 16, 6, [28, 28, 42, 255]);
             let mfill_w = ((state.settings.mic_volume as f32 / 100.0) * bar_w as f32).round() as i32;
-            canvas.fill_rounded_rect(
+            canvas.fill_rounded_rect_aa(
                 content_x,
                 cy + 6,
                 mfill_w.max(8),
@@ -1096,7 +1082,7 @@ pub fn render_settings_elements(
 
             let mmute_rect = Rectangle::new((wx + content_x + 396, wy + cy).into(), (110, 28).into());
             let mmute_lbl = if state.settings.mic_muted { "Unmute Mic" } else { "Mute Mic" };
-            canvas.fill_rounded_rect(content_x + 396, cy, 110, 28, 5, [48, 48, 72, 255]);
+            canvas.fill_rounded_rect_aa(content_x + 396, cy, 110, 28, 5, [48, 48, 72, 255]);
             canvas.draw_text_px(content_x + 412, cy + 6, mmute_lbl, 12.5, [238, 240, 252, 255]);
             state
                 .settings
@@ -1122,7 +1108,7 @@ pub fn render_settings_elements(
             cy += 24;
 
             let dec_rect = Rectangle::new((wx + content_x, wy + cy).into(), (36, 30).into());
-            canvas.fill_rounded_rect(content_x, cy, 36, 30, 5, [44, 44, 66, 255]);
+            canvas.fill_rounded_rect_aa(content_x, cy, 36, 30, 5, [44, 44, 66, 255]);
             canvas.draw_text_px(content_x + 14, cy + 6, "-", 15.0, [240, 242, 252, 255]);
             state
                 .settings
@@ -1131,10 +1117,10 @@ pub fn render_settings_elements(
 
             let bar_x = content_x + 46;
             let bar_w = 360;
-            canvas.fill_rounded_rect(bar_x, cy + 8, bar_w, 14, 6, [28, 28, 42, 255]);
+            canvas.fill_rounded_rect_aa(bar_x, cy + 8, bar_w, 14, 6, [28, 28, 42, 255]);
             let norm = ((state.pointer_sensitivity - 0.25) / (2.50 - 0.25)).clamp(0.0, 1.0);
             let fill_w = (norm * bar_w as f64).round() as i32;
-            canvas.fill_rounded_rect(
+            canvas.fill_rounded_rect_aa(
                 bar_x,
                 cy + 8,
                 fill_w.max(10),
@@ -1155,7 +1141,7 @@ pub fn render_settings_elements(
             }
 
             let inc_rect = Rectangle::new((wx + bar_x + bar_w + 10, wy + cy).into(), (36, 30).into());
-            canvas.fill_rounded_rect(bar_x + bar_w + 10, cy, 36, 30, 5, [44, 44, 66, 255]);
+            canvas.fill_rounded_rect_aa(bar_x + bar_w + 10, cy, 36, 30, 5, [44, 44, 66, 255]);
             canvas.draw_text_px(bar_x + bar_w + 22, cy + 6, "+", 15.0, [240, 242, 252, 255]);
             state
                 .settings
@@ -1206,7 +1192,7 @@ pub fn render_settings_elements(
             );
             cy += 22;
             for dev in state.settings.input_devices.iter().take(4) {
-                canvas.fill_rounded_rect(content_x, cy, 506, 25, 4, [28, 28, 42, 235]);
+                canvas.fill_rounded_rect_aa(content_x, cy, 506, 25, 4, [28, 28, 42, 235]);
                 canvas.draw_text_px(content_x + 10, cy + 5, dev, 12.0, [215, 218, 236, 255]);
                 cy += 28;
             }
@@ -1259,7 +1245,7 @@ pub fn render_settings_elements(
             cy += 52;
 
             let auto_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 36).into());
-            canvas.fill_rounded_rect(content_x, cy, 506, 36, 6, [40, 40, 62, 255]);
+            canvas.fill_rounded_rect_aa(content_x, cy, 506, 36, 6, [40, 40, 62, 255]);
             canvas.draw_text_px(
                 content_x + 14,
                 cy + 10,
@@ -1323,7 +1309,7 @@ pub fn render_settings_elements(
             ];
 
             for (label, val) in rows {
-                canvas.fill_rounded_rect(content_x, cy, 506, 32, 5, [28, 28, 42, 240]);
+                canvas.fill_rounded_rect_aa(content_x, cy, 506, 32, 5, [28, 28, 42, 240]);
                 canvas.draw_text_px(
                     content_x + 12,
                     cy + 8,

@@ -55,6 +55,13 @@ pub enum DesktopIconAction {
     OpenPath(PathBuf),
 }
 
+#[derive(Debug, Clone)]
+pub struct CreatingFolderState {
+    pub name: String,
+    pub grid_col: i32,
+    pub grid_row: i32,
+}
+
 #[derive(Debug)]
 pub struct OverlaysState {
     pub notifications: Vec<NotificationToast>,
@@ -76,6 +83,7 @@ pub struct OverlaysState {
     pub rubberband_start: Option<Point<f64, Logical>>,
     pub rubberband_current: Option<Point<f64, Logical>>,
     pub dragging_icon: Option<usize>,
+    pub creating_folder: Option<CreatingFolderState>,
     hit_regions: Vec<(Rectangle<i32, Logical>, OverlayClick)>,
 }
 
@@ -130,6 +138,7 @@ impl Default for OverlaysState {
             rubberband_start: None,
             rubberband_current: None,
             dragging_icon: None,
+            creating_folder: None,
             hit_regions: Vec::new(),
         };
         s.refresh_desktop_icons();
@@ -144,6 +153,85 @@ impl Default for OverlaysState {
 impl OverlaysState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Starts inline folder creation on the desktop grid with an editable name input.
+    pub fn begin_creating_folder(&mut self) {
+        self.show_desktop_icons = true;
+        self.selected_icons.clear();
+
+        let mut col = 1;
+        let mut row = 0;
+        'outer: loop {
+            for r in 0..6 {
+                let occupied = self
+                    .desktop_icons
+                    .iter()
+                    .any(|ic| ic.grid_col == col && ic.grid_row == r);
+                if !occupied {
+                    row = r;
+                    break 'outer;
+                }
+            }
+            col += 1;
+            if col > 12 {
+                col = 1;
+                row = 0;
+                break;
+            }
+        }
+
+        self.creating_folder = Some(CreatingFolderState {
+            name: "New Folder".to_string(),
+            grid_col: col,
+            grid_row: row,
+        });
+    }
+
+    /// Confirms inline folder creation, creates the directory in `~/Desktop`, and refreshes icons.
+    pub fn confirm_creating_folder(&mut self) {
+        let Some(cf) = self.creating_folder.take() else {
+            return;
+        };
+        let sanitized: String = cf
+            .name
+            .trim()
+            .chars()
+            .map(|c| if c == '/' || c == '\0' { '_' } else { c })
+            .collect();
+        if sanitized.is_empty() || sanitized == "." || sanitized == ".." {
+            return;
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let desktop_dir = PathBuf::from(home).join("Desktop");
+            let mut target = desktop_dir.join(&sanitized);
+            if target.exists() {
+                for n in 1..=99 {
+                    let candidate = desktop_dir.join(format!("{} ({})", sanitized, n));
+                    if !candidate.exists() {
+                        target = candidate;
+                        break;
+                    }
+                }
+            }
+            if fs::create_dir_all(&target).is_ok() {
+                let folder_name = target
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&sanitized)
+                    .to_string();
+                self.refresh_desktop_icons();
+                self.push_notification(
+                    "Desktop",
+                    format!("Created ~/Desktop/{}", folder_name),
+                );
+            }
+        }
+    }
+
+    /// Cancels inline folder creation without writing to disk.
+    pub fn cancel_creating_folder(&mut self) {
+        self.creating_folder = None;
     }
 
     pub fn push_notification(&mut self, title: impl Into<String>, body: impl Into<String>) {
@@ -526,6 +614,11 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
         return true;
     }
 
+    if state.overlays.creating_folder.is_some() {
+        state.overlays.confirm_creating_folder();
+        return true;
+    }
+
     let px = pos.x.round() as i32;
     let py = pos.y.round() as i32;
 
@@ -709,14 +802,7 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
             }
             OverlayClick::ContextNewFolder => {
                 state.overlays.context_menu_pos = None;
-                if let Ok(home) = std::env::var("HOME") {
-                    let folder = PathBuf::from(home).join("Desktop/New_Folder");
-                    let _ = fs::create_dir_all(&folder);
-                    state.overlays.refresh_desktop_icons();
-                    state
-                        .overlays
-                        .push_notification("Desktop", "Created ~/Desktop/New_Folder");
-                }
+                state.overlays.begin_creating_folder();
             }
             OverlayClick::ContextOpenTerminal => {
                 state.overlays.context_menu_pos = None;
@@ -824,7 +910,7 @@ pub fn render_top_overlays(
             [200, 205, 228, 255],
         );
 
-        canvas.fill_rounded_rect(cx + 40, cy + 104, card_w - 80, 36, 6, [16, 16, 26, 255]);
+        canvas.fill_rounded_rect_aa(cx + 40, cy + 104, card_w - 80, 36, 8, [16, 16, 26, 255]);
         let bullets: String = std::iter::repeat('*')
             .take(state.overlays.lock_input.len().max(1))
             .collect();
@@ -1167,7 +1253,7 @@ pub fn render_top_overlays(
         } else {
             for (i, (title, body)) in state.overlays.history.iter().take(4).enumerate() {
                 let iy = 46 + i as i32 * 60;
-                canvas.fill_rounded_rect(10, iy, nw - 20, 52, 6, [32, 32, 48, 240]);
+                canvas.fill_rounded_rect_aa(10, iy, nw - 20, 52, 8, [32, 32, 48, 240]);
                 let st: String = title.chars().take(34).collect();
                 let sb: String = body.chars().take(38).collect();
                 canvas.draw_text_px(18, iy + 8, &st, 13.0, [accent[0], accent[1], accent[2], 255]);
@@ -1388,6 +1474,55 @@ pub fn render_desktop_icons(
             ),
             OverlayClick::DesktopIconClick(idx),
         ));
+
+        if let Some(elem) = upload_canvas(&canvas, (ix, iy), renderer, scale) {
+            elements.push(elem);
+        }
+    }
+
+    // Inline "New Folder" icon + editable name input field
+    if let Some(ref cf) = state.overlays.creating_folder {
+        let ix = 20 + cf.grid_col * 98 - 7;
+        let iy = top_margin + cf.grid_row * 94;
+        let iw = 104;
+        let ih = 88;
+        let accent = state.panel.accent_rgb();
+
+        let mut canvas = Canvas::new(iw, ih);
+        canvas.fill_rounded_rect_aa(2, 0, iw - 4, ih - 2, 10, [accent[0], accent[1], accent[2], 44]);
+        canvas.stroke_rect(2, 0, iw - 4, ih - 2, [accent[0], accent[1], accent[2], 210]);
+
+        canvas.fill_rounded_rect_aa(27, 7, 50, 50, 12, [0, 0, 0, 72]);
+        crate::icons::draw_app_icon(
+            &mut canvas,
+            28,
+            5,
+            48,
+            Some("folder"),
+            crate::icons::VectorIconKind::Folder,
+        );
+
+        // Crisp inline text input box for folder name
+        canvas.fill_rounded_rect_aa(4, 57, iw - 8, 22, 6, [18, 20, 32, 242]);
+        canvas.stroke_rect(4, 57, iw - 8, 22, [accent[0], accent[1], accent[2], 235]);
+
+        let max_chars = 11;
+        let display_name: String = if cf.name.chars().count() > max_chars {
+            cf.name
+                .chars()
+                .rev()
+                .take(max_chars)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect()
+        } else {
+            cf.name.clone()
+        };
+        let label_with_caret = format!("{}|", display_name);
+        let lw = canvas.measure_text_px(&label_with_caret, 11.5);
+        let tx = ((iw - lw) / 2).max(8);
+        canvas.draw_text_px(tx, 61, &label_with_caret, 11.5, [246, 248, 255, 255]);
 
         if let Some(elem) = upload_canvas(&canvas, (ix, iy), renderer, scale) {
             elements.push(elem);

@@ -44,6 +44,10 @@ enum KeyAction {
     LauncherClose,
     UnlockAttempt,
     LockTypeChar(char),
+    NewFolderTypeChar(char),
+    NewFolderBackspace,
+    ConfirmNewFolder,
+    CancelNewFolder,
     ExitCompositor,
 }
 
@@ -189,6 +193,31 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
                 }
             }
 
+            // Inline new folder name editing on the desktop
+            if state.overlays.creating_folder.is_some()
+                && !modifiers.logo
+                && !modifiers.ctrl
+                && !modifiers.alt
+            {
+                if raw_u32 == keysyms::KEY_Return {
+                    return FilterResult::Intercept(KeyAction::ConfirmNewFolder);
+                }
+                if raw_u32 == keysyms::KEY_Escape {
+                    return FilterResult::Intercept(KeyAction::CancelNewFolder);
+                }
+                if raw_u32 == keysyms::KEY_BackSpace {
+                    return FilterResult::Intercept(KeyAction::NewFolderBackspace);
+                }
+                if (0x20..=0x7e).contains(&raw_u32) {
+                    if let Some(ch) = char::from_u32(raw_u32) {
+                        if ch != '/' {
+                            return FilterResult::Intercept(KeyAction::NewFolderTypeChar(ch));
+                        }
+                    }
+                }
+                return FilterResult::Intercept(KeyAction::NewFolderTypeChar('\0'));
+            }
+
             // Live search filter when Start Menu is open
             if state.panel.launcher_open && !modifiers.logo && !modifiers.ctrl && !modifiers.alt {
                 if raw_u32 == keysyms::KEY_Escape {
@@ -292,6 +321,26 @@ fn execute_key_action(state: &mut OkayState, action: KeyAction) {
             if state.overlays.lock_input.len() < 32 {
                 state.overlays.lock_input.push(ch);
             }
+        }
+        KeyAction::NewFolderTypeChar(ch) => {
+            if ch != '\0' {
+                if let Some(ref mut cf) = state.overlays.creating_folder {
+                    if cf.name.chars().count() < 40 {
+                        cf.name.push(ch);
+                    }
+                }
+            }
+        }
+        KeyAction::NewFolderBackspace => {
+            if let Some(ref mut cf) = state.overlays.creating_folder {
+                cf.name.pop();
+            }
+        }
+        KeyAction::ConfirmNewFolder => {
+            state.overlays.confirm_creating_folder();
+        }
+        KeyAction::CancelNewFolder => {
+            state.overlays.cancel_creating_folder();
         }
         KeyAction::ExitCompositor => {
             tracing::info!("Super+Escape pressed — shutting down OKay DE");
