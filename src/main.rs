@@ -17,7 +17,7 @@ use std::{
     path::Path,
     rc::Rc,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use calloop::{EventLoop, LoopHandle};
@@ -242,6 +242,15 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
                             scale,
                         );
                     }
+                    if state.pending_native_screenshot.is_some() {
+                        let scale = Scale::from(output.current_scale().fractional_scale());
+                        crate::screencopy::capture_native_screenshot(
+                            state,
+                            renderer,
+                            &output,
+                            scale,
+                        );
+                    }
                 }
                 if let Err(err) = backend.submit(None) {
                     tracing::warn!(?err, "Winit submit failed");
@@ -258,6 +267,10 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
 
     while state.running {
         event_loop.dispatch(Some(Duration::from_millis(16)), &mut state)?;
+        if state.last_status_poll.elapsed() >= Duration::from_secs(5) {
+            state.last_status_poll = Instant::now();
+            crate::worker::dispatch(crate::worker::WorkerRequest::PollPanelStatus);
+        }
         display.dispatch_clients(&mut state)?;
         display.flush_clients()?;
         state.space.refresh();
@@ -441,8 +454,36 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
                             scale,
                         );
                     }
+                    if let Some((_, region_opt)) = &state.pending_native_screenshot {
+                        let region_opt = *region_opt;
+                        let matches_out = if let Some(r) = region_opt {
+                            state
+                                .space
+                                .output_geometry(&out_state.output)
+                                .map(|g| g.overlaps(r))
+                                .unwrap_or(true)
+                        } else {
+                            state
+                                .output_under_pointer()
+                                .map(|o| o == out_state.output)
+                                .unwrap_or(true)
+                        };
+                        if matches_out {
+                            crate::screencopy::capture_native_screenshot(
+                                &mut state,
+                                &mut dev.renderer,
+                                &out_state.output,
+                                scale,
+                            );
+                        }
+                    }
                 }
             }
+        }
+
+        if state.last_status_poll.elapsed() >= Duration::from_secs(5) {
+            state.last_status_poll = Instant::now();
+            crate::worker::dispatch(crate::worker::WorkerRequest::PollPanelStatus);
         }
 
         display.dispatch_clients(&mut state)?;

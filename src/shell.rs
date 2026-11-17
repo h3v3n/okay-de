@@ -158,6 +158,9 @@ impl XdgShellHandler for OkayState {
         let id = surface.wl_surface().id();
         self.workspaces.remove_window(&id);
         self.focus_stack.retain(|x| x != &id);
+        self.animations.windows.remove(&id);
+        self.animations.taskbar_button_rects.remove(&id);
+        crate::render::evict_window_cache(&id);
 
         let window = self
             .space
@@ -178,41 +181,44 @@ impl XdgShellHandler for OkayState {
     }
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {
-        let output = self.space.outputs().next().cloned();
-        if let Some(output) = output {
-            let layer_map = layer_map_for_output(&output);
-            let zone = layer_map.non_exclusive_zone();
-            let output_geo = self
-                .space
-                .output_geometry(&output)
-                .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
+        let window = self
+            .space
+            .elements()
+            .find(|w| {
+                w.toplevel()
+                    .map(|t| t.wl_surface() == surface.wl_surface())
+                    .unwrap_or(false)
+            })
+            .cloned();
 
-            let target_loc = output_geo.loc + zone.loc;
-            let target_size = zone.size;
-
-            let window = self
-                .space
-                .elements()
-                .find(|w| {
-                    w.toplevel()
-                        .map(|t| t.wl_surface() == surface.wl_surface())
-                        .unwrap_or(false)
-                })
-                .cloned();
-
-            if let Some(window) = window {
-                self.space.map_element(window, target_loc, true);
+        if let Some(window) = window {
+            let id = surface.wl_surface().id();
+            if !self.workspaces.maximized.contains(&id) {
+                self.toggle_maximize_window(&window);
+            } else {
+                surface.send_configure();
             }
-
-            surface.with_pending_state(|state| {
-                state.states.set(xdg_toplevel::State::Maximized);
-                state.size = Some(target_size);
-            });
-            surface.send_configure();
         }
     }
 
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        let window = self
+            .space
+            .elements()
+            .find(|w| {
+                w.toplevel()
+                    .map(|t| t.wl_surface() == surface.wl_surface())
+                    .unwrap_or(false)
+            })
+            .cloned();
+
+        if let Some(window) = window {
+            let id = surface.wl_surface().id();
+            if self.workspaces.maximized.contains(&id) {
+                self.toggle_maximize_window(&window);
+                return;
+            }
+        }
         surface.with_pending_state(|state| {
             state.states.unset(xdg_toplevel::State::Maximized);
             state.size = None;
@@ -228,6 +234,7 @@ impl XdgShellHandler for OkayState {
 
         if let Some(out) = target_output {
             if let Some(geo) = self.space.output_geometry(&out) {
+                let id = surface.wl_surface().id();
                 let window = self
                     .space
                     .elements()
@@ -239,6 +246,14 @@ impl XdgShellHandler for OkayState {
                     .cloned();
 
                 if let Some(window) = window {
+                    if !self.workspaces.fullscreen.contains(&id) {
+                        if let Some(loc) = self.space.element_location(&window) {
+                            self.workspaces
+                                .saved_geometries
+                                .insert(id.clone(), Rectangle::new(loc, window.geometry().size));
+                        }
+                        self.workspaces.fullscreen.insert(id);
+                    }
                     self.space.map_element(window, geo.loc, true);
                 }
                 surface.with_pending_state(|state| {
@@ -251,11 +266,37 @@ impl XdgShellHandler for OkayState {
     }
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
-        surface.with_pending_state(|state| {
-            state.states.unset(xdg_toplevel::State::Fullscreen);
-            state.size = None;
-        });
+        let id = surface.wl_surface().id();
+        let was_fs = self.workspaces.fullscreen.remove(&id);
+        let restore = if was_fs {
+            self.workspaces.saved_geometries.remove(&id)
+        } else {
+            None
+        };
+        let window = self
+            .space
+            .elements()
+            .find(|w| {
+                w.toplevel()
+                    .map(|t| t.wl_surface() == surface.wl_surface())
+                    .unwrap_or(false)
+            })
+            .cloned();
+
+        if let (Some(win), Some(rect)) = (window, restore) {
+            self.space.map_element(win, rect.loc, true);
+            surface.with_pending_state(|state| {
+                state.states.unset(xdg_toplevel::State::Fullscreen);
+                state.size = Some(rect.size);
+            });
+        } else {
+            surface.with_pending_state(|state| {
+                state.states.unset(xdg_toplevel::State::Fullscreen);
+                state.size = None;
+            });
+        }
         surface.send_configure();
+        self.retile_workspace();
     }
 }
 

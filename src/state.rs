@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
+    path::PathBuf,
     time::Instant,
 };
 
@@ -118,6 +119,9 @@ pub struct WorkspaceManager {
     pub always_on_top: HashSet<ObjectId>,
     pub saved_geometries: HashMap<ObjectId, Rectangle<i32, Logical>>,
     pub layout_mode: LayoutMode,
+    pub per_workspace_layouts: HashMap<usize, LayoutMode>,
+    pub master_ratio: f32,
+    pub tile_order: Vec<ObjectId>,
 }
 
 impl Default for WorkspaceManager {
@@ -132,18 +136,36 @@ impl Default for WorkspaceManager {
             always_on_top: HashSet::new(),
             saved_geometries: HashMap::new(),
             layout_mode: LayoutMode::Floating,
+            per_workspace_layouts: HashMap::new(),
+            master_ratio: 0.50,
+            tile_order: Vec::new(),
         }
     }
 }
 
 impl WorkspaceManager {
+    pub fn active_layout(&self) -> LayoutMode {
+        self.per_workspace_layouts
+            .get(&self.active)
+            .copied()
+            .unwrap_or(self.layout_mode)
+    }
+
+    pub fn set_active_layout(&mut self, mode: LayoutMode) {
+        self.layout_mode = mode;
+        self.per_workspace_layouts.insert(self.active, mode);
+    }
+
     pub fn tiling_enabled(&self) -> bool {
-        self.layout_mode != LayoutMode::Floating
+        self.active_layout() != LayoutMode::Floating
     }
 
     pub fn assign_window(&mut self, surface_id: ObjectId, workspace: usize) {
         let ws = workspace.clamp(1, self.count);
-        self.window_map.insert(surface_id, ws);
+        self.window_map.insert(surface_id.clone(), ws);
+        if !self.tile_order.contains(&surface_id) {
+            self.tile_order.push(surface_id);
+        }
     }
 
     pub fn remove_window(&mut self, surface_id: &ObjectId) {
@@ -153,6 +175,7 @@ impl WorkspaceManager {
         self.maximized.remove(surface_id);
         self.always_on_top.remove(surface_id);
         self.saved_geometries.remove(surface_id);
+        self.tile_order.retain(|x| x != surface_id);
     }
 
     pub fn window_workspace(&self, surface_id: &ObjectId) -> usize {
@@ -193,6 +216,14 @@ impl WorkspaceManager {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResizeEdges {
+    pub left: bool,
+    pub right: bool,
+    pub top: bool,
+    pub bottom: bool,
+}
+
 /// Interactive window move / resize grab state.
 #[derive(Debug, Clone)]
 pub enum PointerGrabMode {
@@ -204,7 +235,9 @@ pub enum PointerGrabMode {
     Resize {
         window: Window,
         initial_pointer: Point<f64, Logical>,
+        initial_window_loc: Point<i32, Logical>,
         initial_size: Size<i32, Logical>,
+        edges: ResizeEdges,
     },
 }
 
@@ -251,6 +284,9 @@ pub struct OkayState {
     pub natural_scroll: bool,
     pub active_clipboard_text: String,
     pub pending_screencopies: Vec<crate::screencopy::PendingScreencopy>,
+    pub pending_native_screenshot: Option<(PathBuf, Option<Rectangle<i32, Logical>>)>,
+    pub last_titlebar_click: Option<(ObjectId, Instant)>,
+    pub last_status_poll: Instant,
 
     // Desktop, window registry & workspaces
     pub space: Space<Window>,
@@ -308,6 +344,9 @@ impl OkayState {
         let mut settings = crate::settings::SettingsState::new();
         settings.xkb_layout = cfg.xkb_layout;
 
+        let mut overlays = crate::overlays::OverlaysState::new();
+        overlays.lock_pin = cfg.lock_pin;
+
         Self {
             display_handle,
             loop_signal,
@@ -332,6 +371,9 @@ impl OkayState {
             natural_scroll: cfg.natural_scroll,
             active_clipboard_text: String::new(),
             pending_screencopies: Vec::new(),
+            pending_native_screenshot: None,
+            last_titlebar_click: None,
+            last_status_poll: Instant::now(),
             space: Space::default(),
             popups: PopupManager::default(),
             workspaces: WorkspaceManager::default(),
@@ -342,7 +384,7 @@ impl OkayState {
             panel,
             settings,
             animations,
-            overlays: crate::overlays::OverlaysState::new(),
+            overlays,
         }
     }
 
@@ -361,7 +403,8 @@ impl OkayState {
         );
     }
 
-    /// Spawns user-configured `autostart` commands in the background after `WAYLAND_DISPLAY` is set.
+    /// Spawns user-configured `autostart` commands and `~/.config/okay-de/autostart.sh`
+    /// in the background after `WAYLAND_DISPLAY` is set.
     pub fn spawn_autostart(&self) {
         for cmd in &self.panel.autostart_cmds {
             let trimmed = cmd.trim();
@@ -374,6 +417,16 @@ impl OkayState {
                 .arg(trimmed)
                 .env("WAYLAND_DISPLAY", &self.socket_name)
                 .spawn();
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let script = PathBuf::from(home).join(".config/okay-de/autostart.sh");
+            if script.is_file() {
+                tracing::info!(?script, "Launching autostart.sh");
+                let _ = std::process::Command::new("sh")
+                    .arg(&script)
+                    .env("WAYLAND_DISPLAY", &self.socket_name)
+                    .spawn();
+            }
         }
     }
 
@@ -636,21 +689,13 @@ impl OkayState {
         }
     }
 
-    /// Snaps `window` to screen halves, quarters, or full maximized work area.
-    pub fn snap_window(&mut self, window: &Window, zone: SnapZone) {
-        if zone == SnapZone::Maximize {
-            self.toggle_maximize_window(window);
-            return;
-        }
-        let Some(toplevel) = window.toplevel().cloned() else {
-            return;
-        };
-        let id = toplevel.wl_surface().id();
-        let output_geo = self
-            .output_under_pointer()
-            .and_then(|o| self.space.output_geometry(&o))
-            .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
-
+    /// Computes the exact logical rectangle for `zone` inside `output_geo`, accounting
+    /// for the Top Bar, Dock, titlebar height, and configured window gaps.
+    pub fn compute_snap_rect(
+        &self,
+        output_geo: Rectangle<i32, Logical>,
+        zone: SnapZone,
+    ) -> Rectangle<i32, Logical> {
         let gap = self.panel.window_gaps;
         let top_bar_pad = if self.panel.dock_mode || self.panel.panel_top {
             crate::panel::PANEL_HEIGHT
@@ -664,10 +709,21 @@ impl OkayState {
         } else {
             0
         };
+        if zone == SnapZone::Maximize {
+            return Rectangle::new(
+                (output_geo.loc.x, output_geo.loc.y + top_bar_pad + TITLEBAR_HEIGHT).into(),
+                (
+                    output_geo.size.w,
+                    (output_geo.size.h - top_bar_pad - bot_bar_pad - TITLEBAR_HEIGHT).max(120),
+                )
+                    .into(),
+            );
+        }
         let ax = output_geo.loc.x + gap;
         let ay = output_geo.loc.y + top_bar_pad + gap + TITLEBAR_HEIGHT;
         let aw = (output_geo.size.w - gap * 2).max(200);
-        let ah = (output_geo.size.h - top_bar_pad - bot_bar_pad - gap * 2 - TITLEBAR_HEIGHT).max(200);
+        let ah =
+            (output_geo.size.h - top_bar_pad - bot_bar_pad - gap * 2 - TITLEBAR_HEIGHT).max(200);
         let half_w = (aw - gap) / 2;
         let half_h = (ah - gap - TITLEBAR_HEIGHT) / 2;
 
@@ -683,23 +739,166 @@ impl OkayState {
             }
             SnapZone::Maximize => unreachable!(),
         };
+        Rectangle::new((nx, ny).into(), (nw.max(120), nh.max(90)).into())
+    }
 
-        if let Some(old_loc) = self.space.element_location(window) {
-            self.animations
-                .on_window_moved(id, old_loc, Point::from((nx, ny)));
+    /// Detects if `pos` is near a screen edge or corner to trigger snap-to-zone + live preview.
+    pub fn detect_snap_zone(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(SnapZone, Rectangle<i32, Logical>)> {
+        let out = self.output_under_pointer()?;
+        let geo = self.space.output_geometry(&out)?;
+        let px = pos.x.round() as i32;
+        let py = pos.y.round() as i32;
+        let top_thresh = geo.loc.y + crate::panel::PANEL_HEIGHT + 12;
+        let left = px <= geo.loc.x + 14;
+        let right = px >= geo.loc.x + geo.size.w - 16;
+        let top = py <= top_thresh;
+        let bot = py >= geo.loc.y + geo.size.h - 16;
+
+        let zone = if left && top {
+            Some(SnapZone::TopLeftQuarter)
+        } else if right && top {
+            Some(SnapZone::TopRightQuarter)
+        } else if left && bot {
+            Some(SnapZone::BottomLeftQuarter)
+        } else if right && bot {
+            Some(SnapZone::BottomRightQuarter)
+        } else if left {
+            Some(SnapZone::LeftHalf)
+        } else if right {
+            Some(SnapZone::RightHalf)
+        } else if top {
+            Some(SnapZone::Maximize)
+        } else {
+            None
+        }?;
+
+        let rect = self.compute_snap_rect(geo, zone);
+        Some((zone, rect))
+    }
+
+    /// Unmaximizes `window` cleanly if the user starts dragging or resizing it.
+    pub fn unmaximize_if_needed(&mut self, window: &Window) {
+        if let Some(toplevel) = window.toplevel() {
+            let id = toplevel.wl_surface().id();
+            if self.workspaces.maximized.remove(&id) {
+                self.workspaces.saved_geometries.remove(&id);
+                toplevel.with_pending_state(|s| {
+                    s.states.unset(xdg_toplevel::State::Maximized);
+                });
+                toplevel.send_configure();
+            }
         }
-        self.space.map_element(window.clone(), (nx, ny), true);
+    }
+
+    /// Returns visible window and resize edges if `pos` hovers within 6px of a window border/corner.
+    pub fn window_resize_edges_at(&self, pos: Point<f64, Logical>) -> Option<(Window, ResizeEdges)> {
+        let px = pos.x.round() as i32;
+        let py = pos.y.round() as i32;
+        let border = 6;
+
+        for window in self.space.elements().rev() {
+            if !self.workspaces.is_visible(window) || self.workspaces.is_fullscreen(window) {
+                continue;
+            }
+            let Some(win_loc) = self.space.element_location(window) else {
+                continue;
+            };
+            let geo = window.geometry();
+            let x0 = win_loc.x + geo.loc.x;
+            let y0 = win_loc.y + geo.loc.y - TITLEBAR_HEIGHT;
+            let w = geo.size.w.max(120);
+            let h = geo.size.h + TITLEBAR_HEIGHT;
+            let x1 = x0 + w;
+            let y1 = y0 + h;
+
+            if px < x0 - border || px > x1 + border || py < y0 - border || py > y1 + border {
+                continue;
+            }
+
+            let left = (px - x0).abs() <= border;
+            let right = (px - x1).abs() <= border;
+            let bottom = (py - y1).abs() <= border;
+            let top = (py - y0).abs() <= border;
+
+            // Only match outer rim (not interior titlebar traffic lights or client surface)
+            if left || right || bottom {
+                return Some((
+                    window.clone(),
+                    ResizeEdges {
+                        left,
+                        right,
+                        top: top && (left || right),
+                        bottom,
+                    },
+                ));
+            }
+
+            // If point is inside a higher window's body, stop searching lower windows
+            if px >= x0 && px < x1 && py >= y0 && py < y1 {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Snaps `window` to screen halves, quarters, or full maximized work area.
+    pub fn snap_window(&mut self, window: &Window, zone: SnapZone) {
+        if zone == SnapZone::Maximize {
+            self.toggle_maximize_window(window);
+            return;
+        }
+        let Some(toplevel) = window.toplevel().cloned() else {
+            return;
+        };
+        let id = toplevel.wl_surface().id();
+        self.workspaces.maximized.remove(&id);
+        let output_geo = self
+            .output_under_pointer()
+            .and_then(|o| self.space.output_geometry(&o))
+            .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
+
+        let rect = self.compute_snap_rect(output_geo, zone);
+        if let Some(old_loc) = self.space.element_location(window) {
+            self.animations.on_window_moved(id, old_loc, rect.loc);
+        }
+        self.space.map_element(window.clone(), rect.loc, true);
         toplevel.with_pending_state(|s| {
-            s.size = Some((nw.max(120), nh.max(90)).into());
+            s.states.unset(xdg_toplevel::State::Maximized);
+            s.size = Some(rect.size);
         });
         toplevel.send_configure();
     }
 
     /// Cycles layout mode (`Floating -> MasterStack -> Dwindle -> Floating`) (`Super + T`).
     pub fn toggle_tiling(&mut self) {
-        self.workspaces.layout_mode = self.workspaces.layout_mode.next();
-        tracing::info!(mode = ?self.workspaces.layout_mode, "Cycled workspace layout mode");
+        let next = self.workspaces.active_layout().next();
+        self.workspaces.set_active_layout(next);
+        tracing::info!(mode = ?next, "Cycled workspace layout mode");
+        self.overlays
+            .show_osd("Layout", next.short_label(), None);
         self.retile_workspace();
+    }
+
+    /// Returns visible non-fullscreen windows on the active workspace in stable tiling order.
+    pub fn ordered_visible_windows(&self) -> Vec<Window> {
+        let mut wins: Vec<Window> = self
+            .space
+            .elements()
+            .filter(|w| self.workspaces.is_visible(w) && !self.workspaces.is_fullscreen(w))
+            .cloned()
+            .collect();
+        wins.sort_by_key(|w| {
+            w.toplevel()
+                .and_then(|t| {
+                    let id = t.wl_surface().id();
+                    self.workspaces.tile_order.iter().position(|x| x == &id)
+                })
+                .unwrap_or(usize::MAX)
+        });
+        wins
     }
 
     /// Arranges visible non-fullscreen windows on the active workspace in Master-Stack or Dwindle
@@ -708,20 +907,17 @@ impl OkayState {
         if !self.workspaces.tiling_enabled() {
             return;
         }
-        let Some(output) = self.output_under_pointer() else {
+        let Some(output) = self
+            .output_under_pointer()
+            .or_else(|| self.space.outputs().next().cloned())
+        else {
             return;
         };
         let Some(output_geo) = self.space.output_geometry(&output) else {
             return;
         };
 
-        let windows: Vec<Window> = self
-            .space
-            .elements()
-            .filter(|w| self.workspaces.is_visible(w) && !self.workspaces.is_fullscreen(w))
-            .cloned()
-            .collect();
-
+        let windows = self.ordered_visible_windows();
         let n = windows.len();
         if n == 0 {
             return;
@@ -743,7 +939,8 @@ impl OkayState {
         let area_x = output_geo.loc.x + gap;
         let area_y = output_geo.loc.y + top_bar_pad + gap + TITLEBAR_HEIGHT;
         let area_w = (output_geo.size.w - gap * 2).max(200);
-        let area_h = (output_geo.size.h - top_bar_pad - bot_bar_pad - gap * 2 - TITLEBAR_HEIGHT).max(200);
+        let area_h =
+            (output_geo.size.h - top_bar_pad - bot_bar_pad - gap * 2 - TITLEBAR_HEIGHT).max(200);
 
         if n == 1 {
             let win = &windows[0];
@@ -766,8 +963,7 @@ impl OkayState {
             return;
         }
 
-        if self.workspaces.layout_mode == LayoutMode::Dwindle {
-            // Spiral / Dwindle binary split layout
+        if self.workspaces.active_layout() == LayoutMode::Dwindle {
             let mut rx = area_x;
             let mut ry = area_y;
             let mut rw = area_w;
@@ -778,13 +974,18 @@ impl OkayState {
                 let (wx, wy, ww, wh) = if is_last {
                     (rx, ry, rw, rh)
                 } else if i % 2 == 0 {
-                    let w_half = (rw - gap) / 2;
-                    let res = (rx, ry, w_half, rh);
+                    let ratio = if i == 0 {
+                        self.workspaces.master_ratio
+                    } else {
+                        0.5
+                    };
+                    let w_half = ((rw - gap) as f32 * ratio).round() as i32;
+                    let res = (rx, ry, w_half.max(120), rh);
                     rx += w_half + gap;
-                    rw -= w_half + gap;
+                    rw = (rw - w_half - gap).max(120);
                     res
                 } else {
-                    let h_half = (rh - gap - TITLEBAR_HEIGHT).max(80) / 2;
+                    let h_half = ((rh - gap - TITLEBAR_HEIGHT).max(80)) / 2;
                     let res = (rx, ry, rw, h_half);
                     ry += h_half + gap + TITLEBAR_HEIGHT;
                     rh = (rh - h_half - gap - TITLEBAR_HEIGHT).max(80);
@@ -811,9 +1012,11 @@ impl OkayState {
             return;
         }
 
-        // Master-Stack layout
-        let master_w = (area_w - gap) / 2;
-        let stack_w = area_w - master_w - gap;
+        // Master-Stack layout with adjustable master_ratio
+        let master_w = (((area_w - gap) as f32) * self.workspaces.master_ratio)
+            .round()
+            .clamp(160.0, (area_w - gap - 160).max(160) as f32) as i32;
+        let stack_w = (area_w - master_w - gap).max(120);
         let stack_count = (n - 1) as i32;
 
         for (i, win) in windows.iter().enumerate() {
@@ -844,6 +1047,133 @@ impl OkayState {
                 toplevel.send_configure();
             }
         }
+    }
+
+    /// Focuses the next (`forward = true`) or previous (`forward = false`) visible window (`Super+J/K`).
+    pub fn focus_next_prev(&mut self, forward: bool) {
+        let windows = self.ordered_visible_windows();
+        if windows.is_empty() {
+            return;
+        }
+        let focused_id = self
+            .seat
+            .get_keyboard()
+            .and_then(|k| k.current_focus())
+            .map(|s| s.id());
+        let cur = focused_id
+            .and_then(|fid| {
+                windows.iter().position(|w| {
+                    w.toplevel()
+                        .map(|t| t.wl_surface().id() == fid)
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(0);
+        let next_idx = if forward {
+            (cur + 1) % windows.len()
+        } else {
+            (cur + windows.len() - 1) % windows.len()
+        };
+        self.focus_window(&windows[next_idx]);
+    }
+
+    /// Swaps the focused window in the workspace tiling order (`Super+Shift+J/K`).
+    pub fn swap_tiled_window(&mut self, forward: bool) {
+        let windows = self.ordered_visible_windows();
+        if windows.len() < 2 {
+            return;
+        }
+        let Some(focused) = self.focused_window() else {
+            return;
+        };
+        let Some(fid) = focused.toplevel().map(|t| t.wl_surface().id()) else {
+            return;
+        };
+        let Some(cur_vis) = windows.iter().position(|w| {
+            w.toplevel()
+                .map(|t| t.wl_surface().id() == fid)
+                .unwrap_or(false)
+        }) else {
+            return;
+        };
+        let other_vis = if forward {
+            (cur_vis + 1) % windows.len()
+        } else {
+            (cur_vis + windows.len() - 1) % windows.len()
+        };
+        let Some(oid) = windows[other_vis].toplevel().map(|t| t.wl_surface().id()) else {
+            return;
+        };
+        if let (Some(a), Some(b)) = (
+            self.workspaces.tile_order.iter().position(|x| x == &fid),
+            self.workspaces.tile_order.iter().position(|x| x == &oid),
+        ) {
+            self.workspaces.tile_order.swap(a, b);
+            self.retile_workspace();
+        }
+    }
+
+    /// Adjusts the Master-Stack split ratio (`Super + [` / `Super + ]`) and retiles.
+    pub fn adjust_master_ratio(&mut self, delta: f32) {
+        self.workspaces.master_ratio = (self.workspaces.master_ratio + delta).clamp(0.25, 0.75);
+        let pct = (self.workspaces.master_ratio * 100.0).round() as i32;
+        self.overlays
+            .show_osd("Master Ratio", &format!("{}%", pct), Some(pct));
+        self.retile_workspace();
+    }
+
+    /// Minimizes the currently focused window (`Super + M`).
+    pub fn minimize_focused_window(&mut self) {
+        if let Some(win) = self.focused_window() {
+            self.toggle_minimize_window(&win);
+        }
+    }
+
+    /// Restores the most recently minimized window on the active workspace (`Super + Shift + M`).
+    pub fn restore_last_minimized(&mut self) {
+        let target = self
+            .space
+            .elements()
+            .rev()
+            .find(|w| {
+                self.workspaces.is_on_active_workspace(w) && self.workspaces.is_minimized(w)
+            })
+            .cloned();
+        if let Some(win) = target {
+            self.toggle_minimize_window(&win);
+        }
+    }
+
+    /// Centers the currently focused floating window inside the usable work area (`Super + C`).
+    pub fn center_focused_window(&mut self) {
+        let Some(win) = self.focused_window() else {
+            return;
+        };
+        let Some(toplevel) = win.toplevel() else {
+            return;
+        };
+        let output_geo = self
+            .output_under_pointer()
+            .and_then(|o| self.space.output_geometry(&o))
+            .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
+        let top_pad = if self.panel.dock_mode || self.panel.panel_top {
+            crate::panel::PANEL_HEIGHT
+        } else {
+            0
+        };
+        let bot_pad = crate::panel::DOCK_HEIGHT + crate::panel::DOCK_MARGIN + 4;
+        let win_geo = win.geometry();
+        let usable_h = (output_geo.size.h - top_pad - bot_pad).max(160);
+        let nx = output_geo.loc.x + (output_geo.size.w - win_geo.size.w) / 2;
+        let ny = (output_geo.loc.y + top_pad + TITLEBAR_HEIGHT + (usable_h - win_geo.size.h - TITLEBAR_HEIGHT) / 2)
+            .max(output_geo.loc.y + top_pad + TITLEBAR_HEIGHT);
+        let id = toplevel.wl_surface().id();
+        self.workspaces.maximized.remove(&id);
+        if let Some(old_loc) = self.space.element_location(&win) {
+            self.animations
+                .on_window_moved(id, old_loc, Point::from((nx, ny)));
+        }
+        self.space.map_element(win, (nx, ny), true);
     }
 
     /// Returns the topmost visible `Window` under `pos` (including its server-side titlebar).
@@ -922,6 +1252,24 @@ impl OkayState {
             return true;
         }
 
+        // Double-click titlebar -> Toggle Maximize / Restore
+        if let Some(win_id) = window.toplevel().map(|t| t.wl_surface().id()) {
+            let now = Instant::now();
+            let is_double = self
+                .last_titlebar_click
+                .as_ref()
+                .map(|(lid, lt)| *lid == win_id && now.duration_since(*lt).as_millis() <= 380)
+                .unwrap_or(false);
+            if is_double {
+                self.last_titlebar_click = None;
+                self.toggle_maximize_window(&window);
+                return true;
+            }
+            self.last_titlebar_click = Some((win_id, now));
+        }
+
+        self.unmaximize_if_needed(&window);
+
         // Dragging the titlebar initiates a window move grab
         self.pointer_grab = Some(PointerGrabMode::Move {
             window,
@@ -931,26 +1279,92 @@ impl OkayState {
         true
     }
 
-    /// Cycles focus through visible windows on the active workspace.
-    pub fn cycle_focus(&mut self) {
-        let visible: Vec<Window> = self
-            .space
-            .elements()
-            .filter(|w| self.workspaces.is_visible(w))
-            .cloned()
-            .collect();
+    /// Handles middle-click on a window titlebar (toggles Always-on-Top) or right-click (Window Menu).
+    pub fn handle_titlebar_alt_click(&mut self, pos: Point<f64, Logical>, is_right_click: bool) -> bool {
+        let px = pos.x.round() as i32;
+        let py = pos.y.round() as i32;
 
-        if visible.len() < 2 {
-            if let Some(first) = visible.first() {
-                self.focus_window(first);
+        for window in self.space.elements().rev() {
+            if !self.workspaces.is_visible(window) || self.workspaces.is_fullscreen(window) {
+                continue;
             }
+            let Some(win_loc) = self.space.element_location(window) else {
+                continue;
+            };
+            let geo = window.geometry();
+            let tb_x = win_loc.x + geo.loc.x;
+            let tb_y = win_loc.y + geo.loc.y - TITLEBAR_HEIGHT;
+            let tb_w = geo.size.w.max(120);
+
+            if px >= tb_x && px < tb_x + tb_w && py >= win_loc.y + geo.loc.y && py < win_loc.y + geo.loc.y + geo.size.h {
+                return false;
+            }
+
+            if px >= tb_x && px < tb_x + tb_w && py >= tb_y && py < tb_y + TITLEBAR_HEIGHT {
+                let win_clone = window.clone();
+                self.focus_window(&win_clone);
+                if let Some(id) = win_clone.toplevel().map(|t| t.wl_surface().id()) {
+                    if is_right_click {
+                        self.overlays.window_context_menu = Some((Point::from((px, py)), id));
+                    } else {
+                        if !self.workspaces.always_on_top.remove(&id) {
+                            self.workspaces.always_on_top.insert(id);
+                            self.space.raise_element(&win_clone, true);
+                        }
+                        let pinned = self.workspaces.is_pinned(&win_clone);
+                        self.overlays.show_osd(
+                            "Always on Top",
+                            if pinned { "Pinned" } else { "Unpinned" },
+                            None,
+                        );
+                    }
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Cycles focus through visible windows on the active workspace in MRU / stack order.
+    pub fn cycle_focus(&mut self) {
+        self.cycle_focus_dir(true);
+    }
+
+    /// Cycles focus forward (`forward = true`) or backward (`forward = false`) cleanly across all visible windows.
+    pub fn cycle_focus_dir(&mut self, forward: bool) {
+        let mut visible: Vec<Window> = self.ordered_visible_windows();
+        if visible.is_empty() {
             return;
         }
-
-        // The bottom-most visible window is brought to the top and focused.
-        if let Some(next) = visible.first() {
-            self.focus_window(next);
+        if visible.len() == 1 {
+            self.focus_window(&visible[0]);
+            return;
         }
+        visible.sort_by_key(|w| {
+            w.toplevel()
+                .map(|t| t.wl_surface().id().protocol_id())
+                .unwrap_or(0)
+        });
+        let focused_id = self
+            .seat
+            .get_keyboard()
+            .and_then(|k| k.current_focus())
+            .map(|s| s.id());
+        let cur = focused_id
+            .and_then(|fid| {
+                visible.iter().position(|w| {
+                    w.toplevel()
+                        .map(|t| t.wl_surface().id() == fid)
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(0);
+        let target_idx = if forward {
+            (cur + 1) % visible.len()
+        } else {
+            (cur + visible.len() - 1) % visible.len()
+        };
+        self.focus_window(&visible[target_idx]);
     }
 
     /// Finds the surface and its global origin under the given logical pointer coordinates.

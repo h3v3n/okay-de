@@ -17,6 +17,7 @@ use smithay::{
         },
     },
     output::Output,
+    reexports::wayland_server::{backend::ObjectId, Resource},
     utils::{Logical, Physical, Point, Rectangle, Scale, Transform},
 };
 
@@ -62,24 +63,51 @@ pub struct CreatingFolderState {
     pub grid_row: i32,
 }
 
+#[derive(Debug, Clone)]
+pub struct OsdState {
+    pub title: String,
+    pub value: String,
+    pub progress: Option<i32>,
+    pub expires_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub struct PropertiesInfo {
+    pub name: String,
+    pub kind_label: String,
+    pub path: String,
+    pub size_label: String,
+}
+
 #[derive(Debug)]
 pub struct OverlaysState {
     pub notifications: Vec<NotificationToast>,
     pub history: Vec<(String, String)>,
     pub notif_drawer_open: bool,
     pub calendar_open: bool,
+    pub cal_month_offset: i32,
     pub clipboard_open: bool,
     pub control_center_open: bool,
+    pub overview_open: bool,
     pub cc_wifi_expanded: bool,
     pub cc_bt_expanded: bool,
     pub cc_volume_track: Option<Rectangle<i32, Logical>>,
     pub cc_dragging_volume: bool,
     pub clipboard_items: Vec<String>,
     pub alttab_visible_until: Option<Instant>,
+    pub osd: Option<OsdState>,
+    pub snap_preview: Option<Rectangle<i32, Logical>>,
     pub locked: bool,
     pub lock_input: String,
+    pub lock_pin: String,
+    pub lock_error: bool,
+    pub screenshot_selecting: bool,
+    pub screenshot_start: Option<Point<f64, Logical>>,
+    pub screenshot_current: Option<Point<f64, Logical>>,
     pub context_menu_pos: Option<Point<i32, Logical>>,
     pub icon_context_menu: Option<(Point<i32, Logical>, usize)>,
+    pub window_context_menu: Option<(Point<i32, Logical>, ObjectId)>,
+    pub properties_modal: Option<PropertiesInfo>,
     pub show_desktop_icons: bool,
     pub desktop_icons: Vec<DesktopIcon>,
     pub selected_icons: Vec<usize>,
@@ -88,6 +116,7 @@ pub struct OverlaysState {
     pub rubberband_current: Option<Point<f64, Logical>>,
     pub dragging_icon: Option<usize>,
     pub creating_folder: Option<CreatingFolderState>,
+    pub renaming_icon: Option<(usize, String)>,
     hit_regions: Vec<(Rectangle<i32, Logical>, OverlayClick)>,
 }
 
@@ -97,7 +126,13 @@ enum OverlayClick {
     ClearNotifications,
     CloseNotifDrawer,
     SelectClipboard(usize),
+    DeleteClipboard(usize),
+    ClearClipboard,
     CloseCalendar,
+    CalPrevMonth,
+    CalNextMonth,
+    CalToday,
+    CloseProperties,
     ControlToggleWifi,
     ControlToggleBt,
     ControlExpandWifi,
@@ -107,8 +142,18 @@ enum OverlayClick {
     ControlToggleTiling,
     ControlCycleMinimize,
     ControlOpenSettings,
+    OverviewFocus(ObjectId),
+    OverviewClose(ObjectId),
+    OverviewDismiss,
+    WinCtxMinimize(ObjectId),
+    WinCtxMaximize(ObjectId),
+    WinCtxPin(ObjectId),
+    WinCtxCenter(ObjectId),
+    WinCtxNextWs(ObjectId),
+    WinCtxClose(ObjectId),
     DesktopIconClick(usize),
     IconCtxOpen(usize),
+    IconCtxRename(usize),
     IconCtxPin(usize),
     IconCtxProperties(usize),
     IconCtxDelete(usize),
@@ -127,8 +172,10 @@ impl Default for OverlaysState {
             history: Vec::new(),
             notif_drawer_open: false,
             calendar_open: false,
+            cal_month_offset: 0,
             clipboard_open: false,
             control_center_open: false,
+            overview_open: false,
             cc_wifi_expanded: false,
             cc_bt_expanded: false,
             cc_volume_track: None,
@@ -138,10 +185,19 @@ impl Default for OverlaysState {
                 "~/.config/okay-de/config.toml".to_string(),
             ],
             alttab_visible_until: None,
+            osd: None,
+            snap_preview: None,
             locked: false,
             lock_input: String::new(),
+            lock_pin: String::new(),
+            lock_error: false,
+            screenshot_selecting: false,
+            screenshot_start: None,
+            screenshot_current: None,
             context_menu_pos: None,
             icon_context_menu: None,
+            window_context_menu: None,
+            properties_modal: None,
             show_desktop_icons: true,
             desktop_icons: Vec::new(),
             selected_icons: Vec::new(),
@@ -150,6 +206,7 @@ impl Default for OverlaysState {
             rubberband_current: None,
             dragging_icon: None,
             creating_folder: None,
+            renaming_icon: None,
             hit_regions: Vec::new(),
         };
         s.refresh_desktop_icons();
@@ -243,6 +300,69 @@ impl OverlaysState {
     /// Cancels inline folder creation without writing to disk.
     pub fn cancel_creating_folder(&mut self) {
         self.creating_folder = None;
+    }
+
+    /// Shows a brief translucent HUD/OSD pill near the bottom-center of the screen.
+    pub fn show_osd(&mut self, title: impl Into<String>, value: impl Into<String>, progress: Option<i32>) {
+        self.osd = Some(OsdState {
+            title: title.into(),
+            value: value.into(),
+            progress: progress.map(|p| p.clamp(0, 100)),
+            expires_at: Instant::now() + Duration::from_millis(1450),
+        });
+    }
+
+    /// Attempts to unlock the lockscreen; checks `lock_pin` if configured in `config.toml`.
+    pub fn attempt_unlock(&mut self) {
+        if self.lock_pin.is_empty() || self.lock_input == self.lock_pin {
+            self.locked = false;
+            self.lock_input.clear();
+            self.lock_error = false;
+        } else {
+            self.lock_input.clear();
+            self.lock_error = true;
+        }
+    }
+
+    /// Starts inline renaming for a desktop file/folder icon.
+    pub fn begin_renaming_icon(&mut self, idx: usize) {
+        if let Some(icon) = self.desktop_icons.get(idx) {
+            if matches!(icon.action, DesktopIconAction::OpenPath(_)) {
+                self.renaming_icon = Some((idx, icon.label.clone()));
+            } else {
+                self.push_notification("System Shortcut", "Built-in shortcuts cannot be renamed");
+            }
+        }
+    }
+
+    /// Confirms inline desktop icon rename on disk.
+    pub fn confirm_renaming_icon(&mut self) {
+        let Some((idx, new_name)) = self.renaming_icon.take() else {
+            return;
+        };
+        let sanitized: String = new_name
+            .trim()
+            .chars()
+            .map(|c| if c == '/' || c == '\0' { '_' } else { c })
+            .collect();
+        if sanitized.is_empty() || sanitized == "." || sanitized == ".." {
+            return;
+        }
+        if let Some(icon) = self.desktop_icons.get(idx).cloned() {
+            if let DesktopIconAction::OpenPath(old_path) = icon.action {
+                if let Some(parent) = old_path.parent() {
+                    let target = parent.join(&sanitized);
+                    if target != old_path && !target.exists() && fs::rename(&old_path, &target).is_ok() {
+                        self.refresh_desktop_icons();
+                        self.push_notification("Renamed", format!("Renamed to '{}'", sanitized));
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn cancel_renaming_icon(&mut self) {
+        self.renaming_icon = None;
     }
 
     pub fn push_notification(&mut self, title: impl Into<String>, body: impl Into<String>) {
@@ -405,6 +525,11 @@ impl OverlaysState {
                 self.alttab_visible_until = None;
             }
         }
+        if let Some(ref osd) = self.osd {
+            if now >= osd.expires_at {
+                self.osd = None;
+            }
+        }
 
         // Check external notification spool (`/tmp/okay-de-notify`) so scripts/apps can push toasts
         let notify_file = PathBuf::from("/tmp/okay-de-notify");
@@ -441,8 +566,7 @@ impl OverlaysState {
     }
 }
 
-/// Captures a screenshot and saves a PNG image to `~/Pictures/Screenshots/` + pushes a toast.
-pub fn take_screenshot(state: &mut OkayState) {
+fn build_screenshot_path(prefix: &str) -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let dir = PathBuf::from(home).join("Pictures/Screenshots");
     let _ = fs::create_dir_all(&dir);
@@ -451,49 +575,34 @@ pub fn take_screenshot(state: &mut OkayState) {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let filename = format!("okay-screenshot-{}.png", ts);
-    let path = dir.join(&filename);
+    dir.join(format!("{}-{}.png", prefix, ts))
+}
 
-    // Prepare compositor snapshot PNG bytes as fallback if `grim` is unavailable.
-    let mut canvas = Canvas::new(640, 360);
-    let accent = state.panel.accent_rgb();
-    canvas.fill_rect(0, 0, 640, 360, [18, 18, 28, 255]);
-    canvas.stroke_rect(0, 0, 640, 360, [accent[0], accent[1], accent[2], 255]);
-    canvas.draw_text_px(
-        24,
-        24,
-        "OKay DE Screenshot Snapshot",
-        18.0,
-        [accent[0], accent[1], accent[2], 255],
-    );
-    let info = format!(
-        "Workspace {}  |  Active Windows: {}",
-        state.workspaces.active,
-        state.space.elements().count()
-    );
-    canvas.draw_text_px(24, 58, &info, 14.0, [230, 232, 246, 255]);
+/// Captures a real full-output screenshot directly from the live GLES compositor framebuffer
+/// (and saves to `~/Pictures/Screenshots/` on the background worker thread).
+pub fn take_screenshot(state: &mut OkayState) {
+    let path = build_screenshot_path("okay-screenshot");
+    state.pending_native_screenshot = Some((path, None));
+}
 
-    let mut png_bytes = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut png_bytes, 640, 360);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        if let Ok(mut writer) = encoder.write_header() {
-            let _ = writer.write_image_data(&canvas.pixels);
-        }
-    }
+/// Captures a real region screenshot directly from the live GLES compositor framebuffer.
+pub fn take_area_screenshot(state: &mut OkayState, region: Rectangle<i32, Logical>) {
+    let path = build_screenshot_path("okay-region");
+    state.pending_native_screenshot = Some((path, Some(region)));
+}
 
-    // Run `grim` on the worker thread so it never deadlocks or blocks the compositor loop.
-    crate::worker::dispatch(crate::worker::WorkerRequest::TakeScreenshot {
-        path,
-        socket_name: state.socket_name.clone(),
-        fallback_png: if png_bytes.is_empty() { None } else { Some(png_bytes) },
-    });
+/// Enters interactive drag-to-select area screenshot mode (`Super + Shift + S`).
+pub fn begin_area_screenshot(state: &mut OkayState) {
+    state.overlays.screenshot_selecting = true;
+    state.overlays.screenshot_start = None;
+    state.overlays.screenshot_current = None;
+    state.overlays.context_menu_pos = None;
+    state.overlays.icon_context_menu = None;
 }
 
 /// Handles right-click on the desktop background or on a desktop icon.
 pub fn handle_desktop_right_click(state: &mut OkayState, pos: Point<f64, Logical>) -> bool {
-    if state.overlays.locked {
+    if state.overlays.locked || state.overlays.screenshot_selecting {
         return true;
     }
     if state.surface_under(pos).is_some() || state.window_under(pos).is_some() {
@@ -501,17 +610,6 @@ pub fn handle_desktop_right_click(state: &mut OkayState, pos: Point<f64, Logical
     }
     let px = pos.x.round() as i32;
     let py = pos.y.round() as i32;
-
-    if state.overlays.control_center_open {
-        if let Some(track) = state.overlays.cc_volume_track {
-            if rect_contains(track, px, py) {
-                let pct = (((px - track.loc.x) * 100) / track.size.w.max(1)).clamp(0, 100);
-                state.panel.set_volume(pct);
-                state.overlays.cc_dragging_volume = true;
-                return true;
-            }
-        }
-    }
 
     // Check if right-click landed on a desktop icon
     for (rect, action) in state.overlays.hit_regions.iter().rev() {
@@ -542,6 +640,12 @@ pub fn start_desktop_rubberband(state: &mut OkayState, pos: Point<f64, Logical>)
 
 /// Handles dragging a desktop icon across the desktop grid or dragging the rubber-band box.
 pub fn handle_overlays_motion(state: &mut OkayState, pos: Point<f64, Logical>) -> bool {
+    if state.overlays.screenshot_selecting {
+        if state.overlays.screenshot_start.is_some() {
+            state.overlays.screenshot_current = Some(pos);
+        }
+        return true;
+    }
     if state.overlays.cc_dragging_volume {
         if let Some(track) = state.overlays.cc_volume_track {
             let px = pos.x.round() as i32;
@@ -612,6 +716,26 @@ pub fn handle_overlays_motion(state: &mut OkayState, pos: Point<f64, Logical>) -
 }
 
 pub fn handle_overlays_release(state: &mut OkayState) -> bool {
+    if state.overlays.screenshot_selecting {
+        if let (Some(s), Some(c)) = (
+            state.overlays.screenshot_start.take(),
+            state.overlays.screenshot_current.take(),
+        ) {
+            state.overlays.screenshot_selecting = false;
+            let sx = s.x.round() as i32;
+            let sy = s.y.round() as i32;
+            let cx = c.x.round() as i32;
+            let cy = c.y.round() as i32;
+            let rw = (sx - cx).abs();
+            let rh = (sy - cy).abs();
+            if rw >= 8 && rh >= 8 {
+                let rect = Rectangle::new((sx.min(cx), sy.min(cy)).into(), (rw, rh).into());
+                take_area_screenshot(state, rect);
+            }
+            return true;
+        }
+        return false;
+    }
     if state.overlays.cc_dragging_volume {
         state.overlays.cc_dragging_volume = false;
         return true;
@@ -667,8 +791,19 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
         return true;
     }
 
+    if state.overlays.screenshot_selecting {
+        state.overlays.screenshot_start = Some(pos);
+        state.overlays.screenshot_current = Some(pos);
+        return true;
+    }
+
     if state.overlays.creating_folder.is_some() {
         state.overlays.confirm_creating_folder();
+        return true;
+    }
+
+    if state.overlays.renaming_icon.is_some() {
+        state.overlays.confirm_renaming_icon();
         return true;
     }
 
@@ -718,8 +853,28 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
                 }
                 state.overlays.clipboard_open = false;
             }
+            OverlayClick::DeleteClipboard(idx) => {
+                if idx < state.overlays.clipboard_items.len() {
+                    state.overlays.clipboard_items.remove(idx);
+                }
+            }
+            OverlayClick::ClearClipboard => {
+                state.overlays.clipboard_items.clear();
+            }
             OverlayClick::CloseCalendar => {
                 state.overlays.calendar_open = false;
+            }
+            OverlayClick::CalPrevMonth => {
+                state.overlays.cal_month_offset = state.overlays.cal_month_offset.saturating_sub(1);
+            }
+            OverlayClick::CalNextMonth => {
+                state.overlays.cal_month_offset = state.overlays.cal_month_offset.saturating_add(1);
+            }
+            OverlayClick::CalToday => {
+                state.overlays.cal_month_offset = 0;
+            }
+            OverlayClick::CloseProperties => {
+                state.overlays.properties_modal = None;
             }
             OverlayClick::ControlToggleWifi => {
                 let is_on = !state.settings.wifi_status.to_lowercase().contains("off");
@@ -802,6 +957,91 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
                 state.settings.open = true;
                 state.settings.refresh_system_info();
             }
+            OverlayClick::OverviewFocus(win_id) => {
+                state.overlays.overview_open = false;
+                let target = state
+                    .space
+                    .elements()
+                    .find(|w| {
+                        w.toplevel()
+                            .map(|t| t.wl_surface().id() == win_id)
+                            .unwrap_or(false)
+                    })
+                    .cloned();
+                if let Some(win) = target {
+                    if state.workspaces.is_minimized(&win) {
+                        state.toggle_minimize_window(&win);
+                    } else {
+                        state.focus_window(&win);
+                    }
+                }
+            }
+            OverlayClick::OverviewClose(win_id) => {
+                let target = state
+                    .space
+                    .elements()
+                    .find(|w| {
+                        w.toplevel()
+                            .map(|t| t.wl_surface().id() == win_id)
+                            .unwrap_or(false)
+                    })
+                    .cloned();
+                if let Some(win) = target {
+                    if let Some(t) = win.toplevel() {
+                        t.send_close();
+                    }
+                }
+            }
+            OverlayClick::OverviewDismiss => {
+                state.overlays.overview_open = false;
+            }
+            OverlayClick::WinCtxMinimize(win_id) => {
+                state.overlays.window_context_menu = None;
+                if let Some(win) = find_window_by_id(state, &win_id) {
+                    state.toggle_minimize_window(&win);
+                }
+            }
+            OverlayClick::WinCtxMaximize(win_id) => {
+                state.overlays.window_context_menu = None;
+                if let Some(win) = find_window_by_id(state, &win_id) {
+                    state.toggle_maximize_window(&win);
+                }
+            }
+            OverlayClick::WinCtxPin(win_id) => {
+                state.overlays.window_context_menu = None;
+                if let Some(win) = find_window_by_id(state, &win_id) {
+                    if !state.workspaces.always_on_top.remove(&win_id) {
+                        state.workspaces.always_on_top.insert(win_id);
+                        state.space.raise_element(&win, true);
+                    }
+                }
+            }
+            OverlayClick::WinCtxCenter(win_id) => {
+                state.overlays.window_context_menu = None;
+                if let Some(win) = find_window_by_id(state, &win_id) {
+                    state.focus_window(&win);
+                    state.center_focused_window();
+                }
+            }
+            OverlayClick::WinCtxNextWs(win_id) => {
+                state.overlays.window_context_menu = None;
+                let cur = state.workspaces.window_workspace(&win_id);
+                let next_ws = if cur >= state.workspaces.count { 1 } else { cur + 1 };
+                state.workspaces.assign_window(win_id, next_ws);
+                state.retile_workspace();
+                state.refocus_topmost_visible();
+                state
+                    .overlays
+                    .show_osd("Moved Window", &format!("Workspace {}", next_ws), None);
+            }
+            OverlayClick::WinCtxClose(win_id) => {
+                state.overlays.window_context_menu = None;
+                if let Some(win) = find_window_by_id(state, &win_id) {
+                    if let Some(t) = win.toplevel() {
+                        t.send_close();
+                    }
+                }
+            }
             OverlayClick::DesktopIconClick(idx) => {
                 // Only interact with desktop icons if no window covers this point
                 if state.window_under(pos).is_some() {
@@ -836,6 +1076,10 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
                 if let Some(icon) = state.overlays.desktop_icons.get(idx).cloned() {
                     launch_desktop_icon(state, &icon);
                 }
+            }
+            OverlayClick::IconCtxRename(idx) => {
+                state.overlays.icon_context_menu = None;
+                state.overlays.begin_renaming_icon(idx);
             }
             OverlayClick::IconCtxPin(idx) => {
                 state.overlays.icon_context_menu = None;
@@ -875,13 +1119,46 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
             OverlayClick::IconCtxProperties(idx) => {
                 state.overlays.icon_context_menu = None;
                 if let Some(icon) = state.overlays.desktop_icons.get(idx).cloned() {
-                    let info = match &icon.action {
-                        DesktopIconAction::OpenPath(p) => p.to_string_lossy().into_owned(),
-                        _ => "Built-in Desktop Shortcut".to_string(),
+                    let (kind_label, path, size_label) = match &icon.action {
+                        DesktopIconAction::OpenPath(p) => {
+                            let meta = fs::metadata(p).ok();
+                            let is_dir = p.is_dir();
+                            let k = if is_dir {
+                                "Folder (Directory)".to_string()
+                            } else if p.extension().and_then(|e| e.to_str()) == Some("desktop") {
+                                "Desktop Application Entry".to_string()
+                            } else {
+                                "File".to_string()
+                            };
+                            let sz = if is_dir {
+                                let count = fs::read_dir(p).map(|rd| rd.count()).unwrap_or(0);
+                                format!("{} items inside", count)
+                            } else if let Some(m) = meta {
+                                let b = m.len();
+                                if b >= 1024 * 1024 {
+                                    format!("{:.2} MiB ({} bytes)", b as f64 / (1024.0 * 1024.0), b)
+                                } else if b >= 1024 {
+                                    format!("{:.1} KiB ({} bytes)", b as f64 / 1024.0, b)
+                                } else {
+                                    format!("{} bytes", b)
+                                }
+                            } else {
+                                "Unknown".to_string()
+                            };
+                            (k, p.to_string_lossy().into_owned(), sz)
+                        }
+                        _ => (
+                            "Built-in System Shortcut".to_string(),
+                            "OKay DE Virtual Desktop".to_string(),
+                            "Built-in".to_string(),
+                        ),
                     };
-                    state
-                        .overlays
-                        .push_notification(format!("Properties: {}", icon.label), info);
+                    state.overlays.properties_modal = Some(PropertiesInfo {
+                        name: icon.label,
+                        kind_label,
+                        path,
+                        size_label,
+                    });
                 }
             }
             OverlayClick::IconCtxDelete(idx) => {
@@ -947,9 +1224,19 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
         return true;
     }
 
-    if state.overlays.context_menu_pos.is_some() || state.overlays.icon_context_menu.is_some() {
+    if state.overlays.context_menu_pos.is_some()
+        || state.overlays.icon_context_menu.is_some()
+        || state.overlays.window_context_menu.is_some()
+        || state.overlays.properties_modal.is_some()
+    {
         state.overlays.context_menu_pos = None;
         state.overlays.icon_context_menu = None;
+        state.overlays.window_context_menu = None;
+        state.overlays.properties_modal = None;
+        return true;
+    }
+    if state.overlays.overview_open {
+        state.overlays.overview_open = false;
         return true;
     }
     if state.overlays.calendar_open {
@@ -994,39 +1281,106 @@ pub fn render_top_overlays(
     let accent = state.panel.accent_rgb();
     let mut elements = Vec::new();
 
+    // 0. Area Screenshot Drag-to-Select Overlay (`Super + Shift + S`)
+    if state.overlays.screenshot_selecting {
+        let w = output_geo.size.w.max(320);
+        let h = output_geo.size.h.max(240);
+        let mut canvas = Canvas::new(w, h);
+        canvas.fill_rect(0, 0, w, h, [10, 12, 20, 130]);
+
+        if let (Some(s), Some(c)) = (
+            state.overlays.screenshot_start,
+            state.overlays.screenshot_current,
+        ) {
+            let sx = (s.x.round() as i32 - output_geo.loc.x).clamp(0, w);
+            let sy = (s.y.round() as i32 - output_geo.loc.y).clamp(0, h);
+            let cx = (c.x.round() as i32 - output_geo.loc.x).clamp(0, w);
+            let cy = (c.y.round() as i32 - output_geo.loc.y).clamp(0, h);
+            let rx = sx.min(cx);
+            let ry = sy.min(cy);
+            let rw = (sx - cx).abs().max(2);
+            let rh = (sy - cy).abs().max(2);
+
+            // Cut out darkened mask inside selection rectangle
+            canvas.fill_rect(rx, ry, rw, rh, [0, 0, 0, 0]);
+            canvas.stroke_rect(rx, ry, rw, rh, [accent[0], accent[1], accent[2], 245]);
+
+            let dim_txt = format!("{} x {} px", rw, rh);
+            let dw = canvas.measure_text_px(&dim_txt, 12.0) + 18;
+            let dx = (rx + rw - dw).clamp(8, (w - dw - 8).max(8));
+            let dy = if ry >= 34 { ry - 30 } else { ry + rh + 6 };
+            canvas.fill_rounded_rect_aa(dx, dy, dw, 24, 7, [20, 22, 34, 235]);
+            canvas.draw_text_px(dx + 9, dy + 5, &dim_txt, 12.0, [244, 246, 255, 255]);
+        } else {
+            let hint = "Drag to capture screen region  •  Esc to cancel";
+            let hw = canvas.measure_text_px(hint, 13.0) + 32;
+            let hx = (w - hw) / 2;
+            canvas.fill_glass_panel(hx, 44, hw, 36, 10);
+            canvas.draw_text_px(hx + 16, 54, hint, 13.0, [244, 246, 255, 255]);
+        }
+
+        if let Some(elem) = upload_canvas(&canvas, (0, 0), renderer, scale) {
+            elements.push(elem);
+        }
+        return elements;
+    }
+
     // 1. Full-screen Lockscreen (`Super + L`)
     if state.overlays.locked {
         let w = output_geo.size.w.max(320);
         let h = output_geo.size.h.max(240);
         let mut canvas = Canvas::new(w, h);
-        canvas.fill_rect(0, 0, w, h, [12, 12, 20, 252]);
+        canvas.fill_rect(0, 0, w, h, [10, 12, 20, 242]);
 
-        let card_w = 380;
-        let card_h = 200;
+        let (time_str, date_str) = current_lock_clock();
+        let tw = canvas.measure_text_px(&time_str, 52.0);
+        canvas.draw_text_px((w - tw) / 2, (h / 2 - 185).max(32), &time_str, 52.0, [246, 248, 255, 255]);
+        let dw = canvas.measure_text_px(&date_str, 16.0);
+        canvas.draw_text_px((w - dw) / 2, (h / 2 - 120).max(96), &date_str, 16.0, [186, 194, 220, 235]);
+
+        let card_w = 390;
+        let card_h = 196;
         let cx = (w - card_w) / 2;
-        let cy = (h - card_h) / 2;
+        let cy = (h - card_h) / 2 + 24;
         canvas.fill_glass_panel(cx, cy, card_w, card_h, 16);
 
-        canvas.draw_text_px(
-            cx + 115,
-            cy + 24,
-            "OKay DE Locked",
-            18.0,
-            [246, 248, 255, 255],
-        );
-        canvas.draw_text_px(
-            cx + 52,
-            cy + 64,
-            "Type password or press Enter to unlock session",
-            13.0,
-            [200, 205, 228, 255],
-        );
+        let user = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
+        let user_lbl = format!("Session Locked  •  {}", user);
+        let uw = canvas.measure_text_px(&user_lbl, 14.5);
+        canvas.draw_text_px(cx + (card_w - uw) / 2, cy + 24, &user_lbl, 14.5, [246, 248, 255, 255]);
 
-        canvas.fill_rounded_rect_aa(cx + 40, cy + 104, card_w - 80, 36, 8, [16, 16, 26, 255]);
-        let bullets: String = std::iter::repeat('*')
-            .take(state.overlays.lock_input.len().max(1))
-            .collect();
-        canvas.draw_text_px(cx + 56, cy + 113, &bullets, 16.0, [240, 242, 252, 255]);
+        let prompt = if state.overlays.lock_error {
+            "Incorrect PIN — try again"
+        } else if state.overlays.lock_pin.is_empty() {
+            "Press Enter to unlock session"
+        } else {
+            "Enter PIN and press Enter to unlock"
+        };
+        let prompt_col = if state.overlays.lock_error {
+            [248, 118, 130, 255]
+        } else {
+            [176, 184, 210, 240]
+        };
+        let pw = canvas.measure_text_px(prompt, 12.5);
+        canvas.draw_text_px(cx + (card_w - pw) / 2, cy + 56, prompt, 12.5, prompt_col);
+
+        canvas.fill_rounded_rect_aa(cx + 42, cy + 96, card_w - 84, 38, 10, [14, 16, 26, 245]);
+        let border_col = if state.overlays.lock_error {
+            [240, 88, 102, 235]
+        } else {
+            [accent[0], accent[1], accent[2], 190]
+        };
+        canvas.stroke_rect(cx + 42, cy + 96, card_w - 84, 38, border_col);
+
+        if state.overlays.lock_input.is_empty() {
+            let ph = "Password / PIN...";
+            canvas.draw_text_px(cx + 58, cy + 108, ph, 12.5, [120, 126, 150, 210]);
+        } else {
+            let bullets: String = std::iter::repeat('*')
+                .take(state.overlays.lock_input.chars().count().min(20))
+                .collect();
+            canvas.draw_text_px(cx + 58, cy + 105, &bullets, 17.0, [246, 248, 255, 255]);
+        }
 
         if let Some(elem) = upload_canvas(&canvas, (0, 0), renderer, scale) {
             elements.push(elem);
@@ -1036,6 +1390,143 @@ pub fn render_top_overlays(
 
     if !is_primary {
         return elements;
+    }
+
+    // 1b. Live Snap Preview Overlay when dragging window near screen edges/corners
+    if let Some(snap_rect) = state.overlays.snap_preview {
+        let lx = snap_rect.loc.x - output_geo.loc.x;
+        let ly = snap_rect.loc.y - output_geo.loc.y - crate::state::TITLEBAR_HEIGHT;
+        let lw = snap_rect.size.w.max(60);
+        let lh = (snap_rect.size.h + crate::state::TITLEBAR_HEIGHT).max(60);
+        let mut canvas = Canvas::new(lw, lh);
+        canvas.fill_rounded_rect_aa(0, 0, lw, lh, 12, [accent[0], accent[1], accent[2], 52]);
+        canvas.stroke_rect(1, 1, lw - 2, lh - 2, [accent[0], accent[1], accent[2], 220]);
+        if let Some(elem) = upload_canvas(&canvas, (lx, ly), renderer, scale) {
+            elements.push(elem);
+        }
+    }
+
+    // 1c. Window Overview / Expose (`Super + O`)
+    if state.overlays.overview_open {
+        let w = output_geo.size.w.max(320);
+        let h = output_geo.size.h.max(240);
+        let ptr_x = state.pointer_location.x.round() as i32;
+        let ptr_y = state.pointer_location.y.round() as i32;
+
+        let mut canvas = Canvas::new(w, h);
+        canvas.fill_rect(0, 0, w, h, [12, 14, 22, 185]);
+
+        let wins: Vec<(ObjectId, String, usize, bool, bool)> = state
+            .space
+            .elements()
+            .filter_map(|win| {
+                let id = win.toplevel()?.wl_surface().id();
+                let ws = state.workspaces.window_workspace(&id);
+                let is_min = state.workspaces.is_minimized(win);
+                let is_focused = !is_min && state.focused_window().as_ref() == Some(win);
+                Some((id, window_title_str(win), ws, is_focused, is_min))
+            })
+            .collect();
+
+        let header = format!("Window Overview  ({} open)  •  Click to focus or Esc to close", wins.len());
+        let hw = canvas.measure_text_px(&header, 15.0);
+        canvas.draw_text_px((w - hw) / 2, PANEL_HEIGHT + 24, &header, 15.0, [244, 246, 255, 255]);
+
+        if wins.is_empty() {
+            let empty_msg = "No windows currently open";
+            let ew = canvas.measure_text_px(empty_msg, 14.0);
+            canvas.draw_text_px((w - ew) / 2, h / 2, empty_msg, 14.0, [172, 180, 206, 235]);
+        } else {
+            let cols = (wins.len() as i32).clamp(1, 3);
+            let card_w = 260;
+            let card_h = 152;
+            let gap = 18;
+            let rows = (wins.len() as i32 + cols - 1) / cols;
+            let total_w = cols * card_w + (cols - 1) * gap;
+            let total_h = rows * card_h + (rows - 1) * gap;
+            let x0 = (w - total_w) / 2;
+            let y0 = ((h - total_h) / 2).max(PANEL_HEIGHT + 64);
+
+            for (i, (wid, title, ws, is_focused, is_min)) in wins.into_iter().enumerate() {
+                let c = i as i32 % cols;
+                let r = i as i32 / cols;
+                let cx = x0 + c * (card_w + gap);
+                let cy = y0 + r * (card_h + gap);
+
+                let card_rect = Rectangle::new(
+                    (output_geo.loc.x + cx, output_geo.loc.y + cy).into(),
+                    (card_w, card_h).into(),
+                );
+                let close_rect = Rectangle::new(
+                    (output_geo.loc.x + cx + card_w - 30, output_geo.loc.y + cy + 10).into(),
+                    (20, 20).into(),
+                );
+
+                let hovered = rect_contains(card_rect, ptr_x, ptr_y);
+                let card_bg = if *(&is_focused) {
+                    [accent[0], accent[1], accent[2], 62]
+                } else if hovered {
+                    [255, 255, 255, 34]
+                } else {
+                    [24, 26, 38, 232]
+                };
+                canvas.fill_glass_panel(cx, cy, card_w, card_h, 14);
+                canvas.fill_rounded_rect_aa(cx + 2, cy + 2, card_w - 4, card_h - 4, 12, card_bg);
+                if is_focused || hovered {
+                    canvas.stroke_rect(cx, cy, card_w, card_h, [accent[0], accent[1], accent[2], 210]);
+                }
+
+                let kind = crate::icons::VectorIconKind::from_hint(&title, &title, false);
+                crate::icons::draw_app_icon(&mut canvas, cx + 16, cy + 16, 40, Some(&title), kind);
+
+                let ws_badge = if is_min {
+                    format!("WS {} • Min", ws)
+                } else {
+                    format!("WS {}", ws)
+                };
+                let bw = canvas.measure_text_px(&ws_badge, 11.0) + 12;
+                canvas.fill_rounded_rect_aa(cx + 68, cy + 20, bw, 20, 6, [255, 255, 255, 20]);
+                canvas.draw_text_px(cx + 74, cy + 24, &ws_badge, 11.0, [196, 204, 228, 245]);
+
+                let close_hovered = rect_contains(close_rect, ptr_x, ptr_y);
+                let cbg = if close_hovered {
+                    [230, 74, 92, 235]
+                } else {
+                    [255, 255, 255, 22]
+                };
+                canvas.fill_circle_aa((cx + card_w - 20) as f32, (cy + 20) as f32, 10.0, cbg);
+                canvas.draw_text_px(cx + card_w - 23, cy + 13, "x", 11.5, [246, 248, 255, 255]);
+
+                let short_t: String = title.chars().take(24).collect();
+                canvas.draw_text_px(cx + 16, cy + 78, &short_t, 13.5, [244, 246, 255, 255]);
+                let sub = if is_focused {
+                    "Currently Focused"
+                } else if is_min {
+                    "Minimized in Dock"
+                } else {
+                    "Click to Switch"
+                };
+                canvas.draw_text_px(cx + 16, cy + 104, sub, 11.5, [164, 172, 198, 230]);
+
+                state
+                    .overlays
+                    .hit_regions
+                    .push((card_rect, OverlayClick::OverviewFocus(wid.clone())));
+                state
+                    .overlays
+                    .hit_regions
+                    .push((close_rect, OverlayClick::OverviewClose(wid)));
+            }
+        }
+
+        state.overlays.hit_regions.insert(
+            0,
+            (output_geo, OverlayClick::OverviewDismiss),
+        );
+
+        if let Some(elem) = upload_canvas(&canvas, (0, 0), renderer, scale) {
+            elements.push(elem);
+        }
     }
 
     // 2. Right-Click Desktop Context Menu (Polished Dark Glass)
@@ -1103,15 +1594,16 @@ pub fn render_top_overlays(
     // 2b. Dedicated Desktop Icon Right-Click Context Menu
     if let Some((menu_pos, icon_idx)) = state.overlays.icon_context_menu {
         let mw = 236;
-        let mh = 160;
+        let mh = 194;
         let mx = (menu_pos.x - output_geo.loc.x).clamp(8, (output_geo.size.w - mw - 8).max(8));
         let my = (menu_pos.y - output_geo.loc.y).clamp(8, (output_geo.size.h - mh - 8).max(8));
 
         let mut canvas = Canvas::new(mw, mh);
-        canvas.fill_glass_panel(0, 0, mw, mh, 10);
+        canvas.fill_glass_panel(0, 0, mw, mh, 12);
 
-        let items: [(&str, &str, OverlayClick, bool, bool); 4] = [
+        let items: [(&str, &str, OverlayClick, bool, bool); 5] = [
             ("Open", "DblClick", OverlayClick::IconCtxOpen(icon_idx), false, false),
+            ("Rename", "F2", OverlayClick::IconCtxRename(icon_idx), false, false),
             ("Pin to Dock", "", OverlayClick::IconCtxPin(icon_idx), false, true),
             ("Properties", "", OverlayClick::IconCtxProperties(icon_idx), false, true),
             ("Move to Trash", "Del", OverlayClick::IconCtxDelete(icon_idx), true, false),
@@ -1134,7 +1626,7 @@ pub fn render_top_overlays(
                 } else {
                     [accent[0], accent[1], accent[2], 225]
                 };
-                canvas.fill_rounded_rect_aa(8, iy, mw - 16, 30, 6, hcol);
+                canvas.fill_rounded_rect_aa(8, iy, mw - 16, 30, 7, hcol);
             }
             let fg = if hovered {
                 if is_danger {
@@ -1160,12 +1652,131 @@ pub fn render_top_overlays(
             state.overlays.hit_regions.push((row_rect, act));
             iy += 32;
             if sep_after {
-                canvas.fill_rect(14, iy + 3, mw - 28, 1, [255, 255, 255, 24]);
+                canvas.fill_rect_blend(14, iy + 3, mw - 28, 1, [255, 255, 255, 24]);
                 iy += 8;
             }
         }
 
         if let Some(elem) = upload_canvas(&canvas, (mx, my), renderer, scale) {
+            elements.push(elem);
+        }
+    }
+
+    // 2d. Window Titlebar Right-Click Action Menu
+    if let Some((menu_pos, ref win_id)) = state.overlays.window_context_menu.clone() {
+        let mw = 236;
+        let mh = 224;
+        let mx = (menu_pos.x - output_geo.loc.x).clamp(8, (output_geo.size.w - mw - 8).max(8));
+        let my = (menu_pos.y - output_geo.loc.y).clamp(PANEL_HEIGHT + 4, (output_geo.size.h - mh - 8).max(8));
+
+        let mut canvas = Canvas::new(mw, mh);
+        canvas.fill_glass_panel(0, 0, mw, mh, 12);
+
+        let is_pinned = state.workspaces.always_on_top.contains(win_id);
+        let is_max = state.workspaces.maximized.contains(win_id);
+        let items: [(&str, OverlayClick, bool, bool); 6] = [
+            ("Minimize", OverlayClick::WinCtxMinimize(win_id.clone()), false, false),
+            (
+                if is_max { "Restore Size" } else { "Maximize" },
+                OverlayClick::WinCtxMaximize(win_id.clone()),
+                false,
+                false,
+            ),
+            (
+                if is_pinned { "Unpin Always on Top" } else { "Always on Top" },
+                OverlayClick::WinCtxPin(win_id.clone()),
+                false,
+                true,
+            ),
+            ("Center on Screen", OverlayClick::WinCtxCenter(win_id.clone()), false, false),
+            ("Move to Next Workspace", OverlayClick::WinCtxNextWs(win_id.clone()), false, true),
+            ("Close Window", OverlayClick::WinCtxClose(win_id.clone()), true, false),
+        ];
+
+        let mut iy = 10;
+        for (label, act, is_danger, sep_after) in items {
+            let row_rect = Rectangle::new(
+                (output_geo.loc.x + mx + 8, output_geo.loc.y + my + iy).into(),
+                (mw - 16, 30).into(),
+            );
+            let hovered = rect_contains(
+                row_rect,
+                state.pointer_location.x.round() as i32,
+                state.pointer_location.y.round() as i32,
+            );
+            if hovered {
+                let hcol = if is_danger {
+                    [215, 72, 82, 230]
+                } else {
+                    [accent[0], accent[1], accent[2], 225]
+                };
+                canvas.fill_rounded_rect_aa(8, iy, mw - 16, 30, 7, hcol);
+            }
+            let fg = if hovered {
+                if is_danger { [255, 255, 255, 255] } else { contrast_fg(accent) }
+            } else if is_danger {
+                [248, 128, 138, 255]
+            } else {
+                [238, 240, 252, 255]
+            };
+            canvas.draw_text_px(18, iy + 7, label, 12.5, fg);
+            state.overlays.hit_regions.push((row_rect, act));
+            iy += 32;
+            if sep_after {
+                canvas.fill_rect_blend(14, iy + 3, mw - 28, 1, [255, 255, 255, 24]);
+                iy += 8;
+            }
+        }
+
+        if let Some(elem) = upload_canvas(&canvas, (mx, my), renderer, scale) {
+            elements.push(elem);
+        }
+    }
+
+    // 2e. File / Folder Properties Modal Card
+    if let Some(ref props) = state.overlays.properties_modal {
+        let pw = 380;
+        let ph = 226;
+        let px = (output_geo.size.w - pw) / 2;
+        let py = (output_geo.size.h - ph) / 2;
+        let ptr_x = state.pointer_location.x.round() as i32;
+        let ptr_y = state.pointer_location.y.round() as i32;
+
+        let mut canvas = Canvas::new(pw, ph);
+        canvas.fill_glass_panel(0, 0, pw, ph, 14);
+        canvas.draw_text_px(18, 14, "Properties", 15.0, [246, 248, 255, 255]);
+
+        let close_rect = Rectangle::new(
+            (output_geo.loc.x + px + pw - 74, output_geo.loc.y + py + 12).into(),
+            (58, 24).into(),
+        );
+        let cbg = if rect_contains(close_rect, ptr_x, ptr_y) {
+            [accent[0], accent[1], accent[2], 74]
+        } else {
+            [255, 255, 255, 20]
+        };
+        canvas.fill_rounded_rect_aa(pw - 74, 12, 58, 24, 7, cbg);
+        canvas.draw_text_px(pw - 60, 16, "Close", 11.5, [240, 242, 252, 255]);
+        state
+            .overlays
+            .hit_regions
+            .push((close_rect, OverlayClick::CloseProperties));
+
+        let rows = [
+            ("Name", props.name.as_str()),
+            ("Type", props.kind_label.as_str()),
+            ("Size", props.size_label.as_str()),
+            ("Location", props.path.as_str()),
+        ];
+        for (i, (k, v)) in rows.into_iter().enumerate() {
+            let ry = 52 + i as i32 * 40;
+            canvas.fill_rounded_rect_aa(14, ry, pw - 28, 34, 8, [255, 255, 255, 14]);
+            canvas.draw_text_px(24, ry + 10, k, 12.0, [164, 172, 198, 245]);
+            let val: String = v.chars().take(34).collect();
+            canvas.draw_text_px(108, ry + 10, &val, 12.0, [242, 244, 255, 255]);
+        }
+
+        if let Some(elem) = upload_canvas(&canvas, (px, py), renderer, scale) {
             elements.push(elem);
         }
     }
@@ -1193,48 +1804,65 @@ pub fn render_top_overlays(
         }
     }
 
-    // 3. Alt+Tab Window Switcher Overlay
+    // 3. Alt+Tab Window Switcher Overlay (with app icons & workspace badges)
     if state.overlays.alttab_visible_until.is_some() {
-        let wins: Vec<(String, bool)> = state
+        let mut wins: Vec<(String, usize, bool, bool)> = state
             .space
             .elements()
             .filter(|w| state.workspaces.is_on_active_workspace(w))
             .map(|w| {
-                let is_focused = state.focused_window().as_ref() == Some(w);
-                (window_title_str(w), is_focused)
+                let is_min = state.workspaces.is_minimized(w);
+                let is_focused = !is_min && state.focused_window().as_ref() == Some(w);
+                let ws = w
+                    .toplevel()
+                    .map(|t| state.workspaces.window_workspace(&t.wl_surface().id()))
+                    .unwrap_or(state.workspaces.active);
+                (window_title_str(w), ws, is_focused, is_min)
             })
             .collect();
+        wins.reverse();
 
         if !wins.is_empty() {
-            let sw = 380;
-            let sh = 48 + wins.len() as i32 * 36;
+            let sw = 420;
+            let sh = 54 + wins.len() as i32 * 40;
             let sx = (output_geo.size.w - sw) / 2;
             let sy = (output_geo.size.h - sh) / 2;
             let mut canvas = Canvas::new(sw, sh);
             canvas.fill_glass_panel(0, 0, sw, sh, 14);
             canvas.draw_text_px(
                 16,
-                12,
+                14,
                 "Window Switcher (Alt+Tab)",
                 14.0,
                 [244, 246, 254, 255],
             );
 
-            for (i, (title, focused)) in wins.iter().enumerate() {
-                let ry = 40 + i as i32 * 34;
+            for (i, (title, ws, focused, is_min)) in wins.iter().enumerate() {
+                let ry = 44 + i as i32 * 38;
                 let bg = if *focused {
-                    [accent[0], accent[1], accent[2], 235]
+                    [accent[0], accent[1], accent[2], 230]
                 } else {
-                    [255, 255, 255, 16]
+                    [255, 255, 255, 14]
                 };
                 let fg = if *focused {
                     contrast_fg(accent)
                 } else {
                     [235, 238, 250, 255]
                 };
-                canvas.fill_rounded_rect_aa(10, ry, sw - 20, 30, 8, bg);
-                let short: String = title.chars().take(38).collect();
-                canvas.draw_text_px(20, ry + 7, &short, 13.5, fg);
+                canvas.fill_rounded_rect_aa(12, ry, sw - 24, 34, 9, bg);
+                let kind = crate::icons::VectorIconKind::from_hint(title, title, false);
+                crate::icons::draw_app_icon(&mut canvas, 18, ry + 5, 24, Some(title), kind);
+
+                let short: String = title.chars().take(30).collect();
+                canvas.draw_text_px(50, ry + 9, &short, 13.0, fg);
+
+                let tag = if *is_min {
+                    format!("WS {} • Min", ws)
+                } else {
+                    format!("WS {}", ws)
+                };
+                let tw = canvas.measure_text_px(&tag, 11.0);
+                canvas.draw_text_px(sw - 22 - tw, ry + 10, &tag, 11.0, fg);
             }
 
             if let Some(elem) = upload_canvas(&canvas, (sx, sy), renderer, scale) {
@@ -1243,10 +1871,10 @@ pub fn render_top_overlays(
         }
     }
 
-    // 4. Clipboard History Manager (`Super + V`)
+    // 4. Clipboard History Manager (`Super + V`) with Delete & Clear All
     if state.overlays.clipboard_open {
-        let cw = 380;
-        let ch = 68 + (state.overlays.clipboard_items.len().max(1) as i32 * 36);
+        let cw = 400;
+        let ch = 72 + (state.overlays.clipboard_items.len().max(1) as i32 * 36);
         let cx = (output_geo.size.w - cw) / 2;
         let cy = (output_geo.size.h - ch) / 2;
         let ptr_x = state.pointer_location.x.round() as i32;
@@ -1261,33 +1889,67 @@ pub fn render_top_overlays(
             14.5,
             [244, 246, 254, 255],
         );
-        let badge = format!("{} items", state.overlays.clipboard_items.len());
-        let bw = canvas.measure_text_px(&badge, 11.0);
-        canvas.fill_rounded_rect_aa(cw - bw - 28, 12, bw + 14, 20, 6, [accent[0], accent[1], accent[2], 36]);
-        canvas.draw_text_px(cw - bw - 21, 15, &badge, 11.0, [accent[0], accent[1], accent[2], 245]);
 
-        for (idx, item) in state.overlays.clipboard_items.iter().enumerate() {
-            let iy = 48 + idx as i32 * 36;
-            let row_rect = Rectangle::new(
-                (output_geo.loc.x + cx + 12, output_geo.loc.y + cy + iy).into(),
-                (cw - 24, 30).into(),
-            );
-            let hovered = rect_contains(row_rect, ptr_x, ptr_y);
-            let row_bg = if hovered {
-                [accent[0], accent[1], accent[2], 54]
-            } else {
-                [255, 255, 255, 14]
-            };
-            canvas.fill_rounded_rect_aa(12, iy, cw - 24, 30, 8, row_bg);
-            if hovered || idx == 0 {
-                canvas.fill_rounded_rect_aa(14, iy + 5, 3, 20, 2, [accent[0], accent[1], accent[2], 235]);
+        let clear_rect = Rectangle::new(
+            (output_geo.loc.x + cx + cw - 82, output_geo.loc.y + cy + 12).into(),
+            (68, 22).into(),
+        );
+        let clear_bg = if rect_contains(clear_rect, ptr_x, ptr_y) {
+            [225, 76, 92, 185]
+        } else {
+            [255, 255, 255, 18]
+        };
+        canvas.fill_rounded_rect_aa(cw - 82, 12, 68, 22, 6, clear_bg);
+        canvas.draw_text_px(cw - 71, 16, "Clear All", 11.0, [242, 244, 255, 255]);
+        state
+            .overlays
+            .hit_regions
+            .push((clear_rect, OverlayClick::ClearClipboard));
+
+        if state.overlays.clipboard_items.is_empty() {
+            canvas.draw_text_px(18, 56, "Clipboard history is empty", 12.5, [156, 164, 190, 235]);
+        } else {
+            for (idx, item) in state.overlays.clipboard_items.iter().enumerate() {
+                let iy = 48 + idx as i32 * 36;
+                let row_rect = Rectangle::new(
+                    (output_geo.loc.x + cx + 12, output_geo.loc.y + cy + iy).into(),
+                    (cw - 52, 30).into(),
+                );
+                let del_rect = Rectangle::new(
+                    (output_geo.loc.x + cx + cw - 36, output_geo.loc.y + cy + iy + 3).into(),
+                    (24, 24).into(),
+                );
+                let hovered = rect_contains(row_rect, ptr_x, ptr_y);
+                let row_bg = if hovered {
+                    [accent[0], accent[1], accent[2], 54]
+                } else {
+                    [255, 255, 255, 14]
+                };
+                canvas.fill_rounded_rect_aa(12, iy, cw - 24, 30, 8, row_bg);
+                if hovered || idx == 0 {
+                    canvas.fill_rounded_rect_aa(14, iy + 5, 3, 20, 2, [accent[0], accent[1], accent[2], 235]);
+                }
+                let short: String = item.chars().take(38).collect();
+                canvas.draw_text_px(24, iy + 7, &short, 12.5, [238, 240, 252, 255]);
+
+                let del_hovered = rect_contains(del_rect, ptr_x, ptr_y);
+                let dbg = if del_hovered {
+                    [225, 76, 92, 220]
+                } else {
+                    [255, 255, 255, 16]
+                };
+                canvas.fill_rounded_rect_aa(cw - 36, iy + 3, 24, 24, 6, dbg);
+                canvas.draw_text_px(cw - 27, iy + 8, "x", 11.5, [236, 240, 252, 245]);
+
+                state
+                    .overlays
+                    .hit_regions
+                    .push((row_rect, OverlayClick::SelectClipboard(idx)));
+                state
+                    .overlays
+                    .hit_regions
+                    .push((del_rect, OverlayClick::DeleteClipboard(idx)));
             }
-            let short: String = item.chars().take(42).collect();
-            canvas.draw_text_px(24, iy + 7, &short, 12.5, [238, 240, 252, 255]);
-            state
-                .overlays
-                .hit_regions
-                .push((row_rect, OverlayClick::SelectClipboard(idx)));
         }
 
         if let Some(elem) = upload_canvas(&canvas, (cx, cy), renderer, scale) {
@@ -1295,51 +1957,93 @@ pub fn render_top_overlays(
         }
     }
 
-    // 5. Calendar Popup (when clicking taskbar clock)
+    // 5. Real Calendar Popup (leap-year accurate weekday layout + month navigation)
     if state.overlays.calendar_open {
-        let cal_w = 276;
-        let cal_h = 244;
+        let cal_w = 286;
+        let cal_h = 282;
         let cal_x = (output_geo.size.w - cal_w - 12).max(8);
         let cal_y = if state.panel.dock_mode || state.panel.panel_top {
             PANEL_HEIGHT + 8
         } else {
             (output_geo.size.h - 36 - cal_h - 8).max(8)
         };
+        let ptr_x = state.pointer_location.x.round() as i32;
+        let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(cal_w, cal_h);
         canvas.fill_glass_panel(0, 0, cal_w, cal_h, 14);
 
-        let (date_header, cur_day) = current_date_info();
-        canvas.draw_text_px(16, 14, &date_header, 14.5, [246, 248, 255, 255]);
-        canvas.fill_rounded_rect_aa(12, 38, cal_w - 24, 24, 6, [255, 255, 255, 12]);
+        let (date_header, start_mon_0, days_in_month, today_opt) =
+            calendar_grid_info(state.overlays.cal_month_offset);
+        canvas.draw_text_px(16, 14, &date_header, 14.0, [246, 248, 255, 255]);
+
+        let prev_rect = Rectangle::new(
+            (output_geo.loc.x + cal_x + cal_w - 94, output_geo.loc.y + cal_y + 11).into(),
+            (24, 22).into(),
+        );
+        let today_rect = Rectangle::new(
+            (output_geo.loc.x + cal_x + cal_w - 66, output_geo.loc.y + cal_y + 11).into(),
+            (26, 22).into(),
+        );
+        let next_rect = Rectangle::new(
+            (output_geo.loc.x + cal_x + cal_w - 36, output_geo.loc.y + cal_y + 11).into(),
+            (24, 22).into(),
+        );
+
+        for (r, x_off, lbl, act) in [
+            (prev_rect, cal_w - 94, "<", OverlayClick::CalPrevMonth),
+            (today_rect, cal_w - 66, "•", OverlayClick::CalToday),
+            (next_rect, cal_w - 36, ">", OverlayClick::CalNextMonth),
+        ] {
+            let bg = if rect_contains(r, ptr_x, ptr_y) {
+                [accent[0], accent[1], accent[2], 78]
+            } else {
+                [255, 255, 255, 18]
+            };
+            canvas.fill_rounded_rect_aa(x_off, 11, r.size.w, 22, 6, bg);
+            canvas.draw_text_px(x_off + (r.size.w - 6) / 2, 15, lbl, 11.5, [240, 242, 255, 255]);
+            state.overlays.hit_regions.push((r, act));
+        }
+
+        canvas.fill_rounded_rect_aa(12, 42, cal_w - 24, 24, 6, [255, 255, 255, 12]);
         canvas.draw_text_px(
-            18,
-            43,
+            20,
+            47,
             "Mo   Tu   We   Th   Fr   Sa   Su",
             12.0,
             [168, 174, 200, 245],
         );
 
-        for day in 1..=30 {
-            let col = (day - 1) % 7;
-            let row = (day - 1) / 7;
-            let dx = 16 + col * 35;
-            let dy = 72 + row * 31;
-            if day == cur_day {
+        for day in 1..=days_in_month {
+            let slot = start_mon_0 + (day - 1);
+            let col = slot % 7;
+            let row = slot / 7;
+            let dx = 18 + col * 36;
+            let dy = 74 + row * 31;
+            let is_today = today_opt == Some(day);
+            if is_today {
                 canvas.fill_rounded_rect_aa(dx - 4, dy - 3, 28, 24, 7, [accent[0], accent[1], accent[2], 240]);
                 canvas.draw_text_px(dx + 2, dy, &format!("{:2}", day), 12.5, contrast_fg(accent));
             } else {
-                canvas.draw_text_px(dx + 2, dy, &format!("{:2}", day), 12.5, [230, 234, 248, 250]);
+                let col_fg = if col >= 5 {
+                    [172, 180, 208, 225]
+                } else {
+                    [232, 236, 248, 250]
+                };
+                canvas.draw_text_px(dx + 2, dy, &format!("{:2}", day), 12.5, col_fg);
             }
         }
 
-        state.overlays.hit_regions.push((
-            Rectangle::new(
-                (output_geo.loc.x + cal_x, output_geo.loc.y + cal_y).into(),
-                (cal_w, cal_h).into(),
+        state.overlays.hit_regions.insert(
+            0,
+            (
+                Rectangle::new(
+                    (output_geo.loc.x + cal_x, output_geo.loc.y + cal_y).into(),
+                    (cal_w, cal_h).into(),
+                ),
+                OverlayClick::CloseCalendar,
             ),
-            OverlayClick::CloseCalendar,
-        ));
+        );
 
         if let Some(elem) = upload_canvas(&canvas, (cal_x, cal_y), renderer, scale) {
             elements.push(elem);
@@ -1674,6 +2378,28 @@ pub fn render_top_overlays(
         }
     }
 
+    // 8. Centered On-Screen Display (OSD) Pill above Dock
+    if let Some(ref osd) = state.overlays.osd {
+        let ow = 240;
+        let oh = if osd.progress.is_some() { 58 } else { 44 };
+        let ox = (output_geo.size.w - ow) / 2;
+        let oy = (output_geo.size.h - 140).max(PANEL_HEIGHT + 24);
+        let mut canvas = Canvas::new(ow, oh);
+        canvas.fill_glass_panel(0, 0, ow, oh, 14);
+        canvas.draw_text_px(16, 12, &osd.title, 12.5, [176, 184, 212, 245]);
+        let vw = canvas.measure_text_px(&osd.value, 13.0);
+        canvas.draw_text_px(ow - 16 - vw, 12, &osd.value, 13.0, [246, 248, 255, 255]);
+        if let Some(pct) = osd.progress {
+            let tw = ow - 32;
+            canvas.fill_rounded_rect_aa(16, 38, tw, 8, 4, [255, 255, 255, 28]);
+            let fw = ((tw * pct) / 100).max(6);
+            canvas.fill_rounded_rect_aa(16, 38, fw, 8, 4, [accent[0], accent[1], accent[2], 240]);
+        }
+        if let Some(elem) = upload_canvas(&canvas, (ox, oy), renderer, scale) {
+            elements.push(elem);
+        }
+    }
+
     elements
 }
 
@@ -1732,13 +2458,35 @@ pub fn render_desktop_icons(
         );
 
         let short: String = icon.label.chars().take(11).collect();
-        let lw = canvas.measure_text_px(&short, 11.5);
-        if is_selected {
-            let pill_w = (lw + 12).min(iw - 6);
-            let pill_x = ((iw - pill_w) / 2).max(3);
-            canvas.fill_rounded_rect_aa(pill_x, 58, pill_w, 19, 6, [52, 120, 246, 225]);
+        let is_renaming = state
+            .overlays
+            .renaming_icon
+            .as_ref()
+            .map(|(ri, _)| *ri == idx)
+            .unwrap_or(false);
+
+        if let Some((_, ref edit_name)) = state.overlays.renaming_icon.as_ref().filter(|(ri, _)| *ri == idx) {
+            let accent = state.panel.accent_rgb();
+            canvas.fill_rounded_rect_aa(4, 57, iw - 8, 22, 6, [18, 20, 32, 242]);
+            canvas.stroke_rect(4, 57, iw - 8, 22, [accent[0], accent[1], accent[2], 235]);
+            let tail: String = if edit_name.chars().count() > 10 {
+                edit_name.chars().rev().take(10).collect::<String>().chars().rev().collect()
+            } else {
+                edit_name.clone()
+            };
+            let with_caret = format!("{}|", tail);
+            let tw = canvas.measure_text_px(&with_caret, 11.5);
+            canvas.draw_text_px(((iw - tw) / 2).max(6), 61, &with_caret, 11.5, [246, 248, 255, 255]);
+        } else {
+            let lw = canvas.measure_text_px(&short, 11.5);
+            if is_selected {
+                let pill_w = (lw + 12).min(iw - 6);
+                let pill_x = ((iw - pill_w) / 2).max(3);
+                canvas.fill_rounded_rect_aa(pill_x, 58, pill_w, 19, 6, [52, 120, 246, 225]);
+            }
+            canvas.draw_text_shadowed(((iw - lw) / 2).max(4), 60, &short, 11.5, [246, 248, 255, 255]);
         }
-        canvas.draw_text_shadowed(((iw - lw) / 2).max(4), 60, &short, 11.5, [246, 248, 255, 255]);
+        let _ = is_renaming;
 
         state.overlays.hit_regions.push((
             Rectangle::new(
@@ -1835,19 +2583,68 @@ fn upload_canvas(
     .map(OkayRenderElements::Memory)
 }
 
-fn current_date_info() -> (String, i32) {
+fn find_window_by_id(state: &OkayState, id: &ObjectId) -> Option<smithay::desktop::Window> {
+    state
+        .space
+        .elements()
+        .find(|w| w.toplevel().map(|t| t.wl_surface().id() == *id).unwrap_or(false))
+        .cloned()
+}
+
+fn current_lock_clock() -> (String, String) {
     unsafe {
         let now = libc::time(std::ptr::null_mut());
         let mut tm: libc::tm = std::mem::zeroed();
         libc::localtime_r(&now, &mut tm);
-        let months = [
+        const DAYS: [&str; 7] = [
+            "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+        ];
+        const MONTHS: [&str; 12] = [
             "January", "February", "March", "April", "May", "June",
             "July", "August", "September", "October", "November", "December",
         ];
-        let m = months.get(tm.tm_mon as usize).copied().unwrap_or("Month");
+        let d = DAYS[(tm.tm_wday as usize).min(6)];
+        let m = MONTHS[(tm.tm_mon as usize).min(11)];
         (
-            format!("{} {}, {}", m, tm.tm_mday, 1900 + tm.tm_year),
-            tm.tm_mday,
+            format!("{:02}:{:02}", tm.tm_hour, tm.tm_min),
+            format!("{}, {} {} {}", d, tm.tm_mday, m, 1900 + tm.tm_year),
         )
+    }
+}
+
+fn calendar_grid_info(month_offset: i32) -> (String, i32, i32, Option<i32>) {
+    unsafe {
+        let now = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&now, &mut tm);
+        let cur_year = 1900 + tm.tm_year;
+        let cur_mon0 = tm.tm_mon;
+        let cur_day = tm.tm_mday;
+
+        let total_months = cur_year * 12 + cur_mon0 + month_offset;
+        let year = total_months.div_euclid(12);
+        let mon0 = total_months.rem_euclid(12);
+
+        let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        let days_in_month = match mon0 {
+            0 | 2 | 4 | 6 | 7 | 9 | 11 => 31,
+            3 | 5 | 8 | 10 => 30,
+            1 => if is_leap { 29 } else { 28 },
+            _ => 30,
+        };
+
+        // Sakamoto's weekday algorithm (0 = Sun .. 6 = Sat -> convert to 0 = Mon .. 6 = Sun)
+        let y = if mon0 + 1 < 3 { year - 1 } else { year };
+        const T: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+        let sun0 = (y + y / 4 - y / 100 + y / 400 + T[mon0 as usize] + 1).rem_euclid(7);
+        let mon_start = (sun0 + 6) % 7;
+
+        const MONTHS: [&str; 12] = [
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December",
+        ];
+        let m_name = MONTHS[(mon0 as usize).min(11)];
+        let today = if month_offset == 0 { Some(cur_day) } else { None };
+        (format!("{} {}", m_name, year), mon_start, days_in_month, today)
     }
 }

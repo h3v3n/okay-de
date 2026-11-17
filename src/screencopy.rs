@@ -331,6 +331,116 @@ pub fn process_pending_screencopies(
     }
 }
 
+/// Captures the live rendered output (or a cropped logical region) directly from GLES
+/// and sends the RGBA pixels to the background worker to encode & save as a real PNG screenshot.
+pub fn capture_native_screenshot(
+    state: &mut OkayState,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+    scale: Scale<f64>,
+) {
+    let Some((path, region_opt)) = state.pending_native_screenshot.take() else {
+        return;
+    };
+    let Some(mode) = output.current_mode() else {
+        return;
+    };
+    let out_size = mode.size;
+    if out_size.w <= 0 || out_size.h <= 0 {
+        return;
+    }
+
+    let elements: Vec<OkayRenderElements> =
+        crate::render::collect_output_elements(state, renderer, output, scale);
+    let clear_color = Color32F::from(state.theme.background_color);
+    let buf_size: Size<i32, BufferCoords> = (out_size.w, out_size.h).into();
+
+    let Ok(mut tex) = <GlesRenderer as Offscreen<
+        smithay::backend::renderer::gles::GlesTexture,
+    >>::create_buffer(renderer, Fourcc::Argb8888, buf_size) else {
+        return;
+    };
+
+    {
+        let Ok(mut target) = renderer.bind(&mut tex) else {
+            return;
+        };
+        let Ok(mut frame) = renderer.render(&mut target, out_size, Transform::Normal) else {
+            return;
+        };
+        let dmg = Rectangle::from_size(out_size);
+        let _ = frame.clear(clear_color, &[dmg]);
+        let _ = draw_render_elements(&mut frame, scale, &elements, &[dmg]);
+        if frame.finish().is_err() {
+            return;
+        }
+    }
+
+    let Ok(target) = renderer.bind(&mut tex) else {
+        return;
+    };
+
+    let phys_region: Rectangle<i32, Physical> = if let Some(logical_rect) = region_opt {
+        let out_geo = state
+            .space
+            .output_geometry(output)
+            .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
+        let local_rect = Rectangle::new(
+            logical_rect.loc - out_geo.loc,
+            logical_rect.size,
+        );
+        let p: Rectangle<i32, Physical> = local_rect.to_physical_precise_round(scale);
+        let rx = p.loc.x.clamp(0, out_size.w.max(1) - 1);
+        let ry = p.loc.y.clamp(0, out_size.h.max(1) - 1);
+        let rw = p.size.w.clamp(1, (out_size.w - rx).max(1));
+        let rh = p.size.h.clamp(1, (out_size.h - ry).max(1));
+        Rectangle::new((rx, ry).into(), (rw, rh).into())
+    } else {
+        Rectangle::from_size(out_size)
+    };
+
+    let region_buf: Rectangle<i32, BufferCoords> = Rectangle::new(
+        (phys_region.loc.x, phys_region.loc.y).into(),
+        (phys_region.size.w, phys_region.size.h).into(),
+    );
+    let Ok(mapping) = renderer.copy_framebuffer(&target, region_buf, Fourcc::Argb8888) else {
+        return;
+    };
+    let is_flipped = mapping.flipped();
+    let Ok(src_bytes) = renderer.map_texture(&mapping) else {
+        return;
+    };
+
+    let w = phys_region.size.w as usize;
+    let h = phys_region.size.h as usize;
+    let stride = w * 4;
+    if src_bytes.len() < stride * h {
+        return;
+    }
+
+    // Convert BGRA (Fourcc::Argb8888 little-endian) to RGBA for PNG encoding on the worker thread.
+    let mut rgba = vec![0u8; stride * h];
+    for y in 0..h {
+        let src_y = if is_flipped { h - 1 - y } else { y };
+        let src_row = &src_bytes[src_y * stride..(src_y + 1) * stride];
+        let dst_row = &mut rgba[y * stride..(y + 1) * stride];
+        for x in 0..w {
+            let i = x * 4;
+            dst_row[i] = src_row[i + 2];
+            dst_row[i + 1] = src_row[i + 1];
+            dst_row[i + 2] = src_row[i];
+            dst_row[i + 3] = 255;
+        }
+    }
+
+    crate::worker::dispatch(crate::worker::WorkerRequest::SaveRgbaPng {
+        path,
+        width: w as u32,
+        height: h as u32,
+        rgba,
+    });
+}
+
 fn copy_region_to_shm(
     renderer: &mut GlesRenderer,
     target: &smithay::backend::renderer::gles::GlesTarget<'_>,

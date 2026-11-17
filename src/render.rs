@@ -420,6 +420,13 @@ pub fn get_cached_window_texture(id: &ObjectId) -> Option<GlesTexture> {
     OFFSCREEN_WIN_CACHE.with(|cache| cache.borrow().get(id).map(|(_, tex)| tex.clone()))
 }
 
+/// Drops any cached offscreen GPU texture when a window closes.
+pub fn evict_window_cache(id: &ObjectId) {
+    OFFSCREEN_WIN_CACHE.with(|cache| {
+        cache.borrow_mut().remove(id);
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_rounded_window_offscreen(
     renderer: &mut GlesRenderer,

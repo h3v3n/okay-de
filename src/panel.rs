@@ -113,6 +113,14 @@ impl LauncherItem {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopBarMenu {
+    File,
+    View,
+    Window,
+    Help,
+}
+
 #[derive(Debug, Clone)]
 pub enum PinContextAction {
     PinApp(DesktopAppEntry),
@@ -124,16 +132,26 @@ pub enum PinContextAction {
 enum ClickTarget {
     ToggleLauncher,
     ToggleSettings,
+    OpenSettingsTab(crate::settings::SettingsTab),
     ToggleCalendar,
     ToggleNotifDrawer,
     ToggleControlCenter,
     ToggleMute,
     ToggleTiling,
-    MenuFile,
-    MenuWindow,
+    ToggleOverview,
+    AreaScreenshot,
+    ToggleDesktopIcons,
+    ReloadWallpaper,
+    OpenTopMenu(TopBarMenu, i32),
+    WinCenter,
+    WinMinimize,
+    WinMaximize,
+    WinPin,
+    WinNextWs,
+    WinClose,
     PinnedApp(LauncherItem),
     Workspace(usize),
-    FocusWindow(usize),
+    FocusWindow(ObjectId),
     LaunchItem(LauncherItem),
     LaunchDesktopApp(String),
     ApplyPinAction(PinContextAction),
@@ -157,6 +175,7 @@ pub struct PanelState {
     pub custom_pinned: Vec<DesktopAppEntry>,
     pub hidden_builtins: Vec<LauncherItem>,
     pub pin_context_menu: Option<(Point<i32, Logical>, PinContextAction)>,
+    pub top_bar_menu: Option<(TopBarMenu, i32)>,
     pub default_terminal: String,
     pub default_browser: String,
     pub default_file_manager: String,
@@ -164,6 +183,7 @@ pub struct PanelState {
     pub volume_muted: bool,
     pub battery_percent: Option<i32>,
     pub autostart_cmds: Vec<String>,
+    pub lock_pin: String,
     hit_regions: Vec<(Rectangle<i32, Logical>, ClickTarget)>,
     right_hit_regions: Vec<(Rectangle<i32, Logical>, PinContextAction)>,
 }
@@ -182,6 +202,7 @@ impl Default for PanelState {
             custom_pinned: Vec::new(),
             hidden_builtins: Vec::new(),
             pin_context_menu: None,
+            top_bar_menu: None,
             default_terminal: "foot".to_string(),
             default_browser: "firefox".to_string(),
             default_file_manager: "thunar".to_string(),
@@ -189,6 +210,7 @@ impl Default for PanelState {
             volume_muted: false,
             battery_percent: read_battery_percent(),
             autostart_cmds: Vec::new(),
+            lock_pin: String::new(),
             hit_regions: Vec::new(),
             right_hit_regions: Vec::new(),
         }
@@ -203,6 +225,7 @@ pub struct LoadedUserConfig {
     pub anim_speed: f32,
     pub minimize_effect: MinimizeEffect,
     pub xkb_layout: String,
+    pub lock_pin: String,
 }
 
 impl PanelState {
@@ -229,6 +252,7 @@ impl PanelState {
             anim_speed: 1.0,
             minimize_effect: MinimizeEffect::MagicLamp,
             xkb_layout: "us".to_string(),
+            lock_pin: String::new(),
         };
         let Some(path) = config_file_path() else {
             return cfg;
@@ -321,6 +345,17 @@ impl PanelState {
                             self.autostart_cmds.push(val.to_string());
                         }
                     }
+                    "lock_pin" => {
+                        cfg.lock_pin = val.to_string();
+                        self.lock_pin = val.to_string();
+                    }
+                    "hidden_pin" => {
+                        if let Some(item) = LauncherItem::BUILTIN.iter().find(|i| i.label() == val).copied() {
+                            if !self.hidden_builtins.contains(&item) {
+                                self.hidden_builtins.push(item);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -371,6 +406,12 @@ impl PanelState {
         }
         for cmd in &self.autostart_cmds {
             body.push_str(&format!("autostart = \"{}\"\n", cmd));
+        }
+        if !self.lock_pin.is_empty() {
+            body.push_str(&format!("lock_pin = \"{}\"\n", self.lock_pin));
+        }
+        for h in &self.hidden_builtins {
+            body.push_str(&format!("hidden_pin = \"{}\"\n", h.label()));
         }
         let _ = fs::write(path, body);
     }
@@ -655,6 +696,9 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
         if !matches!(target, ClickTarget::ApplyPinAction(_)) {
             state.panel.pin_context_menu = None;
         }
+        if !matches!(target, ClickTarget::OpenTopMenu(_, _)) {
+            state.panel.top_bar_menu = None;
+        }
         match target {
             ClickTarget::ToggleLauncher => {
                 state.panel.launcher_open = !state.panel.launcher_open;
@@ -668,6 +712,12 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                 if state.settings.open {
                     state.settings.refresh_system_info();
                 }
+            }
+            ClickTarget::OpenSettingsTab(tab) => {
+                state.panel.launcher_open = false;
+                state.settings.open = true;
+                state.settings.active_tab = tab;
+                state.settings.refresh_system_info();
             }
             ClickTarget::ToggleCalendar => {
                 state.panel.launcher_open = false;
@@ -686,21 +736,65 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                 state.overlays.calendar_open = false;
                 state.overlays.notif_drawer_open = false;
             }
-            ClickTarget::MenuFile => {
+            ClickTarget::OpenTopMenu(menu, anchor_x) => {
                 state.panel.launcher_open = false;
-                execute_launcher_item(state, LauncherItem::Terminal);
-            }
-            ClickTarget::MenuWindow => {
-                state.panel.launcher_open = false;
-                state.cycle_focus();
+                if state.panel.top_bar_menu.map(|(m, _)| m) == Some(menu) {
+                    state.panel.top_bar_menu = None;
+                } else {
+                    state.panel.top_bar_menu = Some((menu, anchor_x));
+                }
             }
             ClickTarget::ToggleMute => {
                 state.panel.toggle_mute();
+                let val = if state.panel.volume_muted {
+                    "Muted".to_string()
+                } else {
+                    format!("{}%", state.panel.volume_percent)
+                };
+                state.overlays.show_osd(
+                    "Volume",
+                    &val,
+                    if state.panel.volume_muted { Some(0) } else { Some(state.panel.volume_percent) },
+                );
             }
             ClickTarget::ToggleTiling => {
                 state.panel.launcher_open = false;
                 state.toggle_tiling();
             }
+            ClickTarget::ToggleOverview => {
+                state.panel.launcher_open = false;
+                state.overlays.overview_open = !state.overlays.overview_open;
+            }
+            ClickTarget::AreaScreenshot => {
+                state.panel.launcher_open = false;
+                crate::overlays::begin_area_screenshot(state);
+            }
+            ClickTarget::ToggleDesktopIcons => {
+                state.overlays.show_desktop_icons = !state.overlays.show_desktop_icons;
+            }
+            ClickTarget::ReloadWallpaper => {
+                state.desktop.reload();
+                state.overlays.push_notification("Wallpaper", "Reloaded desktop wallpaper");
+            }
+            ClickTarget::WinCenter => state.center_focused_window(),
+            ClickTarget::WinMinimize => state.minimize_focused_window(),
+            ClickTarget::WinMaximize => {
+                if let Some(win) = state.focused_window() {
+                    state.toggle_maximize_window(&win);
+                }
+            }
+            ClickTarget::WinPin => state.toggle_always_on_top_focused(),
+            ClickTarget::WinNextWs => {
+                if let Some(win) = state.focused_window() {
+                    if let Some(id) = win.toplevel().map(|t| t.wl_surface().id()) {
+                        let cur = state.workspaces.window_workspace(&id);
+                        let next_ws = if cur >= state.workspaces.count { 1 } else { cur + 1 };
+                        state.move_focused_to_workspace(next_ws);
+                        state.overlays.show_osd("Moved Window", &format!("Workspace {}", next_ws), None);
+                    }
+                }
+            }
+            ClickTarget::WinClose => state.close_focused_window(),
             ClickTarget::PinnedApp(item) => {
                 let bounce_key = format!("pin_{}", item.badge());
                 state.animations.trigger_dock_bounce(&bounce_key);
@@ -710,21 +804,24 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                 state.panel.launcher_open = false;
                 state.switch_workspace(ws);
             }
-            ClickTarget::FocusWindow(win_idx) => {
+            ClickTarget::FocusWindow(win_id) => {
                 state.panel.launcher_open = false;
-                let ws_windows: Vec<Window> = state
+                let found = state
                     .space
                     .elements()
-                    .filter(|w| state.workspaces.is_on_active_workspace(w))
-                    .cloned()
-                    .collect();
-                if let Some(win) = ws_windows.get(win_idx) {
-                    let is_focused = state.focused_window().as_ref() == Some(win);
-                    let is_min = state.workspaces.is_minimized(win);
+                    .find(|w| {
+                        w.toplevel()
+                            .map(|t| t.wl_surface().id() == win_id)
+                            .unwrap_or(false)
+                    })
+                    .cloned();
+                if let Some(win) = found {
+                    let is_focused = state.focused_window().as_ref() == Some(&win);
+                    let is_min = state.workspaces.is_minimized(&win);
                     if is_min || is_focused {
-                        state.toggle_minimize_window(win);
+                        state.toggle_minimize_window(&win);
                     } else {
-                        state.focus_window(win);
+                        state.focus_window(&win);
                     }
                 }
             }
@@ -800,6 +897,10 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                 state.loop_signal.stop();
             }
         }
+        return true;
+    }
+
+    if state.panel.top_bar_menu.take().is_some() {
         return true;
     }
 
@@ -926,15 +1027,14 @@ pub fn render_panel_elements(
         mb.draw_text_px(mx, 6, &focused_app_name, 13.5, [255, 255, 255, 255]);
         mx += app_w + 8;
 
-        // Clean macOS Menu Items: File, Edit, View, Window, Help
-        let menu_items: [(&str, Option<ClickTarget>); 5] = [
-            ("File", Some(ClickTarget::MenuFile)),
-            ("Edit", None),
-            ("View", Some(ClickTarget::ToggleTiling)),
-            ("Window", Some(ClickTarget::MenuWindow)),
-            ("Help", Some(ClickTarget::ToggleSettings)),
+        // Clean macOS Menu Items: File, View, Window, Help (real interactive dropdown menus)
+        let menu_items: [(&str, TopBarMenu); 4] = [
+            ("File", TopBarMenu::File),
+            ("View", TopBarMenu::View),
+            ("Window", TopBarMenu::Window),
+            ("Help", TopBarMenu::Help),
         ];
-        for (label, target) in menu_items {
+        for (label, menu_kind) in menu_items {
             let iw = mb.measure_text_px(label, 12.5) + 14;
             if mx + iw > mb_w - 380 {
                 break;
@@ -943,13 +1043,17 @@ pub fn render_panel_elements(
                 (output_geo.loc.x + mx, output_geo.loc.y + 2).into(),
                 (iw, mb_h - 4).into(),
             );
-            if rect_contains(item_rect, pointer_x, pointer_y) {
-                mb.fill_rounded_rect_aa(mx, 3, iw, mb_h - 6, 5, [255, 255, 255, 26]);
+            let is_open = state.panel.top_bar_menu.map(|(m, _)| m) == Some(menu_kind);
+            if is_open {
+                mb.fill_rounded_rect_aa(mx, 3, iw, mb_h - 6, 6, [accent[0], accent[1], accent[2], 68]);
+            } else if rect_contains(item_rect, pointer_x, pointer_y) {
+                mb.fill_rounded_rect_aa(mx, 3, iw, mb_h - 6, 6, [255, 255, 255, 26]);
             }
             mb.draw_text_px(mx + 7, 7, label, 12.5, [224, 228, 240, 245]);
-            if let Some(t) = target {
-                state.panel.hit_regions.push((item_rect, t));
-            }
+            state
+                .panel
+                .hit_regions
+                .push((item_rect, ClickTarget::OpenTopMenu(menu_kind, mx)));
             mx += iw + 2;
         }
 
@@ -1229,6 +1333,7 @@ pub fn render_panel_elements(
         );
 
         let mut dx = dock_pill_x_in_canvas + dock_pad_x;
+        let mut dock_tooltip: Option<(i32, i32, String)> = None;
 
         for (i, (item, glyph, kind)) in pinned_apps.into_iter().enumerate() {
             let sz = pinned_sizes[i];
@@ -1263,6 +1368,13 @@ pub fn render_panel_elements(
                     .into(),
                 (sz, sz + 10).into(),
             );
+            if rect_contains(hit_global, pointer_x, pointer_y) {
+                dock_tooltip = Some((
+                    dock_canvas_x_local + draw_x + sz / 2,
+                    dock_canvas_y_local + draw_y - 32,
+                    item.label().to_string(),
+                ));
+            }
             state
                 .panel
                 .hit_regions
@@ -1291,6 +1403,13 @@ pub fn render_panel_elements(
                     .into(),
                 (sz, sz + 10).into(),
             );
+            if rect_contains(hit_global, pointer_x, pointer_y) {
+                dock_tooltip = Some((
+                    dock_canvas_x_local + draw_x + sz / 2,
+                    dock_canvas_y_local + draw_y - 32,
+                    app.name.clone(),
+                ));
+            }
             state
                 .panel
                 .hit_regions
@@ -1347,6 +1466,18 @@ pub fn render_panel_elements(
                         .into(),
                     (sz, sz + 10).into(),
                 );
+                if rect_contains(win_global, pointer_x, pointer_y) {
+                    let tip = if *is_min {
+                        format!("{} (Minimized)", title)
+                    } else {
+                        title.clone()
+                    };
+                    dock_tooltip = Some((
+                        dock_canvas_x_local + draw_x + sz / 2,
+                        dock_canvas_y_local + draw_y - 32,
+                        tip,
+                    ));
+                }
 
                 let kind = crate::icons::VectorIconKind::from_hint(title, title, false);
                 crate::icons::draw_app_icon(&mut dock, draw_x, draw_y, sz, Some(title), kind);
@@ -1369,10 +1500,12 @@ pub fn render_panel_elements(
                     dot_col,
                 );
 
-                state
-                    .panel
-                    .hit_regions
-                    .push((win_global, ClickTarget::FocusWindow(idx)));
+                if let Some(id) = win_id {
+                    state
+                        .panel
+                        .hit_regions
+                        .push((win_global, ClickTarget::FocusWindow(id.clone())));
+                }
                 dx += sz + icon_gap;
             }
         }
@@ -1399,6 +1532,129 @@ pub fn render_panel_elements(
             Kind::Unspecified,
         ) {
             elements.push(OkayRenderElements::Memory(elem));
+        }
+
+        // Floating glass tooltip pill above hovered Dock icon
+        if let Some((tip_cx, tip_y, tip_label)) = dock_tooltip {
+            let short_tip: String = tip_label.chars().take(28).collect();
+            let tmp = Canvas::new(1, 1);
+            let tw = (tmp.measure_text_px(&short_tip, 11.5) + 22).clamp(56, 240);
+            let th = 26;
+            let tx = (tip_cx - tw / 2).clamp(8, (output_geo.size.w - tw - 8).max(8));
+            let ty = tip_y.max(PANEL_HEIGHT + 8);
+            let mut tip_canvas = Canvas::new(tw, th);
+            tip_canvas.fill_glass_panel(0, 0, tw, th, 8);
+            let lw = tip_canvas.measure_text_px(&short_tip, 11.5);
+            tip_canvas.draw_text_px((tw - lw) / 2, 6, &short_tip, 11.5, [244, 246, 255, 255]);
+            let tip_buf = MemoryRenderBuffer::from_slice(
+                &tip_canvas.pixels,
+                Fourcc::Abgr8888,
+                (tw, th),
+                1,
+                Transform::Normal,
+                None,
+            );
+            let tip_phys: Point<f64, Physical> =
+                Point::<i32, Logical>::from((tx, ty)).to_f64().to_physical(scale);
+            if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                tip_phys,
+                &tip_buf,
+                None,
+                None,
+                Some((tw, th).into()),
+                Kind::Unspecified,
+            ) {
+                elements.push(OkayRenderElements::Memory(elem));
+            }
+        }
+
+        // Top Bar Dropdown Menus (`File`, `View`, `Window`, `Help`)
+        if let Some((menu_kind, anchor_x)) = state.panel.top_bar_menu {
+            if is_primary {
+                let rows: Vec<(&str, &str, ClickTarget, bool)> = match menu_kind {
+                    TopBarMenu::File => vec![
+                        ("New Terminal", "Super+Ret", ClickTarget::PinnedApp(LauncherItem::Terminal), false),
+                        ("File Manager", "", ClickTarget::PinnedApp(LauncherItem::FileManager), true),
+                        ("Take Screenshot", "Super+S", ClickTarget::PinnedApp(LauncherItem::Screenshot), false),
+                        ("Area Screenshot", "Super+Sh+S", ClickTarget::AreaScreenshot, true),
+                        ("Reload Config", "", ClickTarget::PinnedApp(LauncherItem::ReloadConfig), false),
+                        ("Lock Screen", "Super+L", ClickTarget::PowerLock, false),
+                    ],
+                    TopBarMenu::View => vec![
+                        ("Window Overview", "Super+O", ClickTarget::ToggleOverview, false),
+                        ("Cycle Tiling Layout", "Super+T", ClickTarget::ToggleTiling, true),
+                        ("Toggle Desktop Icons", "", ClickTarget::ToggleDesktopIcons, false),
+                        ("Reload Wallpaper", "", ClickTarget::ReloadWallpaper, false),
+                    ],
+                    TopBarMenu::Window => vec![
+                        ("Minimize Focused", "Super+M", ClickTarget::WinMinimize, false),
+                        ("Maximize / Restore", "", ClickTarget::WinMaximize, false),
+                        ("Toggle Always on Top", "Super+A", ClickTarget::WinPin, true),
+                        ("Center Floating Window", "Super+C", ClickTarget::WinCenter, false),
+                        ("Move to Next Workspace", "", ClickTarget::WinNextWs, true),
+                        ("Close Window", "Super+Q", ClickTarget::WinClose, false),
+                    ],
+                    TopBarMenu::Help => vec![
+                        ("OKay System Settings", "Super+I", ClickTarget::ToggleSettings, false),
+                        ("Keyboard Shortcuts", "", ClickTarget::OpenSettingsTab(crate::settings::SettingsTab::Shortcuts), false),
+                    ],
+                };
+                let mw = 258;
+                let seps = rows.iter().filter(|(_, _, _, s)| *s).count() as i32;
+                let mh = 16 + rows.len() as i32 * 30 + seps * 8;
+                let mx = anchor_x.clamp(8, (output_geo.size.w - mw - 8).max(8));
+                let my = PANEL_HEIGHT + 6;
+                let mut mcan = Canvas::new(mw, mh);
+                mcan.fill_glass_panel(0, 0, mw, mh, 12);
+
+                let mut iy = 8;
+                for (lbl, hint, act, sep_after) in rows {
+                    let r_rect = Rectangle::new(
+                        (output_geo.loc.x + mx + 8, output_geo.loc.y + my + iy).into(),
+                        (mw - 16, 28).into(),
+                    );
+                    let hov = rect_contains(r_rect, pointer_x, pointer_y);
+                    if hov {
+                        mcan.fill_rounded_rect_aa(8, iy, mw - 16, 28, 7, [accent[0], accent[1], accent[2], 220]);
+                    }
+                    let fg = if hov { contrast_fg(accent) } else { [238, 240, 252, 255] };
+                    let hfg = if hov { fg } else { [154, 162, 190, 230] };
+                    mcan.draw_text_px(16, iy + 7, lbl, 12.0, fg);
+                    if !hint.is_empty() {
+                        let hw = mcan.measure_text_px(hint, 10.5);
+                        mcan.draw_text_px(mw - 16 - hw, iy + 8, hint, 10.5, hfg);
+                    }
+                    state.panel.hit_regions.push((r_rect, act));
+                    iy += 30;
+                    if sep_after {
+                        mcan.fill_rect_blend(14, iy + 2, mw - 28, 1, [255, 255, 255, 22]);
+                        iy += 8;
+                    }
+                }
+
+                let mbuf = MemoryRenderBuffer::from_slice(
+                    &mcan.pixels,
+                    Fourcc::Abgr8888,
+                    (mw, mh),
+                    1,
+                    Transform::Normal,
+                    None,
+                );
+                let mphys: Point<f64, Physical> =
+                    Point::<i32, Logical>::from((mx, my)).to_f64().to_physical(scale);
+                if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+                    renderer,
+                    mphys,
+                    &mbuf,
+                    None,
+                    None,
+                    Some((mw, mh).into()),
+                    Kind::Unspecified,
+                ) {
+                    elements.push(OkayRenderElements::Memory(elem));
+                }
+            }
         }
     } else {
         // ====================================================================
@@ -1514,10 +1770,12 @@ pub fn render_panel_elements(
                 let max_chars = ((btn_w - 16) / 8).max(2) as usize;
                 let short: String = title.chars().take(max_chars).collect();
                 canvas.draw_text_px(bx + 8, 9, &short, 12.5, [238, 240, 252, 255]);
-                state
-                    .panel
-                    .hit_regions
-                    .push((win_global, ClickTarget::FocusWindow(idx)));
+                if let Some(id) = win_id {
+                    state
+                        .panel
+                        .hit_regions
+                        .push((win_global, ClickTarget::FocusWindow(id.clone())));
+                }
             }
         }
 

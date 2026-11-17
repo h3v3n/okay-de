@@ -19,35 +19,65 @@ use smithay::{
 
 use crate::{
     panel::LauncherItem,
-    state::{OkayState, PointerGrabMode, SnapZone},
+    state::{OkayState, PointerGrabMode, ResizeEdges, SnapZone},
 };
+
+const KEY_F2_SYM: u32 = 0xffbf;
+const KEY_ISO_LEFT_TAB_SYM: u32 = 0xfe20;
+const KEY_BRACKETLEFT_SYM: u32 = 0x005b;
+const KEY_BRACKETRIGHT_SYM: u32 = 0x005d;
+const KEY_MINUS_SYM: u32 = 0x002d;
+const KEY_EQUAL_SYM: u32 = 0x003d;
+const KEY_PLUS_SYM: u32 = 0x002b;
+const KEY_XF86_AUD_LOWER: u32 = 0x1008ff11;
+const KEY_XF86_AUD_MUTE: u32 = 0x1008ff12;
+const KEY_XF86_AUD_RAISE: u32 = 0x1008ff13;
 
 /// Actions triggered by global compositor keybindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum KeyAction {
     SpawnTerminal,
     ToggleLauncher,
+    ToggleOverview,
     ToggleSettings,
     ToggleClipboard,
     LockScreen,
     TakeScreenshot,
+    AreaScreenshot,
+    CancelAreaScreenshot,
     CloseFocused,
     ToggleFullscreen,
     ToggleTiling,
     ToggleAlwaysOnTop,
+    MinimizeFocused,
+    RestoreMinimized,
+    CenterFocused,
+    FocusNextPrev(bool),
+    SwapTiled(bool),
+    AdjustMasterRatio(i32),
     SnapFocused(SnapZone),
     SwitchWorkspace(usize),
     MoveToWorkspace(usize),
-    CycleFocus,
+    CycleWorkspaceDir(i32),
+    CycleFocusDir(bool),
+    VolumeStep(i32),
+    ToggleMute,
     LauncherTypeChar(char),
     LauncherBackspace,
     LauncherClose,
     UnlockAttempt,
+    LockBackspace,
     LockTypeChar(char),
     NewFolderTypeChar(char),
     NewFolderBackspace,
     ConfirmNewFolder,
     CancelNewFolder,
+    BeginRenameSelectedIcon,
+    RenameIconTypeChar(char),
+    RenameIconBackspace,
+    ConfirmRenameIcon,
+    CancelRenameIcon,
+    CloseAnyOverlay,
     ExitCompositor,
 }
 
@@ -95,8 +125,17 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
 
             // If session is locked, intercept all typing for the lockscreen
             if state.overlays.locked {
-                if raw_u32 == keysyms::KEY_Return || raw_u32 == keysyms::KEY_Escape {
+                if raw_u32 == keysyms::KEY_Return {
                     return FilterResult::Intercept(KeyAction::UnlockAttempt);
+                }
+                if raw_u32 == keysyms::KEY_Escape {
+                    if state.overlays.lock_input.is_empty() {
+                        return FilterResult::Intercept(KeyAction::UnlockAttempt);
+                    }
+                    return FilterResult::Intercept(KeyAction::LockBackspace);
+                }
+                if raw_u32 == keysyms::KEY_BackSpace {
+                    return FilterResult::Intercept(KeyAction::LockBackspace);
                 }
                 if (0x20..=0x7e).contains(&raw_u32) {
                     if let Some(ch) = char::from_u32(raw_u32) {
@@ -104,6 +143,36 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
                     }
                 }
                 return FilterResult::Intercept(KeyAction::LockTypeChar('*'));
+            }
+
+            // Escape cancels active interactive area screenshot selection
+            if state.overlays.screenshot_selecting && raw_u32 == keysyms::KEY_Escape {
+                return FilterResult::Intercept(KeyAction::CancelAreaScreenshot);
+            }
+
+            // Inline desktop icon renaming (F2)
+            if state.overlays.renaming_icon.is_some()
+                && !modifiers.logo
+                && !modifiers.ctrl
+                && !modifiers.alt
+            {
+                if raw_u32 == keysyms::KEY_Return {
+                    return FilterResult::Intercept(KeyAction::ConfirmRenameIcon);
+                }
+                if raw_u32 == keysyms::KEY_Escape {
+                    return FilterResult::Intercept(KeyAction::CancelRenameIcon);
+                }
+                if raw_u32 == keysyms::KEY_BackSpace {
+                    return FilterResult::Intercept(KeyAction::RenameIconBackspace);
+                }
+                if (0x20..=0x7e).contains(&raw_u32) {
+                    if let Some(ch) = char::from_u32(raw_u32) {
+                        if ch != '/' {
+                            return FilterResult::Intercept(KeyAction::RenameIconTypeChar(ch));
+                        }
+                    }
+                }
+                return FilterResult::Intercept(KeyAction::RenameIconTypeChar('\0'));
             }
 
             // Super + Return -> Spawn terminal
@@ -114,6 +183,11 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
             // Super + D -> Toggle native app launcher menu
             if modifiers.logo && (raw_u32 == keysyms::KEY_d || raw_u32 == keysyms::KEY_D) {
                 return FilterResult::Intercept(KeyAction::ToggleLauncher);
+            }
+
+            // Super + O -> Toggle live Window Overview / Expose
+            if modifiers.logo && (raw_u32 == keysyms::KEY_o || raw_u32 == keysyms::KEY_O) {
+                return FilterResult::Intercept(KeyAction::ToggleOverview);
             }
 
             // Super + I -> Toggle native OKay Settings window
@@ -131,7 +205,12 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
                 return FilterResult::Intercept(KeyAction::LockScreen);
             }
 
-            // PrintScreen or Super + S -> Take Screenshot
+            // Super + Shift + S -> Interactive Area Screenshot
+            if modifiers.logo && modifiers.shift && (raw_u32 == keysyms::KEY_s || raw_u32 == keysyms::KEY_S) {
+                return FilterResult::Intercept(KeyAction::AreaScreenshot);
+            }
+
+            // PrintScreen or Super + S -> Take Full Screenshot
             if raw_u32 == keysyms::KEY_Print
                 || (modifiers.logo && (raw_u32 == keysyms::KEY_s || raw_u32 == keysyms::KEY_S))
             {
@@ -158,8 +237,55 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
                 return FilterResult::Intercept(KeyAction::ToggleAlwaysOnTop);
             }
 
-            // Super + Arrow Keys -> Snap window to halves / maximize
+            // Super + C -> Center focused window
+            if modifiers.logo && (raw_u32 == keysyms::KEY_c || raw_u32 == keysyms::KEY_C) {
+                return FilterResult::Intercept(KeyAction::CenterFocused);
+            }
+
+            // Super + [Shift] + M -> Restore last minimized / Minimize focused
+            if modifiers.logo && (raw_u32 == keysyms::KEY_m || raw_u32 == keysyms::KEY_M) {
+                if modifiers.shift {
+                    return FilterResult::Intercept(KeyAction::RestoreMinimized);
+                }
+                return FilterResult::Intercept(KeyAction::MinimizeFocused);
+            }
+
+            // Super + [Shift] + J / K -> Swap or focus windows cleanly
+            if modifiers.logo && (raw_u32 == keysyms::KEY_j || raw_u32 == keysyms::KEY_J) {
+                if modifiers.shift {
+                    return FilterResult::Intercept(KeyAction::SwapTiled(true));
+                }
+                return FilterResult::Intercept(KeyAction::FocusNextPrev(true));
+            }
+            if modifiers.logo && (raw_u32 == keysyms::KEY_k || raw_u32 == keysyms::KEY_K) {
+                if modifiers.shift {
+                    return FilterResult::Intercept(KeyAction::SwapTiled(false));
+                }
+                return FilterResult::Intercept(KeyAction::FocusNextPrev(false));
+            }
+
+            // Super + [ / - or ] / = / + -> Adjust Master-Stack split ratio
+            if modifiers.logo
+                && (raw_u32 == KEY_BRACKETLEFT_SYM || raw_u32 == KEY_MINUS_SYM)
+            {
+                return FilterResult::Intercept(KeyAction::AdjustMasterRatio(-5));
+            }
+            if modifiers.logo
+                && (raw_u32 == KEY_BRACKETRIGHT_SYM
+                    || raw_u32 == KEY_EQUAL_SYM
+                    || raw_u32 == KEY_PLUS_SYM)
+            {
+                return FilterResult::Intercept(KeyAction::AdjustMasterRatio(5));
+            }
+
+            // Super + Shift + Left/Right -> Prev/Next Workspace; Super + Arrows -> Snap
             if modifiers.logo {
+                if modifiers.shift && raw_u32 == keysyms::KEY_Left {
+                    return FilterResult::Intercept(KeyAction::CycleWorkspaceDir(-1));
+                }
+                if modifiers.shift && raw_u32 == keysyms::KEY_Right {
+                    return FilterResult::Intercept(KeyAction::CycleWorkspaceDir(1));
+                }
                 match raw_u32 {
                     keysyms::KEY_Left => {
                         return FilterResult::Intercept(KeyAction::SnapFocused(SnapZone::LeftHalf));
@@ -177,9 +303,36 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
                 }
             }
 
-            // Super + Tab or Alt + Tab -> Cycle focus with live switcher overlay
-            if (modifiers.logo || modifiers.alt) && raw_u32 == keysyms::KEY_Tab {
-                return FilterResult::Intercept(KeyAction::CycleFocus);
+            // Super + Tab or Alt + Tab (+Shift / ISO_Left_Tab) -> Cycle focus with switcher overlay
+            if (modifiers.logo || modifiers.alt)
+                && (raw_u32 == keysyms::KEY_Tab || raw_u32 == KEY_ISO_LEFT_TAB_SYM)
+            {
+                let forward = !modifiers.shift && raw_u32 != KEY_ISO_LEFT_TAB_SYM;
+                return FilterResult::Intercept(KeyAction::CycleFocusDir(forward));
+            }
+
+            // Hardware media volume keys
+            if raw_u32 == KEY_XF86_AUD_RAISE {
+                return FilterResult::Intercept(KeyAction::VolumeStep(5));
+            }
+            if raw_u32 == KEY_XF86_AUD_LOWER {
+                return FilterResult::Intercept(KeyAction::VolumeStep(-5));
+            }
+            if raw_u32 == KEY_XF86_AUD_MUTE {
+                return FilterResult::Intercept(KeyAction::ToggleMute);
+            }
+
+            // F2 -> Rename currently selected desktop icon when no compositor modal is open
+            if raw_u32 == KEY_F2_SYM
+                && !modifiers.logo
+                && !modifiers.ctrl
+                && !modifiers.alt
+                && state.overlays.selected_icons.len() == 1
+                && !state.panel.launcher_open
+                && !state.settings.open
+                && !state.overlays.overview_open
+            {
+                return FilterResult::Intercept(KeyAction::BeginRenameSelectedIcon);
             }
 
             // Super + [Shift] + 1..9 -> Workspace switching / moving
@@ -233,6 +386,23 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
                 }
             }
 
+            // Escape closes active compositor overlays / popovers
+            if raw_u32 == keysyms::KEY_Escape
+                && (state.overlays.overview_open
+                    || state.overlays.clipboard_open
+                    || state.overlays.window_context_menu.is_some()
+                    || state.overlays.context_menu_pos.is_some()
+                    || state.overlays.icon_context_menu.is_some()
+                    || state.overlays.properties_modal.is_some()
+                    || state.overlays.control_center_open
+                    || state.overlays.calendar_open
+                    || state.overlays.notif_drawer_open
+                    || state.panel.top_bar_menu.is_some()
+                    || state.panel.pin_context_menu.is_some())
+            {
+                return FilterResult::Intercept(KeyAction::CloseAnyOverlay);
+            }
+
             FilterResult::Forward
         },
     );
@@ -263,10 +433,15 @@ fn execute_key_action(state: &mut OkayState, action: KeyAction) {
             crate::panel::execute_launcher_item(state, LauncherItem::Terminal);
         }
         KeyAction::ToggleLauncher => {
+            state.overlays.overview_open = false;
             state.panel.launcher_open = !state.panel.launcher_open;
             if state.panel.launcher_open {
                 state.panel.search_query.clear();
             }
+        }
+        KeyAction::ToggleOverview => {
+            state.panel.launcher_open = false;
+            state.overlays.overview_open = !state.overlays.overview_open;
         }
         KeyAction::ToggleSettings => {
             state.settings.open = !state.settings.open;
@@ -281,14 +456,33 @@ fn execute_key_action(state: &mut OkayState, action: KeyAction) {
         KeyAction::LockScreen => {
             state.overlays.locked = true;
             state.overlays.lock_input.clear();
+            state.overlays.lock_error = false;
+            state.overlays.overview_open = false;
+            state.panel.launcher_open = false;
         }
         KeyAction::TakeScreenshot => {
             crate::overlays::take_screenshot(state);
+        }
+        KeyAction::AreaScreenshot => {
+            crate::overlays::begin_area_screenshot(state);
+        }
+        KeyAction::CancelAreaScreenshot => {
+            state.overlays.screenshot_selecting = false;
+            state.overlays.screenshot_start = None;
+            state.overlays.screenshot_current = None;
         }
         KeyAction::CloseFocused => state.close_focused_window(),
         KeyAction::ToggleFullscreen => state.toggle_fullscreen_focused(),
         KeyAction::ToggleTiling => state.toggle_tiling(),
         KeyAction::ToggleAlwaysOnTop => state.toggle_always_on_top_focused(),
+        KeyAction::MinimizeFocused => state.minimize_focused_window(),
+        KeyAction::RestoreMinimized => state.restore_last_minimized(),
+        KeyAction::CenterFocused => state.center_focused_window(),
+        KeyAction::FocusNextPrev(forward) => state.focus_next_prev(forward),
+        KeyAction::SwapTiled(forward) => state.swap_tiled_window(forward),
+        KeyAction::AdjustMasterRatio(delta_pct) => {
+            state.adjust_master_ratio(delta_pct as f32 / 100.0);
+        }
         KeyAction::SnapFocused(zone) => {
             if let Some(win) = state.focused_window() {
                 state.snap_window(&win, zone);
@@ -296,10 +490,37 @@ fn execute_key_action(state: &mut OkayState, action: KeyAction) {
         }
         KeyAction::SwitchWorkspace(ws) => state.switch_workspace(ws),
         KeyAction::MoveToWorkspace(ws) => state.move_focused_to_workspace(ws),
-        KeyAction::CycleFocus => {
-            state.cycle_focus();
+        KeyAction::CycleWorkspaceDir(delta) => {
+            let count = state.workspaces.count.max(1) as isize;
+            let cur_zero = state.workspaces.active as isize - 1;
+            let next_zero = (cur_zero + delta as isize).rem_euclid(count);
+            state.switch_workspace((next_zero + 1) as usize);
+        }
+        KeyAction::CycleFocusDir(forward) => {
+            state.cycle_focus_dir(forward);
             state.overlays.alttab_visible_until =
                 Some(Instant::now() + Duration::from_millis(1400));
+        }
+        KeyAction::VolumeStep(delta) => {
+            state.panel.set_volume(state.panel.volume_percent + delta);
+            let vol = state.panel.volume_percent;
+            state
+                .overlays
+                .show_osd("Volume", &format!("{}%", vol), Some(vol));
+        }
+        KeyAction::ToggleMute => {
+            state.panel.toggle_mute();
+            let val = if state.panel.volume_muted {
+                "Muted".to_string()
+            } else {
+                format!("{}%", state.panel.volume_percent)
+            };
+            let prog = if state.panel.volume_muted {
+                Some(0)
+            } else {
+                Some(state.panel.volume_percent)
+            };
+            state.overlays.show_osd("Volume", &val, prog);
         }
         KeyAction::LauncherTypeChar(ch) => {
             if state.panel.search_query.len() < 24 {
@@ -314,12 +535,16 @@ fn execute_key_action(state: &mut OkayState, action: KeyAction) {
             state.panel.search_query.clear();
         }
         KeyAction::UnlockAttempt => {
-            state.overlays.locked = false;
-            state.overlays.lock_input.clear();
+            state.overlays.attempt_unlock();
+        }
+        KeyAction::LockBackspace => {
+            state.overlays.lock_input.pop();
+            state.overlays.lock_error = false;
         }
         KeyAction::LockTypeChar(ch) => {
             if state.overlays.lock_input.len() < 32 {
                 state.overlays.lock_input.push(ch);
+                state.overlays.lock_error = false;
             }
         }
         KeyAction::NewFolderTypeChar(ch) => {
@@ -341,6 +566,44 @@ fn execute_key_action(state: &mut OkayState, action: KeyAction) {
         }
         KeyAction::CancelNewFolder => {
             state.overlays.cancel_creating_folder();
+        }
+        KeyAction::BeginRenameSelectedIcon => {
+            if let Some(&idx) = state.overlays.selected_icons.first() {
+                state.overlays.begin_renaming_icon(idx);
+            }
+        }
+        KeyAction::RenameIconTypeChar(ch) => {
+            if ch != '\0' {
+                if let Some((_, ref mut name)) = state.overlays.renaming_icon {
+                    if name.chars().count() < 40 {
+                        name.push(ch);
+                    }
+                }
+            }
+        }
+        KeyAction::RenameIconBackspace => {
+            if let Some((_, ref mut name)) = state.overlays.renaming_icon {
+                name.pop();
+            }
+        }
+        KeyAction::ConfirmRenameIcon => {
+            state.overlays.confirm_renaming_icon();
+        }
+        KeyAction::CancelRenameIcon => {
+            state.overlays.cancel_renaming_icon();
+        }
+        KeyAction::CloseAnyOverlay => {
+            state.overlays.overview_open = false;
+            state.overlays.clipboard_open = false;
+            state.overlays.window_context_menu = None;
+            state.overlays.context_menu_pos = None;
+            state.overlays.icon_context_menu = None;
+            state.overlays.properties_modal = None;
+            state.overlays.control_center_open = false;
+            state.overlays.calendar_open = false;
+            state.overlays.notif_drawer_open = false;
+            state.panel.top_bar_menu = None;
+            state.panel.pin_context_menu = None;
         }
         KeyAction::ExitCompositor => {
             tracing::info!("Super+Escape pressed — shutting down OKay DE");
@@ -418,18 +681,63 @@ fn move_pointer_to(state: &mut OkayState, pos: Point<f64, Logical>, time_msec: u
                     }
                 }
 
+                state.overlays.snap_preview = state.detect_snap_zone(pos).map(|(_, r)| r);
                 state.space.map_element(window, new_loc, false);
                 return;
             }
             PointerGrabMode::Resize {
                 window,
                 initial_pointer,
+                initial_window_loc,
                 initial_size,
+                edges,
             } => {
                 let dx = (pos.x - initial_pointer.x).round() as i32;
                 let dy = (pos.y - initial_pointer.y).round() as i32;
-                let new_w = (initial_size.w + dx).max(160);
-                let new_h = (initial_size.h + dy).max(100);
+                let mut new_x = initial_window_loc.x;
+                let mut new_y = initial_window_loc.y;
+                let mut new_w = initial_size.w;
+                let mut new_h = initial_size.h;
+
+                if edges.right {
+                    new_w = (initial_size.w + dx).max(180);
+                } else if edges.left {
+                    let clamped_w = (initial_size.w - dx).max(180);
+                    new_x = initial_window_loc.x + (initial_size.w - clamped_w);
+                    new_w = clamped_w;
+                }
+
+                if edges.bottom {
+                    new_h = (initial_size.h + dy).max(120);
+                } else if edges.top {
+                    let mut clamped_h = (initial_size.h - dy).max(120);
+                    let mut candidate_y = initial_window_loc.y + (initial_size.h - clamped_h);
+                    if !state.workspaces.is_fullscreen(&window) {
+                        let win_geo = window.geometry();
+                        let top_bar_h = if state.panel.dock_mode || state.panel.panel_top {
+                            crate::panel::PANEL_HEIGHT
+                        } else {
+                            0
+                        };
+                        let out_top = state
+                            .output_under_pointer()
+                            .and_then(|o| state.space.output_geometry(&o))
+                            .map(|g| g.loc.y)
+                            .unwrap_or(0);
+                        let min_y = out_top + top_bar_h + crate::state::TITLEBAR_HEIGHT - win_geo.loc.y;
+                        if candidate_y < min_y {
+                            candidate_y = min_y;
+                            clamped_h = (initial_size.h - (candidate_y - initial_window_loc.y)).max(120);
+                        }
+                    }
+                    new_y = candidate_y;
+                    new_h = clamped_h;
+                }
+
+                if edges.left || edges.top {
+                    state.space.map_element(window.clone(), (new_x, new_y), false);
+                }
+
                 if let Some(toplevel) = window.toplevel() {
                     toplevel.with_pending_state(|s| {
                         s.states.set(xdg_toplevel::State::Resizing);
@@ -510,11 +818,29 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
                 .map(|k| k.modifier_state().logo)
                 .unwrap_or(false);
 
+        // Interactive Area Screenshot mode takes priority over all clicks
+        if state.overlays.screenshot_selecting {
+            if button == 0x110 && crate::overlays::handle_overlays_click(state, pos) {
+                return;
+            }
+            if button == 0x111 {
+                state.overlays.screenshot_selecting = false;
+                state.overlays.screenshot_start = None;
+                state.overlays.screenshot_current = None;
+                return;
+            }
+        }
+
         // Super + Left Click (0x110) -> Drag-to-move window from anywhere on the window
-        // Super + Right Click (0x111) -> Drag-to-resize window from anywhere on the window
-        if super_held && (button == 0x110 || button == 0x111) {
+        // Super + Right Click (0x111) -> Directional quadrant resize from anywhere on the window
+        if super_held
+            && (button == 0x110 || button == 0x111)
+            && !state.overlays.locked
+            && !state.overlays.overview_open
+        {
             if let Some(win) = state.window_under(pos) {
                 state.focus_window(&win);
+                state.unmaximize_if_needed(&win);
                 if button == 0x110 {
                     if let Some(win_loc) = state.space.element_location(&win) {
                         state.pointer_grab = Some(PointerGrabMode::Move {
@@ -524,12 +850,22 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
                         });
                         return;
                     }
-                } else {
-                    let initial_size = win.geometry().size;
+                } else if let Some(win_loc) = state.space.element_location(&win) {
+                    let geo = win.geometry();
+                    let cx = (win_loc.x + geo.loc.x) as f64 + geo.size.w as f64 * 0.5;
+                    let cy = (win_loc.y + geo.loc.y) as f64 + geo.size.h as f64 * 0.5;
+                    let edges = ResizeEdges {
+                        left: pos.x < cx,
+                        right: pos.x >= cx,
+                        top: pos.y < cy,
+                        bottom: pos.y >= cy,
+                    };
                     state.pointer_grab = Some(PointerGrabMode::Resize {
                         window: win,
                         initial_pointer: pos,
-                        initial_size,
+                        initial_window_loc: win_loc,
+                        initial_size: geo.size,
+                        edges,
                     });
                     return;
                 }
@@ -552,12 +888,41 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
             return;
         }
 
+        // Right/Middle-click on server-side titlebar -> Window Menu / Always-on-Top
+        if (button == 0x111 || button == 0x112)
+            && !super_held
+            && !state.overlays.overview_open
+            && !state.overlays.locked
+            && state.handle_titlebar_alt_click(pos, button == 0x111)
+        {
+            return;
+        }
+
         // Right-click (0x111) on empty desktop -> Open Desktop Context Menu
         if button == 0x111 && !super_held && crate::overlays::handle_desktop_right_click(state, pos) {
             return;
         }
 
-        // Server-side titlebar click (buttons [-] [+] [X] or drag-to-move)
+        // Window outer border/corner resize without Super
+        if button == 0x110 && !state.overlays.overview_open && !state.overlays.locked {
+            if let Some((win, edges)) = state.window_resize_edges_at(pos) {
+                state.focus_window(&win);
+                state.unmaximize_if_needed(&win);
+                if let Some(win_loc) = state.space.element_location(&win) {
+                    let initial_size = win.geometry().size;
+                    state.pointer_grab = Some(PointerGrabMode::Resize {
+                        window: win,
+                        initial_pointer: pos,
+                        initial_window_loc: win_loc,
+                        initial_size,
+                        edges,
+                    });
+                    return;
+                }
+            }
+        }
+
+        // Server-side titlebar click (buttons [-] [+] [X], double-click maximize, or drag-to-move)
         if button == 0x110 && state.handle_titlebar_click(pos) {
             return;
         }
@@ -592,32 +957,9 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
         if let Some(grab) = state.pointer_grab.take() {
             match grab {
                 PointerGrabMode::Move { window, .. } => {
-                    // Check if released at a screen edge/corner to trigger snap-to-edge/quarter
-                    if let Some(out) = state.output_under_pointer() {
-                        if let Some(geo) = state.space.output_geometry(&out) {
-                            let px = state.pointer_location.x.round() as i32;
-                            let py = state.pointer_location.y.round() as i32;
-                            let left = px <= geo.loc.x + 12;
-                            let right = px >= geo.loc.x + geo.size.w - 14;
-                            let top = py <= geo.loc.y + 12;
-                            let bot = py >= geo.loc.y + geo.size.h - 14;
-
-                            if left && top {
-                                state.snap_window(&window, SnapZone::TopLeftQuarter);
-                            } else if right && top {
-                                state.snap_window(&window, SnapZone::TopRightQuarter);
-                            } else if left && bot {
-                                state.snap_window(&window, SnapZone::BottomLeftQuarter);
-                            } else if right && bot {
-                                state.snap_window(&window, SnapZone::BottomRightQuarter);
-                            } else if left {
-                                state.snap_window(&window, SnapZone::LeftHalf);
-                            } else if right {
-                                state.snap_window(&window, SnapZone::RightHalf);
-                            } else if top {
-                                state.snap_window(&window, SnapZone::Maximize);
-                            }
-                        }
+                    state.overlays.snap_preview = None;
+                    if let Some((zone, _)) = state.detect_snap_zone(state.pointer_location) {
+                        state.snap_window(&window, zone);
                     }
                 }
                 PointerGrabMode::Resize { window, .. } => {

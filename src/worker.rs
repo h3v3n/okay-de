@@ -1,7 +1,7 @@
 use std::{
     ffi::OsString,
-    fs,
-    io::Read,
+    fs::{self, File},
+    io::{BufWriter, Read},
     os::fd::OwnedFd,
     path::PathBuf,
     process::Command,
@@ -50,6 +50,13 @@ pub enum WorkerRequest {
         socket_name: OsString,
         fallback_png: Option<Vec<u8>>,
     },
+    SaveRgbaPng {
+        path: PathBuf,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    },
+    PollPanelStatus,
     RunCommand {
         program: String,
         args: Vec<String>,
@@ -70,6 +77,12 @@ pub enum WorkerResponse {
     SystemInfoRefreshed(SystemInfoSnapshot),
     ClipboardText {
         text: String,
+    },
+    PanelStatusPolled {
+        battery_percent: Option<i32>,
+        volume_percent: Option<i32>,
+        volume_muted: Option<bool>,
+        active_wifi_ssid: Option<String>,
     },
     ScreenshotDone {
         path: PathBuf,
@@ -117,6 +130,25 @@ pub fn handle_response(state: &mut OkayState, resp: WorkerResponse) {
         }
         WorkerResponse::ClipboardText { text } => {
             state.overlays.push_clipboard_text(text);
+        }
+        WorkerResponse::PanelStatusPolled {
+            battery_percent,
+            volume_percent,
+            volume_muted,
+            active_wifi_ssid,
+        } => {
+            state.panel.battery_percent = battery_percent;
+            if let Some(v) = volume_percent {
+                if !state.overlays.cc_dragging_volume {
+                    state.panel.volume_percent = v.clamp(0, 100);
+                }
+            }
+            if let Some(m) = volume_muted {
+                state.panel.volume_muted = m;
+            }
+            if let Some(ssid) = active_wifi_ssid {
+                state.settings.wifi_status = format!("Connected to {}", ssid);
+            }
         }
         WorkerResponse::ScreenshotDone { path, ok, via_grim } => {
             if ok {
@@ -237,11 +269,102 @@ fn worker_loop(req_rx: mpsc::Receiver<WorkerRequest>, resp_tx: CalloopSender<Wor
                     });
                 }
             }
+            WorkerRequest::SaveRgbaPng {
+                path,
+                width,
+                height,
+                rgba,
+            } => {
+                let ok = save_rgba_png(&path, width, height, &rgba);
+                let _ = resp_tx.send(WorkerResponse::ScreenshotDone {
+                    path,
+                    ok,
+                    via_grim: false,
+                });
+            }
+            WorkerRequest::PollPanelStatus => {
+                let (battery_percent, volume_percent, volume_muted, active_wifi_ssid) =
+                    poll_panel_status_sync();
+                let _ = resp_tx.send(WorkerResponse::PanelStatusPolled {
+                    battery_percent,
+                    volume_percent,
+                    volume_muted,
+                    active_wifi_ssid,
+                });
+            }
             WorkerRequest::RunCommand { program, args } => {
                 let _ = Command::new(&program).args(&args).status();
             }
         }
     }
+}
+
+fn save_rgba_png(path: &PathBuf, width: u32, height: u32, rgba: &[u8]) -> bool {
+    let Ok(file) = File::create(path) else {
+        return false;
+    };
+    let w = BufWriter::new(file);
+    let mut encoder = png::Encoder::new(w, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let Ok(mut writer) = encoder.write_header() else {
+        return false;
+    };
+    writer.write_image_data(rgba).is_ok()
+}
+
+fn poll_panel_status_sync() -> (Option<i32>, Option<i32>, Option<bool>, Option<String>) {
+    let battery_percent = fs::read_dir("/sys/class/power_supply").ok().and_then(|entries| {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("BAT") {
+                if let Ok(cap) = fs::read_to_string(entry.path().join("capacity")) {
+                    if let Ok(v) = cap.trim().parse::<i32>() {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+        None
+    });
+
+    let mut volume_percent = None;
+    let mut volume_muted = None;
+    if let Ok(out) = Command::new("wpctl")
+        .args(["get-volume", "@DEFAULT_AUDIO_SINK@"])
+        .output()
+    {
+        if out.status.success() {
+            let txt = String::from_utf8_lossy(&out.stdout);
+            // Format: `Volume: 0.75 [MUTED]`
+            if let Some(val_str) = txt.split_whitespace().nth(1) {
+                if let Ok(v) = val_str.parse::<f32>() {
+                    volume_percent = Some((v * 100.0).round() as i32);
+                }
+            }
+            volume_muted = Some(txt.contains("MUTED"));
+        }
+    }
+
+    let mut active_wifi_ssid = None;
+    if let Ok(out) = Command::new("nmcli")
+        .args(["-t", "-f", "ACTIVE,SSID", "dev", "wifi"])
+        .output()
+    {
+        if out.status.success() {
+            let txt = String::from_utf8_lossy(&out.stdout);
+            for line in txt.lines() {
+                if let Some(ssid) = line.strip_prefix("yes:") {
+                    if !ssid.trim().is_empty() {
+                        active_wifi_ssid = Some(ssid.trim().to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    (battery_percent, volume_percent, volume_muted, active_wifi_ssid)
 }
 
 fn fetch_wifi(force_rescan: bool) -> (Vec<WifiNetwork>, String) {

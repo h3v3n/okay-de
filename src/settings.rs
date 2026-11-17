@@ -41,10 +41,11 @@ pub enum SettingsTab {
     MouseKeyboard,
     DefaultApps,
     SystemInfo,
+    Shortcuts,
 }
 
 impl SettingsTab {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Appearance,
         Self::Displays,
         Self::Network,
@@ -53,6 +54,7 @@ impl SettingsTab {
         Self::MouseKeyboard,
         Self::DefaultApps,
         Self::SystemInfo,
+        Self::Shortcuts,
     ];
 
     fn title(self) -> &'static str {
@@ -65,6 +67,7 @@ impl SettingsTab {
             Self::MouseKeyboard => "6. Mouse & Keyboard",
             Self::DefaultApps => "7. Default Apps",
             Self::SystemInfo => "8. System Info",
+            Self::Shortcuts => "9. Keybindings",
         }
     }
 }
@@ -96,6 +99,13 @@ pub struct SystemInfoSnapshot {
     pub input_devices: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SliderKind {
+    OutputVol,
+    MicVol,
+    PointerSpeed,
+}
+
 #[derive(Debug, Clone)]
 enum SettingsAction {
     CloseWindow,
@@ -117,11 +127,8 @@ enum SettingsAction {
     ToggleBluetoothPower,
     RefreshBluetooth,
     ToggleBluetoothDevice(usize),
-    SetVolume(i32),
     ToggleMuteOutput,
-    SetMicVolume(i32),
     ToggleMuteMic,
-    SetPointerSpeed(f64),
     AdjustPointerSpeed(f64),
     ToggleNaturalScroll,
     CycleKeyboardLayout,
@@ -137,6 +144,8 @@ pub struct SettingsState {
     pub active_tab: SettingsTab,
     pub position: Point<i32, Logical>,
     pub dragging: Option<Point<f64, Logical>>,
+    dragging_slider: Option<(SliderKind, Rectangle<i32, Logical>)>,
+    slider_tracks: Vec<(Rectangle<i32, Logical>, SliderKind)>,
     pub wifi_networks: Vec<WifiNetwork>,
     pub wifi_status: String,
     pub bt_powered: bool,
@@ -164,6 +173,8 @@ impl Default for SettingsState {
             active_tab: SettingsTab::Appearance,
             position: Point::from((120, 75)),
             dragging: None,
+            dragging_slider: None,
+            slider_tracks: Vec::new(),
             wifi_networks: Vec::new(),
             wifi_status: "Click 'Refresh Scan' to query NetworkManager".to_string(),
             bt_powered: true,
@@ -247,8 +258,35 @@ fn save_all_prefs(state: &OkayState) {
     );
 }
 
-/// Handles pointer motion when the settings window header is being dragged.
+fn apply_slider_value(state: &mut OkayState, kind: SliderKind, track: Rectangle<i32, Logical>, px: i32) {
+    let ratio = ((px - track.loc.x) as f64 / track.size.w.max(1) as f64).clamp(0.0, 1.0);
+    match kind {
+        SliderKind::OutputVol => {
+            let pct = (ratio * 100.0).round() as i32;
+            state.panel.set_volume(pct);
+        }
+        SliderKind::MicVol => {
+            let pct = (ratio * 100.0).round() as i32;
+            if pct != state.settings.mic_volume {
+                state.settings.mic_volume = pct;
+                let arg = format!("{}%", pct);
+                let _ = Command::new("wpctl")
+                    .args(["set-volume", "@DEFAULT_AUDIO_SOURCE@", &arg])
+                    .spawn();
+            }
+        }
+        SliderKind::PointerSpeed => {
+            state.pointer_sensitivity = (0.25 + ratio * 2.25).clamp(0.25, 2.50);
+        }
+    }
+}
+
+/// Handles pointer motion when the settings window header or a continuous slider is being dragged.
 pub fn handle_settings_motion(state: &mut OkayState, pos: Point<f64, Logical>) -> bool {
+    if let Some((kind, track)) = state.settings.dragging_slider {
+        apply_slider_value(state, kind, track, pos.x.round() as i32);
+        return true;
+    }
     if let Some(offset) = state.settings.dragging {
         let nx = (pos.x - offset.x).round() as i32;
         let ny = (pos.y - offset.y).round() as i32;
@@ -259,8 +297,14 @@ pub fn handle_settings_motion(state: &mut OkayState, pos: Point<f64, Logical>) -
     false
 }
 
-/// Releases any active settings window drag on mouse button release.
+/// Releases any active settings window or slider drag on mouse button release.
 pub fn handle_settings_release(state: &mut OkayState) -> bool {
+    if let Some((kind, _)) = state.settings.dragging_slider.take() {
+        if kind == SliderKind::PointerSpeed {
+            save_all_prefs(state);
+        }
+        return true;
+    }
     if state.settings.dragging.is_some() {
         state.settings.dragging = None;
         return true;
@@ -283,6 +327,18 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
 
     if !rect_contains(win_rect, px, py) {
         return false;
+    }
+
+    if let Some((track, kind)) = state
+        .settings
+        .slider_tracks
+        .iter()
+        .find(|(r, _)| rect_contains(*r, px, py))
+        .copied()
+    {
+        apply_slider_value(state, kind, track, px);
+        state.settings.dragging_slider = Some((kind, track));
+        return true;
     }
 
     let mut matched: Option<SettingsAction> = None;
@@ -427,28 +483,14 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                     state.settings.bt_status = format!("{} {}...", sub, dev.name);
                 }
             }
-            SettingsAction::SetVolume(vol) => {
-                state.panel.set_volume(vol);
-            }
             SettingsAction::ToggleMuteOutput => {
                 state.panel.toggle_mute();
-            }
-            SettingsAction::SetMicVolume(vol) => {
-                state.settings.mic_volume = vol.clamp(0, 100);
-                let pct = format!("{}%", state.settings.mic_volume);
-                let _ = Command::new("wpctl")
-                    .args(["set-volume", "@DEFAULT_AUDIO_SOURCE@", &pct])
-                    .spawn();
             }
             SettingsAction::ToggleMuteMic => {
                 state.settings.mic_muted = !state.settings.mic_muted;
                 let _ = Command::new("wpctl")
                     .args(["set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"])
                     .spawn();
-            }
-            SettingsAction::SetPointerSpeed(speed) => {
-                state.pointer_sensitivity = speed.clamp(0.25, 2.50);
-                save_all_prefs(state);
             }
             SettingsAction::AdjustPointerSpeed(delta) => {
                 state.pointer_sensitivity = (state.pointer_sensitivity + delta).clamp(0.25, 2.50);
@@ -559,6 +601,7 @@ pub fn render_settings_elements(
     };
 
     state.settings.hit_regions.clear();
+    state.settings.slider_tracks.clear();
     let accent = state.panel.accent_rgb();
     let wx = state.settings.position.x;
     let wy = state.settings.position.y;
@@ -593,10 +636,10 @@ pub fn render_settings_elements(
     canvas.draw_text_px(38, 13, "System Settings", 14.0, [242, 244, 252, 255]);
 
     for (i, tab) in SettingsTab::ALL.iter().enumerate() {
-        let ty = HEADER_HEIGHT + 10 + i as i32 * 40;
+        let ty = HEADER_HEIGHT + 10 + i as i32 * 38;
         let tab_rect = Rectangle::new(
             (wx + 10, wy + ty).into(),
-            (SIDEBAR_WIDTH - 16, 34).into(),
+            (SIDEBAR_WIDTH - 16, 32).into(),
         );
         let is_selected = state.settings.active_tab == *tab;
         let hovered = rect_contains(tab_rect, pointer_x, pointer_y);
@@ -612,8 +655,8 @@ pub fn render_settings_elements(
         } else {
             [232, 234, 246, 255]
         };
-        canvas.fill_rounded_rect_aa(10, ty, SIDEBAR_WIDTH - 16, 34, 8, bg);
-        canvas.draw_text_px(20, ty + 9, tab.title(), 13.0, fg);
+        canvas.fill_rounded_rect_aa(10, ty, SIDEBAR_WIDTH - 16, 32, 8, bg);
+        canvas.draw_text_px(20, ty + 8, tab.title(), 13.0, fg);
         state
             .settings
             .hit_regions
@@ -1024,24 +1067,26 @@ pub fn render_settings_elements(
             cy += 24;
 
             let bar_w = 380;
-            canvas.fill_rounded_rect_aa(content_x, cy + 6, bar_w, 16, 6, [28, 28, 42, 255]);
+            canvas.fill_rounded_rect_aa(content_x, cy + 8, bar_w, 12, 6, [28, 28, 42, 255]);
             let fill_w = ((state.panel.volume_percent as f32 / 100.0) * bar_w as f32).round() as i32;
-            canvas.fill_rounded_rect_aa(
-                content_x,
-                cy + 6,
-                fill_w.max(8),
-                16,
-                6,
-                [accent[0], accent[1], accent[2], 255],
-            );
-            for step in 0..=10 {
-                let sx = content_x + step * (bar_w / 11);
-                let s_rect = Rectangle::new((wx + sx, wy + cy).into(), (bar_w / 11, 28).into());
-                state
-                    .settings
-                    .hit_regions
-                    .push((s_rect, SettingsAction::SetVolume(step * 10)));
+            if fill_w > 2 {
+                canvas.fill_rounded_rect_aa(
+                    content_x,
+                    cy + 8,
+                    fill_w.max(6),
+                    12,
+                    6,
+                    [accent[0], accent[1], accent[2], 255],
+                );
             }
+            let knob_x = (content_x + fill_w.clamp(6, bar_w - 6)) as f32;
+            canvas.fill_circle_aa(knob_x, (cy + 14) as f32, 9.5, [accent[0], accent[1], accent[2], 235]);
+            canvas.fill_circle_aa(knob_x, (cy + 14) as f32, 7.0, [248, 250, 255, 255]);
+            let out_track = Rectangle::new((wx + content_x, wy + cy).into(), (bar_w, 28).into());
+            state
+                .settings
+                .slider_tracks
+                .push((out_track, SliderKind::OutputVol));
 
             let mute_rect = Rectangle::new((wx + content_x + 396, wy + cy).into(), (110, 28).into());
             let mute_lbl = if state.panel.volume_muted { "Unmute" } else { "Mute Out" };
@@ -1062,24 +1107,26 @@ pub fn render_settings_elements(
             canvas.draw_text_px(content_x, cy, &mic_lbl, 14.0, [238, 240, 252, 255]);
             cy += 24;
 
-            canvas.fill_rounded_rect_aa(content_x, cy + 6, bar_w, 16, 6, [28, 28, 42, 255]);
+            canvas.fill_rounded_rect_aa(content_x, cy + 8, bar_w, 12, 6, [28, 28, 42, 255]);
             let mfill_w = ((state.settings.mic_volume as f32 / 100.0) * bar_w as f32).round() as i32;
-            canvas.fill_rounded_rect_aa(
-                content_x,
-                cy + 6,
-                mfill_w.max(8),
-                16,
-                6,
-                [accent[0], accent[1], accent[2], 255],
-            );
-            for step in 0..=10 {
-                let sx = content_x + step * (bar_w / 11);
-                let s_rect = Rectangle::new((wx + sx, wy + cy).into(), (bar_w / 11, 28).into());
-                state
-                    .settings
-                    .hit_regions
-                    .push((s_rect, SettingsAction::SetMicVolume(step * 10)));
+            if mfill_w > 2 {
+                canvas.fill_rounded_rect_aa(
+                    content_x,
+                    cy + 8,
+                    mfill_w.max(6),
+                    12,
+                    6,
+                    [accent[0], accent[1], accent[2], 255],
+                );
             }
+            let mknob_x = (content_x + mfill_w.clamp(6, bar_w - 6)) as f32;
+            canvas.fill_circle_aa(mknob_x, (cy + 14) as f32, 9.5, [accent[0], accent[1], accent[2], 235]);
+            canvas.fill_circle_aa(mknob_x, (cy + 14) as f32, 7.0, [248, 250, 255, 255]);
+            let mic_track = Rectangle::new((wx + content_x, wy + cy).into(), (bar_w, 28).into());
+            state
+                .settings
+                .slider_tracks
+                .push((mic_track, SliderKind::MicVol));
 
             let mmute_rect = Rectangle::new((wx + content_x + 396, wy + cy).into(), (110, 28).into());
             let mmute_lbl = if state.settings.mic_muted { "Unmute Mic" } else { "Mute Mic" };
@@ -1118,28 +1165,27 @@ pub fn render_settings_elements(
 
             let bar_x = content_x + 46;
             let bar_w = 360;
-            canvas.fill_rounded_rect_aa(bar_x, cy + 8, bar_w, 14, 6, [28, 28, 42, 255]);
+            canvas.fill_rounded_rect_aa(bar_x, cy + 9, bar_w, 12, 6, [28, 28, 42, 255]);
             let norm = ((state.pointer_sensitivity - 0.25) / (2.50 - 0.25)).clamp(0.0, 1.0);
             let fill_w = (norm * bar_w as f64).round() as i32;
-            canvas.fill_rounded_rect_aa(
-                bar_x,
-                cy + 8,
-                fill_w.max(10),
-                14,
-                6,
-                [accent[0], accent[1], accent[2], 255],
-            );
-
-            for step in 0..=9 {
-                let seg_w = bar_w / 10;
-                let sx = bar_x + step * seg_w;
-                let spd = 0.25 + (step as f64 / 9.0) * 2.25;
-                let seg_rect = Rectangle::new((wx + sx, wy + cy).into(), (seg_w, 30).into());
-                state
-                    .settings
-                    .hit_regions
-                    .push((seg_rect, SettingsAction::SetPointerSpeed(spd)));
+            if fill_w > 2 {
+                canvas.fill_rounded_rect_aa(
+                    bar_x,
+                    cy + 9,
+                    fill_w.max(6),
+                    12,
+                    6,
+                    [accent[0], accent[1], accent[2], 255],
+                );
             }
+            let pknob_x = (bar_x + fill_w.clamp(6, bar_w - 6)) as f32;
+            canvas.fill_circle_aa(pknob_x, (cy + 15) as f32, 9.5, [accent[0], accent[1], accent[2], 235]);
+            canvas.fill_circle_aa(pknob_x, (cy + 15) as f32, 7.0, [248, 250, 255, 255]);
+            let speed_track = Rectangle::new((wx + bar_x, wy + cy).into(), (bar_w, 30).into());
+            state
+                .settings
+                .slider_tracks
+                .push((speed_track, SliderKind::PointerSpeed));
 
             let inc_rect = Rectangle::new((wx + bar_x + bar_w + 10, wy + cy).into(), (36, 30).into());
             canvas.fill_rounded_rect_aa(bar_x + bar_w + 10, cy, 36, 30, 5, [44, 44, 66, 255]);
@@ -1328,6 +1374,79 @@ pub fn render_settings_elements(
                 );
                 cy += 37;
             }
+        }
+
+        SettingsTab::Shortcuts => {
+            canvas.draw_text_px(
+                content_x,
+                cy,
+                "Keyboard & Mouse Shortcuts (Skroty klawiszowe)",
+                15.0,
+                [accent[0], accent[1], accent[2], 255],
+            );
+            cy += 28;
+
+            let bindings: &[(&str, &str)] = &[
+                ("Super + Enter", "Open Terminal"),
+                ("Super + D", "App Launcher"),
+                ("Super + O", "Window Overview"),
+                ("Super + I", "System Settings"),
+                ("Super + V", "Clipboard History"),
+                ("Super + L", "Lock Screen"),
+                ("Super + S / PrtSc", "Full Screenshot"),
+                ("Super+Shift+S", "Area Screenshot"),
+                ("Super + Q", "Close Window"),
+                ("Super + F", "Fullscreen"),
+                ("Super + T", "Tiling Mode"),
+                ("Super + A", "Always On Top"),
+                ("Super + C", "Center Window"),
+                ("Super + M", "Minimize Window"),
+                ("Super+Shift+M", "Restore Window"),
+                ("Super + [ / ]", "Master Ratio -/+"),
+                ("Super + J / K", "Focus Next / Prev"),
+                ("Super+Shift+J/K", "Swap Tiled Win"),
+                ("Super + Arrows", "Snap Half / Corner"),
+                ("Super + 1..9", "Switch Workspace"),
+                ("Super+Shift+1..9", "Move Win to WS"),
+                ("Alt/Super + Tab", "Switch Apps (+Shift)"),
+            ];
+
+            let col_w = 248;
+            let row_h = 30;
+            for (idx, (keys, desc)) in bindings.iter().enumerate() {
+                let col = idx / 11;
+                let row = idx % 11;
+                let rx = content_x + col as i32 * (col_w + 10);
+                let ry = cy + row as i32 * row_h;
+
+                canvas.fill_rounded_rect_aa(rx, ry, col_w, row_h - 4, 7, [255, 255, 255, 14]);
+                canvas.fill_rounded_rect_aa(
+                    rx + 4,
+                    ry + 3,
+                    118,
+                    row_h - 10,
+                    5,
+                    [accent[0], accent[1], accent[2], 48],
+                );
+                canvas.draw_text_px(
+                    rx + 9,
+                    ry + 7,
+                    keys,
+                    11.0,
+                    [accent[0].saturating_add(40), accent[1].saturating_add(40), accent[2].saturating_add(40), 255],
+                );
+                canvas.draw_text_px(rx + 128, ry + 7, desc, 11.5, [232, 236, 248, 255]);
+            }
+
+            let tip_y = cy + 11 * row_h + 6;
+            canvas.fill_rounded_rect_aa(content_x, tip_y, 506, 28, 7, [255, 255, 255, 10]);
+            canvas.draw_text_px(
+                content_x + 10,
+                tip_y + 7,
+                "Mouse: Super+LMB Drag | Super+RMB Resize | Title 2xClick Max | F2 Rename Icon",
+                11.0,
+                [172, 180, 206, 255],
+            );
         }
     }
 
