@@ -114,6 +114,8 @@ enum SettingsAction {
     ToggleShowWorkspaces,
     ToggleDesktopIcons,
     SelectAccent(usize),
+    ToggleDynamicAccent,
+    ToggleM3Expressive,
     AdjustWindowGaps(i32),
     AdjustBorderWidth(i32),
     ToggleAnimations,
@@ -124,11 +126,14 @@ enum SettingsAction {
     SwapMonitorsOrder,
     RefreshWifi,
     ToggleWifi(usize),
+    SubmitWifiPassword,
+    CancelWifiPassword,
     ToggleBluetoothPower,
     RefreshBluetooth,
     ToggleBluetoothDevice(usize),
     ToggleMuteOutput,
     ToggleMuteMic,
+    SelectAudioSink(String),
     AdjustPointerSpeed(f64),
     ToggleNaturalScroll,
     CycleKeyboardLayout,
@@ -148,12 +153,14 @@ pub struct SettingsState {
     slider_tracks: Vec<(Rectangle<i32, Logical>, SliderKind)>,
     pub wifi_networks: Vec<WifiNetwork>,
     pub wifi_status: String,
+    pub wifi_password_prompt: Option<(String, String)>,
     pub bt_powered: bool,
     pub bt_status: String,
     pub bt_devices: Vec<BluetoothDevice>,
     pub mic_volume: i32,
     pub mic_muted: bool,
     pub audio_sink_name: String,
+    pub audio_sinks: Vec<crate::system_backends::AudioSink>,
     pub xkb_layout: String,
     pub os_name: String,
     pub kernel_ver: String,
@@ -177,12 +184,14 @@ impl Default for SettingsState {
             slider_tracks: Vec::new(),
             wifi_networks: Vec::new(),
             wifi_status: "Click 'Refresh Scan' to query NetworkManager".to_string(),
+            wifi_password_prompt: None,
             bt_powered: true,
             bt_status: "Bluetooth Ready (click Scan Devices)".to_string(),
             bt_devices: Vec::new(),
             mic_volume: 80,
             mic_muted: false,
             audio_sink_name: "PipeWire / PulseAudio Default Output".to_string(),
+            audio_sinks: Vec::new(),
             xkb_layout: "us".to_string(),
             os_name: String::new(),
             kernel_ver: String::new(),
@@ -244,6 +253,20 @@ impl SettingsState {
     pub fn refresh_bluetooth(&mut self) {
         self.bt_status = "Scanning Bluetooth devices...".to_string();
         crate::worker::dispatch(crate::worker::WorkerRequest::RefreshBluetooth);
+    }
+
+    pub fn confirm_wifi_password(&mut self) {
+        if let Some((ssid, pw)) = self.wifi_password_prompt.take() {
+            self.wifi_status = format!("Connecting to {}...", ssid);
+            crate::worker::dispatch(crate::worker::WorkerRequest::ConnectWifi {
+                ssid,
+                password: if pw.is_empty() { None } else { Some(pw) },
+            });
+        }
+    }
+
+    pub fn cancel_wifi_password(&mut self) {
+        self.wifi_password_prompt = None;
     }
 }
 
@@ -357,12 +380,16 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
             }
             SettingsAction::SelectTab(tab) => {
                 state.settings.active_tab = tab;
+                state.settings.wifi_password_prompt = None;
                 match tab {
-                    SettingsTab::Network if state.settings.wifi_networks.is_empty() => {
+                    SettingsTab::Network => {
                         state.settings.refresh_wifi(false);
                     }
-                    SettingsTab::Bluetooth if state.settings.bt_devices.is_empty() => {
+                    SettingsTab::Bluetooth => {
                         state.settings.refresh_bluetooth();
+                    }
+                    SettingsTab::Sound => {
+                        crate::worker::dispatch(crate::worker::WorkerRequest::RefreshAudio);
                     }
                     SettingsTab::SystemInfo => {
                         state.settings.refresh_system_info();
@@ -383,8 +410,19 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                 state.overlays.show_desktop_icons = !state.overlays.show_desktop_icons;
             }
             SettingsAction::SelectAccent(idx) => {
+                state.panel.dynamic_accent = false;
                 state.panel.accent_preset = idx % ACCENT_PRESETS.len();
                 state.theme.active_border_color = state.panel.accent_f32();
+                save_all_prefs(state);
+            }
+            SettingsAction::ToggleDynamicAccent => {
+                state.panel.dynamic_accent = !state.panel.dynamic_accent;
+                state.panel.wallpaper_accent = state.desktop.dominant_accent();
+                state.theme.active_border_color = state.panel.accent_f32();
+                save_all_prefs(state);
+            }
+            SettingsAction::ToggleM3Expressive => {
+                state.panel.m3_expressive = !state.panel.m3_expressive;
                 save_all_prefs(state);
             }
             SettingsAction::AdjustWindowGaps(delta) => {
@@ -409,6 +447,10 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
             }
             SettingsAction::ReloadWallpaper => {
                 state.desktop.reload();
+                state.panel.wallpaper_accent = state.desktop.dominant_accent();
+                if state.panel.dynamic_accent {
+                    state.theme.active_border_color = state.panel.accent_f32();
+                }
                 state
                     .overlays
                     .push_notification("Wallpaper", "Reloaded ~/.config/okay-de/wallpaper.png");
@@ -447,18 +489,27 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
             SettingsAction::ToggleWifi(idx) => {
                 if let Some(net) = state.settings.wifi_networks.get(idx).cloned() {
                     if net.in_use {
-                        crate::worker::dispatch(crate::worker::WorkerRequest::RunCommand {
-                            program: "nmcli".to_string(),
-                            args: vec!["dev".into(), "wifi".into(), "disconnect".into()],
-                        });
-                        state.settings.wifi_status = format!("Disconnecting from {}...", net.ssid);
-                    } else {
-                        crate::worker::dispatch(crate::worker::WorkerRequest::ConnectWifi {
+                        crate::worker::dispatch(crate::worker::WorkerRequest::DisconnectWifi {
                             ssid: net.ssid.clone(),
                         });
+                        state.settings.wifi_status = format!("Disconnecting from {}...", net.ssid);
+                    } else if net.security == "Open" {
+                        crate::worker::dispatch(crate::worker::WorkerRequest::ConnectWifi {
+                            ssid: net.ssid.clone(),
+                            password: None,
+                        });
                         state.settings.wifi_status = format!("Connecting to {}...", net.ssid);
+                    } else {
+                        state.settings.wifi_password_prompt =
+                            Some((net.ssid.clone(), String::new()));
                     }
                 }
+            }
+            SettingsAction::SubmitWifiPassword => {
+                state.settings.confirm_wifi_password();
+            }
+            SettingsAction::CancelWifiPassword => {
+                state.settings.cancel_wifi_password();
             }
             SettingsAction::ToggleBluetoothPower => {
                 state.settings.bt_powered = !state.settings.bt_powered;
@@ -485,12 +536,18 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
             }
             SettingsAction::ToggleMuteOutput => {
                 state.panel.toggle_mute();
+                crate::worker::dispatch(crate::worker::WorkerRequest::ToggleAudioMute);
             }
             SettingsAction::ToggleMuteMic => {
                 state.settings.mic_muted = !state.settings.mic_muted;
                 let _ = Command::new("wpctl")
                     .args(["set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"])
                     .spawn();
+            }
+            SettingsAction::SelectAudioSink(sink_id) => {
+                crate::worker::dispatch(crate::worker::WorkerRequest::SetDefaultAudioSink {
+                    sink_id,
+                });
             }
             SettingsAction::AdjustPointerSpeed(delta) => {
                 state.pointer_sensitivity = (state.pointer_sensitivity + delta).clamp(0.25, 2.50);
@@ -757,39 +814,73 @@ pub fn render_settings_elements(
             canvas.fill_rounded_rect_aa(content_x + 401, cy, 30, 30, 5, [44, 44, 66, 255]);
             canvas.draw_text_px(content_x + 411, cy + 6, "+", 14.0, [240, 242, 252, 255]);
             state.settings.hit_regions.push((b_inc, SettingsAction::AdjustBorderWidth(1)));
-            cy += 40;
+            cy += 36;
+
+            // Material You Dynamic Wallpaper Accent + M3 Expressive Mode
+            let dyn_rect = Rectangle::new((wx + content_x, wy + cy).into(), (248, 32).into());
+            draw_setting_button(
+                &mut canvas,
+                content_x,
+                cy,
+                248,
+                32,
+                "Dynamic (From Wallpaper)",
+                state.panel.dynamic_accent,
+                accent,
+            );
+            state
+                .settings
+                .hit_regions
+                .push((dyn_rect, SettingsAction::ToggleDynamicAccent));
+
+            let exp_rect = Rectangle::new((wx + content_x + 258, wy + cy).into(), (248, 32).into());
+            draw_setting_button(
+                &mut canvas,
+                content_x + 258,
+                cy,
+                248,
+                32,
+                "M3 Expressive Surfaces",
+                state.panel.m3_expressive,
+                accent,
+            );
+            state
+                .settings
+                .hit_regions
+                .push((exp_rect, SettingsAction::ToggleM3Expressive));
+            cy += 38;
 
             // Row 6: Circular Accent Color Swatch Dots with Active Ring
             canvas.draw_text_px(content_x, cy, "Accent Color", 13.0, [215, 220, 238, 255]);
-            cy += 22;
-            canvas.fill_rounded_rect_aa(content_x, cy - 4, 506, 40, 10, [255, 255, 255, 16]);
+            cy += 20;
+            canvas.fill_rounded_rect_aa(content_x, cy - 4, 506, 38, 10, [255, 255, 255, 16]);
             for (idx, (name, rgb, _)) in ACCENT_PRESETS.iter().enumerate() {
                 let bx = content_x + 14 + idx as i32 * 82;
-                let preset_rect = Rectangle::new((wx + bx - 4, wy + cy).into(), (78, 32).into());
+                let preset_rect = Rectangle::new((wx + bx - 4, wy + cy).into(), (78, 30).into());
                 let dot_cx = (bx + 12) as f32;
-                let dot_cy = (cy + 16) as f32;
-                if state.panel.accent_preset == idx {
+                let dot_cy = (cy + 15) as f32;
+                if !state.panel.dynamic_accent && state.panel.accent_preset == idx {
                     canvas.fill_circle_aa(dot_cx, dot_cy, 11.5, [255, 255, 255, 235]);
                     canvas.fill_circle_aa(dot_cx, dot_cy, 9.5, [24, 26, 36, 255]);
                 }
                 canvas.fill_circle_aa(dot_cx, dot_cy, 8.0, [rgb[0], rgb[1], rgb[2], 255]);
-                canvas.draw_text_px(bx + 26, cy + 8, name, 11.5, [232, 236, 248, 255]);
+                canvas.draw_text_px(bx + 26, cy + 7, name, 11.5, [232, 236, 248, 255]);
                 state.settings.hit_regions.push((preset_rect, SettingsAction::SelectAccent(idx)));
             }
-            cy += 44;
+            cy += 40;
 
             // Row 7: Reload Wallpaper + Font Info
-            let wp_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 32).into());
-            canvas.fill_rounded_rect_aa(content_x, cy, 506, 32, 6, [38, 38, 58, 255]);
+            let wp_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 30).into());
+            canvas.fill_rounded_rect_aa(content_x, cy, 506, 30, 6, [38, 38, 58, 255]);
             canvas.draw_text_px(
                 content_x + 14,
-                cy + 8,
+                cy + 7,
                 "Reload Wallpaper (~/.config/okay-de/wallpaper.png)",
-                13.0,
+                12.5,
                 [235, 238, 250, 255],
             );
             state.settings.hit_regions.push((wp_rect, SettingsAction::ReloadWallpaper));
-            cy += 38;
+            cy += 34;
 
             let font_info = format!("Active Font: {} (TrueType anti-aliased)", active_font_name());
             canvas.draw_text_px(content_x, cy, &font_info, 12.0, [155, 160, 185, 255]);
@@ -799,7 +890,7 @@ pub fn render_settings_elements(
             canvas.draw_text_px(
                 content_x,
                 cy,
-                "Displays & Multi-Monitor Arrangement (Ekrany)",
+                "Displays & Multi-Monitor Arrangement",
                 15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
@@ -908,6 +999,29 @@ pub fn render_settings_elements(
                 .push((scan_rect, SettingsAction::RefreshWifi));
             cy += 34;
 
+            if let Some((ref target_ssid, ref pw_buf)) = state.settings.wifi_password_prompt {
+                canvas.fill_rounded_rect_aa(content_x, cy, 506, 46, 8, [accent[0], accent[1], accent[2], 36]);
+                let title = format!("Password for {}:", target_ssid);
+                canvas.draw_text_px(content_x + 12, cy + 6, &title, 11.5, [226, 232, 248, 255]);
+                let masked = if pw_buf.is_empty() {
+                    "Type password and press Enter...".to_string()
+                } else {
+                    "*".repeat(pw_buf.chars().count().min(28))
+                };
+                canvas.draw_text_px(content_x + 12, cy + 23, &masked, 12.5, [246, 248, 255, 255]);
+
+                let ok_rect = Rectangle::new((wx + content_x + 344, wy + cy + 9).into(), (74, 28).into());
+                canvas.fill_rounded_rect_aa(content_x + 344, cy + 9, 74, 28, 6, [accent[0], accent[1], accent[2], 235]);
+                canvas.draw_text_px(content_x + 356, cy + 15, "Join", 12.0, contrast_fg(accent));
+                state.settings.hit_regions.push((ok_rect, SettingsAction::SubmitWifiPassword));
+
+                let can_rect = Rectangle::new((wx + content_x + 424, wy + cy + 9).into(), (72, 28).into());
+                canvas.fill_rounded_rect_aa(content_x + 424, cy + 9, 72, 28, 6, [64, 68, 88, 245]);
+                canvas.draw_text_px(content_x + 436, cy + 15, "Cancel", 12.0, [240, 242, 252, 255]);
+                state.settings.hit_regions.push((can_rect, SettingsAction::CancelWifiPassword));
+                cy += 54;
+            }
+
             if state.settings.wifi_networks.is_empty() {
                 canvas.fill_rounded_rect_aa(content_x, cy, 506, 64, 6, [28, 28, 42, 240]);
                 canvas.draw_text_px(
@@ -918,7 +1032,7 @@ pub fn render_settings_elements(
                     [165, 170, 195, 255],
                 );
             } else {
-                for (idx, net) in state.settings.wifi_networks.iter().enumerate() {
+                for (idx, net) in state.settings.wifi_networks.iter().take(6).enumerate() {
                     let row_y = cy + idx as i32 * 46;
                     let row_bg = if net.in_use {
                         [42, 52, 68, 250]
@@ -1136,6 +1250,42 @@ pub fn render_settings_elements(
                 .settings
                 .hit_regions
                 .push((mmute_rect, SettingsAction::ToggleMuteMic));
+            cy += 44;
+
+            canvas.draw_text_px(content_x, cy, "Output Devices", 13.5, [222, 226, 244, 255]);
+            cy += 22;
+            if state.settings.audio_sinks.is_empty() {
+                canvas.fill_rounded_rect_aa(content_x, cy, 506, 36, 7, [28, 28, 42, 240]);
+                canvas.draw_text_px(
+                    content_x + 12,
+                    cy + 10,
+                    "Using default PipeWire / PulseAudio sink",
+                    12.5,
+                    [168, 174, 200, 240],
+                );
+            } else {
+                for sink in state.settings.audio_sinks.iter().take(3) {
+                    let s_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 32).into());
+                    let bg = if sink.is_default {
+                        [accent[0], accent[1], accent[2], 52]
+                    } else if rect_contains(s_rect, pointer_x, pointer_y) {
+                        [255, 255, 255, 24]
+                    } else {
+                        [28, 28, 42, 240]
+                    };
+                    canvas.fill_rounded_rect_aa(content_x, cy, 506, 32, 7, bg);
+                    let lbl = truncate_with_ellipsis(&canvas, &sink.name, 12.5, 410);
+                    canvas.draw_text_px(content_x + 12, cy + 8, &lbl, 12.5, [238, 240, 252, 255]);
+                    if sink.is_default {
+                        canvas.draw_text_px(content_x + 440, cy + 9, "Active", 11.5, [accent[0], accent[1], accent[2], 255]);
+                    }
+                    state
+                        .settings
+                        .hit_regions
+                        .push((s_rect, SettingsAction::SelectAudioSink(sink.id.clone())));
+                    cy += 36;
+                }
+            }
         }
 
         SettingsTab::MouseKeyboard => {

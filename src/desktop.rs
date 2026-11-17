@@ -33,6 +33,7 @@ struct RawWallpaper {
 #[derive(Debug, Default)]
 pub struct DesktopState {
     wallpaper: Option<RawWallpaper>,
+    extracted_accent: Option<[u8; 3]>,
     attempted_load: bool,
     cached_buffers: HashMap<String, (Size<i32, Physical>, MemoryRenderBuffer)>,
 }
@@ -63,10 +64,12 @@ impl DesktopState {
         match load_png_rgba(&path) {
             Ok(wp) => {
                 tracing::info!(?path, width = wp.width, height = wp.height, "Loaded desktop wallpaper");
+                self.extracted_accent = Some(extract_dominant_accent_from_rgba(&wp.rgba));
                 self.wallpaper = Some(wp);
             }
             Err(err) => {
                 tracing::warn!(?path, ?err, "Failed to decode wallpaper.png, using default gradient");
+                self.extracted_accent = Some([104, 154, 248]);
             }
         }
     }
@@ -75,8 +78,15 @@ impl DesktopState {
     pub fn reload(&mut self) {
         self.attempted_load = false;
         self.wallpaper = None;
+        self.extracted_accent = None;
         self.cached_buffers.clear();
         tracing::info!("Reloaded desktop wallpaper configuration");
+    }
+
+    /// Returns the Material You dominant seed accent extracted from the active wallpaper.
+    pub fn dominant_accent(&mut self) -> Option<[u8; 3]> {
+        self.ensure_wallpaper_loaded();
+        self.extracted_accent
     }
 
     /// Returns a cached `MemoryRenderBufferRenderElement` covering the given `output`.
@@ -179,6 +189,75 @@ fn load_png_rgba(path: &PathBuf) -> Result<RawWallpaper, Box<dyn std::error::Err
         height: info.height,
         rgba,
     })
+}
+
+/// Extracts a vibrant Material You seed accent `[r, g, b]` from wallpaper RGBA pixels
+/// using 24-bin hue histogram voting weighted by saturation and mid-luminance.
+fn extract_dominant_accent_from_rgba(rgba: &[u8]) -> [u8; 3] {
+    let mut bucket_weight = [0.0f32; 24];
+    let mut bucket_r = [0.0f32; 24];
+    let mut bucket_g = [0.0f32; 24];
+    let mut bucket_b = [0.0f32; 24];
+
+    let pixel_count = rgba.len() / 4;
+    let step = (pixel_count / 4096).max(1);
+    for idx in (0..pixel_count).step_by(step) {
+        let off = idx * 4;
+        let r = rgba[off] as f32 / 255.0;
+        let g = rgba[off + 1] as f32 / 255.0;
+        let b = rgba[off + 2] as f32 / 255.0;
+
+        let max_c = r.max(g).max(b);
+        let min_c = r.min(g).min(b);
+        let delta = max_c - min_c;
+        if max_c < 0.14 || delta < 0.08 {
+            continue;
+        }
+        let sat = delta / max_c.max(0.001);
+        if sat < 0.18 {
+            continue;
+        }
+
+        let mut hue = if (max_c - r).abs() < 1e-5 {
+            ((g - b) / delta) % 6.0
+        } else if (max_c - g).abs() < 1e-5 {
+            (b - r) / delta + 2.0
+        } else {
+            (r - g) / delta + 4.0
+        };
+        if hue < 0.0 {
+            hue += 6.0;
+        }
+        let bin = ((hue / 6.0) * 24.0).floor().clamp(0.0, 23.0) as usize;
+        let lum_score = 1.0 - ((max_c - 0.62).abs() * 1.1).min(0.7);
+        let w = sat * sat * lum_score.max(0.2);
+
+        bucket_weight[bin] += w;
+        bucket_r[bin] += r * w;
+        bucket_g[bin] += g * w;
+        bucket_b[bin] += b * w;
+    }
+
+    let Some((best_bin, &best_w)) = bucket_weight
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+    else {
+        return [110, 162, 250];
+    };
+    if best_w <= 0.01 {
+        return [110, 162, 250];
+    }
+
+    let r = bucket_r[best_bin] / best_w;
+    let g = bucket_g[best_bin] / best_w;
+    let b = bucket_b[best_bin] / best_w;
+
+    // Lift brightness/vibrancy so dark wallpapers still yield crisp Material You UI accents
+    let peak = r.max(g).max(b).max(0.01);
+    let boost = (0.86 / peak).clamp(1.0, 2.2);
+    let lift = |c: f32| -> u8 { ((c * boost).clamp(0.22, 0.96) * 255.0).round() as u8 };
+    [lift(r), lift(g), lift(b)]
 }
 
 /// Scales a source RGBA image to cover `(dst_w, dst_h)` with aspect-ratio preservation.

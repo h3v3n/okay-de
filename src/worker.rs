@@ -28,6 +28,10 @@ pub enum WorkerRequest {
     },
     ConnectWifi {
         ssid: String,
+        password: Option<String>,
+    },
+    DisconnectWifi {
+        ssid: String,
     },
     RefreshBluetooth,
     ToggleBluetoothPower {
@@ -36,6 +40,14 @@ pub enum WorkerRequest {
     ToggleBluetoothDevice {
         mac: String,
         connect: bool,
+    },
+    RefreshAudio,
+    SetAudioVolume {
+        percent: i32,
+    },
+    ToggleAudioMute,
+    SetDefaultAudioSink {
+        sink_id: String,
     },
     RefreshSystemInfo,
     PollExternalClipboard,
@@ -73,6 +85,12 @@ pub enum WorkerResponse {
     BluetoothRefreshed {
         devices: Vec<BluetoothDevice>,
         status: String,
+        powered: bool,
+    },
+    AudioRefreshed {
+        volume_percent: Option<i32>,
+        volume_muted: Option<bool>,
+        sinks: Vec<crate::system_backends::AudioSink>,
     },
     SystemInfoRefreshed(SystemInfoSnapshot),
     ClipboardText {
@@ -121,9 +139,32 @@ pub fn handle_response(state: &mut OkayState, resp: WorkerResponse) {
             state.settings.wifi_networks = networks;
             state.settings.wifi_status = status;
         }
-        WorkerResponse::BluetoothRefreshed { devices, status } => {
+        WorkerResponse::BluetoothRefreshed {
+            devices,
+            status,
+            powered,
+        } => {
             state.settings.bt_devices = devices;
             state.settings.bt_status = status;
+            state.settings.bt_powered = powered;
+        }
+        WorkerResponse::AudioRefreshed {
+            volume_percent,
+            volume_muted,
+            sinks,
+        } => {
+            if let Some(v) = volume_percent {
+                if !state.overlays.cc_dragging_volume && state.settings.dragging_slider.is_none() {
+                    state.panel.volume_percent = v.clamp(0, 100);
+                }
+            }
+            if let Some(m) = volume_muted {
+                state.panel.volume_muted = m;
+            }
+            if let Some(def) = sinks.iter().find(|s| s.is_default) {
+                state.settings.audio_sink_name = def.name.clone();
+            }
+            state.settings.audio_sinks = sinks;
         }
         WorkerResponse::SystemInfoRefreshed(snap) => {
             state.settings.apply_system_info_snapshot(snap);
@@ -175,33 +216,79 @@ fn worker_loop(req_rx: mpsc::Receiver<WorkerRequest>, resp_tx: CalloopSender<Wor
                 let _ = resp_tx.send(WorkerResponse::IconLoaded);
             }
             WorkerRequest::RefreshWifi { force_rescan } => {
-                let (networks, status) = fetch_wifi(force_rescan);
+                let (networks, status) = crate::system_backends::scan_wifi(force_rescan);
                 let _ = resp_tx.send(WorkerResponse::WifiRefreshed { networks, status });
             }
-            WorkerRequest::ConnectWifi { ssid } => {
-                let _ = Command::new("nmcli")
-                    .args(["dev", "wifi", "connect", &ssid])
-                    .status();
-                let (networks, status) = fetch_wifi(false);
+            WorkerRequest::ConnectWifi { ssid, password } => {
+                let (networks, status) =
+                    crate::system_backends::connect_wifi(&ssid, password.as_deref());
+                let _ = resp_tx.send(WorkerResponse::WifiRefreshed { networks, status });
+            }
+            WorkerRequest::DisconnectWifi { ssid } => {
+                let (networks, status) = crate::system_backends::disconnect_wifi(&ssid);
                 let _ = resp_tx.send(WorkerResponse::WifiRefreshed { networks, status });
             }
             WorkerRequest::RefreshBluetooth => {
-                let (devices, status) = fetch_bluetooth();
-                let _ = resp_tx.send(WorkerResponse::BluetoothRefreshed { devices, status });
+                let (devices, status, powered) = crate::system_backends::scan_bluetooth();
+                let _ = resp_tx.send(WorkerResponse::BluetoothRefreshed {
+                    devices,
+                    status,
+                    powered,
+                });
             }
             WorkerRequest::ToggleBluetoothPower { enable } => {
-                let arg = if enable { "on" } else { "off" };
-                let _ = Command::new("bluetoothctl")
-                    .args(["power", arg])
-                    .status();
-                let (devices, status) = fetch_bluetooth();
-                let _ = resp_tx.send(WorkerResponse::BluetoothRefreshed { devices, status });
+                let (devices, status, powered) =
+                    crate::system_backends::toggle_bluetooth_power(enable);
+                let _ = resp_tx.send(WorkerResponse::BluetoothRefreshed {
+                    devices,
+                    status,
+                    powered,
+                });
             }
             WorkerRequest::ToggleBluetoothDevice { mac, connect } => {
-                let sub = if connect { "connect" } else { "disconnect" };
-                let _ = Command::new("bluetoothctl").args([sub, &mac]).status();
-                let (devices, status) = fetch_bluetooth();
-                let _ = resp_tx.send(WorkerResponse::BluetoothRefreshed { devices, status });
+                let (devices, status, powered) =
+                    crate::system_backends::connect_or_pair_bluetooth(&mac, connect);
+                let _ = resp_tx.send(WorkerResponse::BluetoothRefreshed {
+                    devices,
+                    status,
+                    powered,
+                });
+            }
+            WorkerRequest::RefreshAudio => {
+                let (volume_percent, volume_muted, sinks) =
+                    crate::system_backends::poll_audio_state();
+                let _ = resp_tx.send(WorkerResponse::AudioRefreshed {
+                    volume_percent,
+                    volume_muted,
+                    sinks,
+                });
+            }
+            WorkerRequest::SetAudioVolume { percent } => {
+                let (volume_percent, volume_muted, sinks) =
+                    crate::system_backends::set_audio_volume(percent);
+                let _ = resp_tx.send(WorkerResponse::AudioRefreshed {
+                    volume_percent,
+                    volume_muted,
+                    sinks,
+                });
+            }
+            WorkerRequest::ToggleAudioMute => {
+                let (volume_percent, volume_muted, sinks) =
+                    crate::system_backends::toggle_audio_mute();
+                let _ = resp_tx.send(WorkerResponse::AudioRefreshed {
+                    volume_percent,
+                    volume_muted,
+                    sinks,
+                });
+            }
+            WorkerRequest::SetDefaultAudioSink { sink_id } => {
+                let (volume_percent, volume_muted, sinks) =
+                    crate::system_backends::set_default_audio_sink(&sink_id);
+                let _ = resp_tx.send(WorkerResponse::AudioRefreshed {
+                    volume_percent,
+                    volume_muted,
+                    sinks,
+                });
             }
             WorkerRequest::RefreshSystemInfo => {
                 let snap = crate::settings::collect_system_info_snapshot();
@@ -365,102 +452,4 @@ fn poll_panel_status_sync() -> (Option<i32>, Option<i32>, Option<bool>, Option<S
     }
 
     (battery_percent, volume_percent, volume_muted, active_wifi_ssid)
-}
-
-fn fetch_wifi(force_rescan: bool) -> (Vec<WifiNetwork>, String) {
-    let rescan_arg = if force_rescan { "yes" } else { "no" };
-    let output = Command::new("nmcli")
-        .args([
-            "-t",
-            "-f",
-            "IN-USE,SSID,SIGNAL,SECURITY",
-            "dev",
-            "wifi",
-            "list",
-            "--rescan",
-            rescan_arg,
-        ])
-        .output();
-
-    match output {
-        Ok(out) if out.status.success() => {
-            let text = String::from_utf8_lossy(&out.stdout);
-            let mut nets = Vec::new();
-            let mut active_ssid = None;
-            for line in text.lines() {
-                let parts: Vec<&str> = line.splitn(4, ':').collect();
-                if parts.len() >= 4 {
-                    let in_use = parts[0].trim() == "*";
-                    let ssid = parts[1].trim();
-                    if ssid.is_empty() {
-                        continue;
-                    }
-                    if in_use {
-                        active_ssid = Some(ssid.to_string());
-                    }
-                    if nets.iter().any(|n: &WifiNetwork| n.ssid == ssid) {
-                        continue;
-                    }
-                    nets.push(WifiNetwork {
-                        in_use,
-                        ssid: ssid.to_string(),
-                        signal: parts[2].trim().to_string(),
-                        security: if parts[3].trim().is_empty() {
-                            "Open".to_string()
-                        } else {
-                            parts[3].trim().to_string()
-                        },
-                    });
-                    if nets.len() >= 6 {
-                        break;
-                    }
-                }
-            }
-            let status = match active_ssid {
-                Some(s) => format!("Connected to {}", s),
-                None => format!("Found {} Wi-Fi networks", nets.len()),
-            };
-            (nets, status)
-        }
-        Ok(out) => {
-            let err = String::from_utf8_lossy(&out.stderr);
-            let msg = format!(
-                "nmcli: {}",
-                err.lines().next().unwrap_or("unavailable")
-            );
-            (Vec::new(), msg)
-        }
-        Err(_) => (
-            Vec::new(),
-            "NetworkManager (nmcli) not installed".to_string(),
-        ),
-    }
-}
-
-fn fetch_bluetooth() -> (Vec<BluetoothDevice>, String) {
-    let out = Command::new("bluetoothctl").arg("devices").output();
-    match out {
-        Ok(res) if res.status.success() => {
-            let text = String::from_utf8_lossy(&res.stdout);
-            let mut devs = Vec::new();
-            for line in text.lines() {
-                let mut parts = line.splitn(3, ' ');
-                if parts.next() == Some("Device") {
-                    if let (Some(mac), Some(name)) = (parts.next(), parts.next()) {
-                        devs.push(BluetoothDevice {
-                            mac: mac.to_string(),
-                            name: name.trim().to_string(),
-                            connected: false,
-                        });
-                    }
-                }
-            }
-            let status = format!("Found {} Bluetooth devices", devs.len());
-            (devs, status)
-        }
-        _ => (
-            Vec::new(),
-            "bluetoothctl service not active or unavailable".to_string(),
-        ),
-    }
 }

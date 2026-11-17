@@ -46,6 +46,40 @@ pub const ACCENT_PRESETS: [(&str, [u8; 3], [f32; 4]); 6] = [
     ("Crimson", [235, 111, 146], [0.922, 0.435, 0.573, 1.0]),
 ];
 
+#[derive(Debug, Clone, Copy)]
+pub struct MaterialPalette {
+    pub accent: [u8; 3],
+    pub surface: [u8; 3],
+    pub surface_container: [u8; 3],
+    pub outline: [u8; 3],
+    pub expressive: bool,
+}
+
+impl Default for MaterialPalette {
+    fn default() -> Self {
+        Self {
+            accent: [137, 180, 250],
+            surface: [24, 26, 36],
+            surface_container: [32, 35, 48],
+            outline: [76, 86, 112],
+            expressive: false,
+        }
+    }
+}
+
+thread_local! {
+    static ACTIVE_M3_PALETTE: std::cell::Cell<MaterialPalette> =
+        std::cell::Cell::new(MaterialPalette::default());
+}
+
+pub fn set_active_m3_palette(pal: MaterialPalette) {
+    ACTIVE_M3_PALETTE.with(|c| c.set(pal));
+}
+
+pub fn active_m3_palette() -> MaterialPalette {
+    ACTIVE_M3_PALETTE.with(|c| c.get())
+}
+
 #[derive(Debug, Clone)]
 pub struct DesktopAppEntry {
     pub name: String,
@@ -169,6 +203,9 @@ pub struct PanelState {
     pub dock_mode: bool,
     pub panel_top: bool,
     pub accent_preset: usize,
+    pub dynamic_accent: bool,
+    pub m3_expressive: bool,
+    pub wallpaper_accent: Option<[u8; 3]>,
     pub window_gaps: i32,
     pub search_query: String,
     pub desktop_apps: Vec<DesktopAppEntry>,
@@ -196,6 +233,9 @@ impl Default for PanelState {
             dock_mode: true,
             panel_top: true,
             accent_preset: 1,
+            dynamic_accent: false,
+            m3_expressive: false,
+            wallpaper_accent: None,
             window_gaps: 10,
             search_query: String::new(),
             desktop_apps: scan_desktop_applications(),
@@ -236,11 +276,53 @@ impl PanelState {
     }
 
     pub fn accent_rgb(&self) -> [u8; 3] {
+        if self.dynamic_accent {
+            if let Some(wp_rgb) = self.wallpaper_accent {
+                return wp_rgb;
+            }
+        }
         ACCENT_PRESETS[self.accent_preset % ACCENT_PRESETS.len()].1
     }
 
     pub fn accent_f32(&self) -> [f32; 4] {
-        ACCENT_PRESETS[self.accent_preset % ACCENT_PRESETS.len()].2
+        let rgb = self.accent_rgb();
+        [
+            rgb[0] as f32 / 255.0,
+            rgb[1] as f32 / 255.0,
+            rgb[2] as f32 / 255.0,
+            1.0,
+        ]
+    }
+
+    /// Computes the cohesive Material You / M3 Expressive tonal palette from the active accent.
+    pub fn material_palette(&self) -> MaterialPalette {
+        let accent = self.accent_rgb();
+        let mix = |base: u8, tint: u8, t: f32| -> u8 {
+            ((base as f32 * (1.0 - t) + tint as f32 * t).round().clamp(0.0, 255.0)) as u8
+        };
+        let t_surf = if self.m3_expressive { 0.14 } else { 0.06 };
+        let t_cont = if self.m3_expressive { 0.22 } else { 0.11 };
+        let t_out = if self.m3_expressive { 0.42 } else { 0.24 };
+
+        MaterialPalette {
+            accent,
+            surface: [
+                mix(22, accent[0], t_surf),
+                mix(24, accent[1], t_surf),
+                mix(32, accent[2], t_surf),
+            ],
+            surface_container: [
+                mix(32, accent[0], t_cont),
+                mix(34, accent[1], t_cont),
+                mix(46, accent[2], t_cont),
+            ],
+            outline: [
+                mix(72, accent[0], t_out),
+                mix(78, accent[1], t_out),
+                mix(98, accent[2], t_out),
+            ],
+            expressive: self.m3_expressive,
+        }
     }
 
     /// Reads `~/.config/okay-de/config.toml` and returns user input & animation settings.
@@ -288,6 +370,8 @@ impl PanelState {
                             self.accent_preset = idx % ACCENT_PRESETS.len();
                         }
                     }
+                    "dynamic_accent" => self.dynamic_accent = val == "true",
+                    "m3_expressive" => self.m3_expressive = val == "true",
                     "window_gaps" => {
                         if let Ok(g) = val.parse::<i32>() {
                             self.window_gaps = g.clamp(0, 32);
@@ -380,11 +464,13 @@ impl PanelState {
             let _ = fs::create_dir_all(parent);
         }
         let mut body = format!(
-            "# OKay DE Configuration\ndock_mode = {}\npanel_top = {}\nshow_workspaces = {}\naccent_preset = {}\nwindow_gaps = {}\npointer_speed = {:.2}\nnatural_scroll = {}\nanimations_enabled = {}\nanimation_speed = {:.2}\nminimize_effect = \"{}\"\ndefault_terminal = \"{}\"\ndefault_browser = \"{}\"\ndefault_file_manager = \"{}\"\nxkb_layout = \"{}\"\n",
+            "# OKay DE Configuration\ndock_mode = {}\npanel_top = {}\nshow_workspaces = {}\naccent_preset = {}\ndynamic_accent = {}\nm3_expressive = {}\nwindow_gaps = {}\npointer_speed = {:.2}\nnatural_scroll = {}\nanimations_enabled = {}\nanimation_speed = {:.2}\nminimize_effect = \"{}\"\ndefault_terminal = \"{}\"\ndefault_browser = \"{}\"\ndefault_file_manager = \"{}\"\nxkb_layout = \"{}\"\n",
             self.dock_mode,
             self.panel_top,
             self.show_workspaces,
             self.accent_preset,
+            self.dynamic_accent,
+            self.m3_expressive,
             self.window_gaps,
             pointer_speed,
             natural_scroll,
@@ -2698,19 +2784,39 @@ impl Canvas {
         }
     }
 
-    /// Draws a sleek macOS translucent dark glass panel (`rgba(24, 26, 36, 0.86)`)
-    /// with a soft drop shadow and `1px rgba(255, 255, 255, 0.14)` inner top highlight.
+    /// Draws a clean Material 3 tonal surface panel tinted by the active Material You palette
+    /// (opaque enough to eliminate bleed-through artifacts from underlying layers) with a 1px outline.
     pub fn fill_glass_panel(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32) {
+        let pal = active_m3_palette();
         // Soft drop shadow
         self.fill_rounded_rect_aa(x - 2, y + 3, w + 4, h + 4, radius + 2, [0, 0, 0, 56]);
-        self.fill_rounded_rect_aa(x - 1, y + 1, w + 2, h + 2, radius + 1, [0, 0, 0, 72]);
-        // Translucent dark glass body: rgba(24, 26, 36, 0.90) -> alpha 230
-        self.fill_rounded_rect_aa(x, y, w, h, radius, [24, 26, 36, 230]);
-        // Subtle 1px inner top & bottom glass edge highlights
+        self.fill_rounded_rect_aa(x - 1, y + 1, w + 2, h + 2, radius + 1, [0, 0, 0, 74]);
+        // 1px Material 3 tonal outline border
+        let border_alpha = if pal.expressive { 165 } else { 105 };
+        self.fill_rounded_rect_aa(
+            x,
+            y,
+            w,
+            h,
+            radius,
+            [pal.outline[0], pal.outline[1], pal.outline[2], border_alpha],
+        );
+        // Clean Material 3 tonal surface body (high opacity prevents bleed-through)
+        if w > 2 && h > 2 {
+            self.fill_rounded_rect_aa(
+                x + 1,
+                y + 1,
+                w - 2,
+                h - 2,
+                (radius - 1).max(2),
+                [pal.surface[0], pal.surface[1], pal.surface[2], 250],
+            );
+        }
+        // Subtle 1px inner top highlight
         let inset = (radius / 2).max(4);
         if w > inset * 2 {
-            self.fill_rect_blend(x + inset, y + 1, w - inset * 2, 1, [255, 255, 255, 42]);
-            self.fill_rect_blend(x + inset, y + h - 2, w - inset * 2, 1, [255, 255, 255, 14]);
+            let hi_alpha = if pal.expressive { 58 } else { 36 };
+            self.fill_rect_blend(x + inset, y + 1, w - inset * 2, 1, [255, 255, 255, hi_alpha]);
         }
     }
 

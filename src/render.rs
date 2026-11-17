@@ -60,6 +60,8 @@ pub fn collect_output_elements(
     };
 
     // Advance 60+ FPS animations once per output frame
+    state.panel.wallpaper_accent = state.desktop.dominant_accent();
+    crate::panel::set_active_m3_palette(state.panel.material_palette());
     state.animations.tick(
         state.panel.launcher_open,
         state.overlays.calendar_open,

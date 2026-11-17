@@ -910,14 +910,14 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
             OverlayClick::ControlConnectWifi(idx) => {
                 if let Some(net) = state.settings.wifi_networks.get(idx).cloned() {
                     if net.in_use {
-                        crate::worker::dispatch(crate::worker::WorkerRequest::RunCommand {
-                            program: "nmcli".to_string(),
-                            args: vec!["dev".into(), "wifi".into(), "disconnect".into()],
+                        crate::worker::dispatch(crate::worker::WorkerRequest::DisconnectWifi {
+                            ssid: net.ssid.clone(),
                         });
                         state.settings.wifi_status = format!("Disconnecting {}...", net.ssid);
                     } else {
                         crate::worker::dispatch(crate::worker::WorkerRequest::ConnectWifi {
                             ssid: net.ssid.clone(),
+                            password: None,
                         });
                         state.settings.wifi_status = format!("Connecting to {}...", net.ssid);
                     }

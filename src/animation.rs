@@ -464,21 +464,30 @@ uniform sampler2D tex;
 
 float genieCurve(float x) {
     float c = clamp(x, 0.0, 1.0);
-    return c * c * (3.0 - 2.0 * c);
+    // Smooth sinusoidal + cubic-Bezier S-curve for macOS Genie suction
+    float cos_s = 0.5 - 0.5 * cos(3.14159265 * c);
+    float bez_s = c * c * (3.0 - 2.0 * c);
+    return mix(cos_s, bez_s, 0.35);
 }
 
 void main() {
     vec2 px = v_coords * u_bbox_size;
 
-    float top_y = mix(u_src.y, u_dst.y, clamp(u_t * 1.15 - 0.15, 0.0, 1.0));
-    float bot_y = mix(u_src.w, u_dst.w, clamp(u_t * 1.35, 0.0, 1.0));
+    // Stage 1: bottom reaches into dock icon; Stage 2: top slides smoothly into dock
+    float top_t = smoothstep(0.18, 1.0, u_t);
+    float bot_t = smoothstep(0.0, 0.45, u_t);
+    float top_y = mix(u_src.y, u_dst.y, top_t);
+    float bot_y = mix(u_src.w, u_dst.w, bot_t);
     float span_y = max(bot_y - top_y, 2.0);
     float v = (px.y - top_y) / span_y;
+    float vc = clamp(v, 0.0, 1.0);
 
-    float pinch = clamp(u_t * 1.45 + clamp(v, 0.0, 1.0) * 0.75 - 0.25, 0.0, 1.0);
-    float s = genieCurve(pinch);
-    float left_x = mix(u_src.x, u_dst.x, s);
-    float right_x = mix(u_src.z, u_dst.z, s);
+    // Sinusoidal funneling toward the exact X bounds of the target Dock icon
+    float funnel = clamp(u_t * 1.32 + vc * 0.68 - 0.22, 0.0, 1.0);
+    float s = genieCurve(funnel);
+    float wave = sin(vc * 3.14159265) * sin(u_t * 3.14159265) * 0.04 * (u_dst.x - u_src.x);
+    float left_x = mix(u_src.x, u_dst.x, s) + wave;
+    float right_x = mix(u_src.z, u_dst.z, s) + wave;
     float span_x = max(right_x - left_x, 2.0);
     float u = (px.x - left_x) / span_x;
 
@@ -575,20 +584,26 @@ uniform vec3 u_accent;
 
 float genieCurve(float x) {
     float c = clamp(x, 0.0, 1.0);
-    return c * c * (3.0 - 2.0 * c);
+    float cos_s = 0.5 - 0.5 * cos(3.14159265 * c);
+    float bez_s = c * c * (3.0 - 2.0 * c);
+    return mix(cos_s, bez_s, 0.35);
 }
 
 void main() {
     vec2 px = v_coords * size;
-    float top_y = mix(u_src.y, u_dst.y, clamp(u_t * 1.15 - 0.15, 0.0, 1.0));
-    float bot_y = mix(u_src.w, u_dst.w, clamp(u_t * 1.35, 0.0, 1.0));
+    float top_t = smoothstep(0.18, 1.0, u_t);
+    float bot_t = smoothstep(0.0, 0.45, u_t);
+    float top_y = mix(u_src.y, u_dst.y, top_t);
+    float bot_y = mix(u_src.w, u_dst.w, bot_t);
     float span_y = max(bot_y - top_y, 2.0);
     float v = (px.y - top_y) / span_y;
+    float vc = clamp(v, 0.0, 1.0);
 
-    float pinch = clamp(u_t * 1.45 + clamp(v, 0.0, 1.0) * 0.75 - 0.25, 0.0, 1.0);
-    float s = genieCurve(pinch);
-    float left_x = mix(u_src.x, u_dst.x, s);
-    float right_x = mix(u_src.z, u_dst.z, s);
+    float funnel = clamp(u_t * 1.32 + vc * 0.68 - 0.22, 0.0, 1.0);
+    float s = genieCurve(funnel);
+    float wave = sin(vc * 3.14159265) * sin(u_t * 3.14159265) * 0.04 * (u_dst.x - u_src.x);
+    float left_x = mix(u_src.x, u_dst.x, s) + wave;
+    float right_x = mix(u_src.z, u_dst.z, s) + wave;
 
     float mask_x = smoothstep(left_x - 1.5, left_x + 0.8, px.x) *
                    (1.0 - smoothstep(right_x - 0.8, right_x + 1.5, px.x));

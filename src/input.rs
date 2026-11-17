@@ -77,6 +77,10 @@ enum KeyAction {
     RenameIconBackspace,
     ConfirmRenameIcon,
     CancelRenameIcon,
+    WifiPwTypeChar(char),
+    WifiPwBackspace,
+    ConfirmWifiPw,
+    CancelWifiPw,
     CloseAnyOverlay,
     ExitCompositor,
 }
@@ -173,6 +177,30 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
                     }
                 }
                 return FilterResult::Intercept(KeyAction::RenameIconTypeChar('\0'));
+            }
+
+            // Inline Wi-Fi password prompt inside OKay Settings -> Wi-Fi & Network
+            if state.settings.open
+                && state.settings.wifi_password_prompt.is_some()
+                && !modifiers.logo
+                && !modifiers.ctrl
+                && !modifiers.alt
+            {
+                if raw_u32 == keysyms::KEY_Return {
+                    return FilterResult::Intercept(KeyAction::ConfirmWifiPw);
+                }
+                if raw_u32 == keysyms::KEY_Escape {
+                    return FilterResult::Intercept(KeyAction::CancelWifiPw);
+                }
+                if raw_u32 == keysyms::KEY_BackSpace {
+                    return FilterResult::Intercept(KeyAction::WifiPwBackspace);
+                }
+                if (0x20..=0x7e).contains(&raw_u32) {
+                    if let Some(ch) = char::from_u32(raw_u32) {
+                        return FilterResult::Intercept(KeyAction::WifiPwTypeChar(ch));
+                    }
+                }
+                return FilterResult::Intercept(KeyAction::WifiPwTypeChar('\0'));
             }
 
             // Super + Return -> Spawn terminal
@@ -591,6 +619,26 @@ fn execute_key_action(state: &mut OkayState, action: KeyAction) {
         }
         KeyAction::CancelRenameIcon => {
             state.overlays.cancel_renaming_icon();
+        }
+        KeyAction::WifiPwTypeChar(ch) => {
+            if ch != '\0' {
+                if let Some((_, ref mut pw)) = state.settings.wifi_password_prompt {
+                    if pw.chars().count() < 64 {
+                        pw.push(ch);
+                    }
+                }
+            }
+        }
+        KeyAction::WifiPwBackspace => {
+            if let Some((_, ref mut pw)) = state.settings.wifi_password_prompt {
+                pw.pop();
+            }
+        }
+        KeyAction::ConfirmWifiPw => {
+            state.settings.confirm_wifi_password();
+        }
+        KeyAction::CancelWifiPw => {
+            state.settings.cancel_wifi_password();
         }
         KeyAction::CloseAnyOverlay => {
             state.overlays.overview_open = false;
