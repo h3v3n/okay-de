@@ -555,6 +555,9 @@ fn init_drm_connector_output(
         },
     );
     let wl_mode = OutputMode::from(mode);
+    for m in conn.modes() {
+        output.add_mode(OutputMode::from(*m));
+    }
     output.create_global::<OkayState>(&state.display_handle);
     output.change_current_state(
         Some(wl_mode),

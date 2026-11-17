@@ -69,6 +69,7 @@ pub fn collect_output_elements(
         state.overlays.clipboard_open,
         state.overlays.control_center_open,
         state.panel.top_bar_menu.is_some(),
+        state.panel.tray_open,
     );
 
     // 0. Pointer cursor (topmost element on whichever output contains the pointer)
@@ -184,6 +185,8 @@ pub fn collect_output_elements(
         } else {
             let is_focused = win_id.as_ref() == focused_id.as_ref();
             let is_pinned = state.workspaces.is_pinned(window);
+            let is_maximized = state.workspaces.is_maximized(window);
+            let corner_radius = if is_maximized { 0.0f32 } else { 18.0f32 };
             let pointer_local = state.pointer_location - output_geo.loc.to_f64();
             let win_geo = window.geometry();
             let tb_h = crate::state::TITLEBAR_HEIGHT;
@@ -204,6 +207,8 @@ pub fn collect_output_elements(
                     pointer_local,
                     is_focused,
                     is_pinned,
+                    is_maximized,
+                    corner_radius,
                     accent,
                     scale,
                     alpha,
@@ -214,16 +219,18 @@ pub fn collect_output_elements(
             if let Some(rounded_elem) = rendered_offscreen {
                 elements.push(rounded_elem);
 
-                // Soft ambient drop shadow behind all 4 rounded corners
-                let pad = 14;
-                let shadow_area = Rectangle::new(
-                    local_loc + win_geo.loc - Point::from((pad, pad + tb_h)),
-                    (full_w + pad * 2, full_h + pad * 2).into(),
-                );
-                if let Some(sdf_elem) =
-                    sdf_rounded_window_element(renderer, shadow_area, 18.0, pad as f32, 0.0, alpha)
-                {
-                    elements.push(sdf_elem);
+                // Soft ambient drop shadow behind all 4 rounded corners (skipped when maximized)
+                if corner_radius > 0.0 {
+                    let pad = 14;
+                    let shadow_area = Rectangle::new(
+                        local_loc + win_geo.loc - Point::from((pad, pad + tb_h)),
+                        (full_w + pad * 2, full_h + pad * 2).into(),
+                    );
+                    if let Some(sdf_elem) =
+                        sdf_rounded_window_element(renderer, shadow_area, corner_radius, pad as f32, 0.0, alpha)
+                    {
+                        elements.push(sdf_elem);
+                    }
                 }
             } else {
                 // Fallback direct rendering
@@ -237,6 +244,7 @@ pub fn collect_output_elements(
                     pointer_local,
                     is_focused,
                     is_pinned,
+                    is_maximized,
                     accent,
                     renderer,
                     scale,
@@ -440,6 +448,8 @@ fn render_rounded_window_offscreen(
     pointer_local: Point<f64, Logical>,
     is_focused: bool,
     is_pinned: bool,
+    is_maximized: bool,
+    corner_radius: f32,
     accent: [u8; 3],
     scale: Scale<f64>,
     alpha: f32,
@@ -486,6 +496,7 @@ fn render_rounded_window_offscreen(
         off_pointer,
         is_focused,
         is_pinned,
+        is_maximized,
         accent,
         renderer,
         scale,
@@ -592,7 +603,7 @@ void main() {
         program,
         vec![
             Uniform::new("u_size", [full_w as f32, full_h as f32]),
-            Uniform::new("u_radius", 18.0f32),
+            Uniform::new("u_radius", corner_radius),
             Uniform::new("u_border_alpha", border_alpha),
         ],
     )))

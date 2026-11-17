@@ -170,6 +170,8 @@ enum ClickTarget {
     ToggleCalendar,
     ToggleNotifDrawer,
     ToggleControlCenter,
+    ToggleTrayDrawer,
+    CloseWindowId(ObjectId),
     ToggleMute,
     ToggleTiling,
     ToggleOverview,
@@ -213,6 +215,8 @@ pub struct PanelState {
     pub hidden_builtins: Vec<LauncherItem>,
     pub pin_context_menu: Option<(Point<i32, Logical>, PinContextAction)>,
     pub top_bar_menu: Option<(TopBarMenu, i32)>,
+    pub tray_open: bool,
+    pub dock_auto_revealed: bool,
     pub default_terminal: String,
     pub default_browser: String,
     pub default_file_manager: String,
@@ -243,6 +247,8 @@ impl Default for PanelState {
             hidden_builtins: Vec::new(),
             pin_context_menu: None,
             top_bar_menu: None,
+            tray_open: false,
+            dock_auto_revealed: false,
             default_terminal: "foot".to_string(),
             default_browser: "firefox".to_string(),
             default_file_manager: "thunar".to_string(),
@@ -835,20 +841,42 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
             }
             ClickTarget::ToggleCalendar => {
                 state.panel.launcher_open = false;
+                state.panel.tray_open = false;
                 state.overlays.calendar_open = !state.overlays.calendar_open;
                 state.overlays.notif_drawer_open = false;
             }
             ClickTarget::ToggleNotifDrawer => {
                 state.panel.launcher_open = false;
+                state.panel.tray_open = false;
                 state.overlays.notif_drawer_open = !state.overlays.notif_drawer_open;
                 state.overlays.calendar_open = false;
                 state.overlays.control_center_open = false;
             }
             ClickTarget::ToggleControlCenter => {
                 state.panel.launcher_open = false;
+                state.panel.tray_open = false;
                 state.overlays.control_center_open = !state.overlays.control_center_open;
                 state.overlays.calendar_open = false;
                 state.overlays.notif_drawer_open = false;
+            }
+            ClickTarget::ToggleTrayDrawer => {
+                state.panel.launcher_open = false;
+                state.panel.tray_open = !state.panel.tray_open;
+                state.overlays.calendar_open = false;
+                state.overlays.notif_drawer_open = false;
+                state.overlays.control_center_open = false;
+            }
+            ClickTarget::CloseWindowId(id) => {
+                if let Some(win) = state
+                    .space
+                    .elements()
+                    .find(|w| w.toplevel().map(|t| t.wl_surface().id() == id).unwrap_or(false))
+                    .cloned()
+                {
+                    if let Some(toplevel) = win.toplevel() {
+                        toplevel.send_close();
+                    }
+                }
             }
             ClickTarget::OpenTopMenu(menu, anchor_x) => {
                 state.panel.launcher_open = false;
@@ -1332,30 +1360,35 @@ pub fn render_panel_elements(
             .hit_regions
             .push((vol_global, ClickTarget::ToggleMute));
 
-        // Wi-Fi vector icon pill
-        let wifi_w = 30;
-        let wifi_x = vol_x - wifi_w - 6;
-        let wifi_global = Rectangle::new(
-            (output_geo.loc.x + wifi_x, output_geo.loc.y + 3).into(),
-            (wifi_w, mb_h - 6).into(),
+        // Background Apps / Tray Chevron Arrow (`^` / `v`)
+        let tray_w = 28;
+        let tray_x = vol_x - tray_w - 6;
+        let tray_global = Rectangle::new(
+            (output_geo.loc.x + tray_x, output_geo.loc.y + 3).into(),
+            (tray_w, mb_h - 6).into(),
         );
-        let wifi_bg = if rect_contains(wifi_global, pointer_x, pointer_y) {
+        let tray_bg = if state.panel.tray_open {
+            [accent[0], accent[1], accent[2], 78]
+        } else if rect_contains(tray_global, pointer_x, pointer_y) {
             [255, 255, 255, 34]
         } else {
             [255, 255, 255, 16]
         };
-        mb.fill_rounded_rect_aa(wifi_x, 4, wifi_w, mb_h - 8, 6, wifi_bg);
-        crate::icons::draw_wifi_glyph(
-            &mut mb,
-            (wifi_x + wifi_w / 2) as f32,
-            (mb_h / 2 + 5) as f32,
-            0.9,
-            [232, 236, 250, 250],
-        );
+        mb.fill_rounded_rect_aa(tray_x, 4, tray_w, mb_h - 8, 6, tray_bg);
+        let acx = (tray_x + tray_w / 2) as f32;
+        let acy = (mb_h / 2) as f32;
+        let chev_dir = if state.panel.tray_open { -1.0 } else { 1.0 };
+        for i in 0..=8 {
+            let t = i as f32 / 8.0;
+            let dx = -4.5 + t * 4.5;
+            let dy = (-2.0 + t * 4.0) * chev_dir;
+            mb.fill_circle_aa(acx + dx, acy + dy, 1.0, [234, 238, 250, 250]);
+            mb.fill_circle_aa(acx - dx, acy + dy, 1.0, [234, 238, 250, 250]);
+        }
         state
             .panel
             .hit_regions
-            .push((wifi_global, ClickTarget::ToggleControlCenter));
+            .push((tray_global, ClickTarget::ToggleTrayDrawer));
 
         let mb_buf = MemoryRenderBuffer::from_slice(
             &mb.pixels,
@@ -1377,8 +1410,128 @@ pub fn render_panel_elements(
             elements.push(OkayRenderElements::Memory(elem));
         }
 
+        // Background Apps / Tray Drawer Popover (from Top Bar Chevron Arrow)
+        if state.panel.tray_open && is_primary {
+            let mut bg_rows: Vec<(String, String, Option<ObjectId>)> = Vec::new();
+            for win in state.space.elements() {
+                if let Some(id) = win.toplevel().map(|t| t.wl_surface().id()) {
+                    let title = window_title_str(win);
+                    let status = if state.workspaces.is_minimized(win) {
+                        "Minimized".to_string()
+                    } else if state.workspaces.is_on_active_workspace(win) {
+                        "Active".to_string()
+                    } else {
+                        format!("WS {}", state.workspaces.window_workspace(&id))
+                    };
+                    bg_rows.push((title, status, Some(id)));
+                }
+            }
+            for cmd in &state.panel.autostart_cmds {
+                let short_cmd = cmd.split_whitespace().next().unwrap_or(cmd).to_string();
+                bg_rows.push((short_cmd, "Autostart".to_string(), None));
+            }
+
+            let tw = 288;
+            let visible_rows = bg_rows.len().clamp(1, 7);
+            let th = 50 + visible_rows as i32 * 36;
+            let tx = (tray_x + tray_w / 2 - tw / 2).clamp(8, (output_geo.size.w - tw - 8).max(8));
+            let ty = PANEL_HEIGHT + 6;
+            let mut tcan = Canvas::new(tw, th);
+            tcan.fill_glass_panel(0, 0, tw, th, 16);
+            tcan.draw_text_px(14, 12, "Background & Running Apps", 13.5, [244, 246, 255, 255]);
+
+            if bg_rows.is_empty() {
+                tcan.draw_text_px(14, 46, "No active background apps.", 12.0, [164, 170, 198, 235]);
+            } else {
+                for (ri, (name, status, id_opt)) in bg_rows.into_iter().take(7).enumerate() {
+                    let ry = 42 + ri as i32 * 36;
+                    let row_rect = Rectangle::new(
+                        (output_geo.loc.x + tx + 10, output_geo.loc.y + ty + ry).into(),
+                        (tw - 50, 30).into(),
+                    );
+                    let hov = rect_contains(row_rect, pointer_x, pointer_y);
+                    tcan.fill_rounded_rect_aa(
+                        10,
+                        ry,
+                        tw - 20,
+                        30,
+                        8,
+                        if hov { [255, 255, 255, 24] } else { [255, 255, 255, 12] },
+                    );
+                    let short_name: String = name.chars().take(20).collect();
+                    tcan.draw_text_px(18, ry + 8, &short_name, 12.0, [238, 240, 252, 255]);
+                    let sw = tcan.measure_text_px(&status, 10.5);
+                    tcan.draw_text_px(
+                        tw - 46 - sw,
+                        ry + 9,
+                        &status,
+                        10.5,
+                        [accent[0], accent[1], accent[2], 235],
+                    );
+
+                    if let Some(id) = id_opt {
+                        state.panel.hit_regions.push((row_rect, ClickTarget::FocusWindow(id.clone())));
+                        let close_rect = Rectangle::new(
+                            (output_geo.loc.x + tx + tw - 38, output_geo.loc.y + ty + ry + 3).into(),
+                            (24, 24).into(),
+                        );
+                        let chov = rect_contains(close_rect, pointer_x, pointer_y);
+                        tcan.fill_rounded_rect_aa(
+                            tw - 38,
+                            ry + 3,
+                            24,
+                            24,
+                            6,
+                            if chov { [225, 76, 94, 230] } else { [255, 255, 255, 18] },
+                        );
+                        tcan.draw_text_px(tw - 30, ry + 7, "x", 11.5, [242, 244, 255, 255]);
+                        state.panel.hit_regions.push((close_rect, ClickTarget::CloseWindowId(id)));
+                    }
+                }
+            }
+
+            let anim_t = state.animations.tray_open_anim;
+            if state.animations.enabled && anim_t < 0.995 {
+                let anchor_local = (tray_x + tray_w / 2 - tx).clamp(24, tw - 24);
+                if let Some(elem) = crate::animation::render_topbar_genie_canvas(
+                    &tcan.pixels,
+                    tw,
+                    th,
+                    Point::from((tx, ty)),
+                    anchor_local,
+                    anim_t,
+                    renderer,
+                    scale,
+                ) {
+                    elements.insert(0, elem);
+                }
+            } else {
+                let tbuf = MemoryRenderBuffer::from_slice(
+                    &tcan.pixels,
+                    Fourcc::Abgr8888,
+                    (tw, th),
+                    1,
+                    Transform::Normal,
+                    None,
+                );
+                let tphys: Point<f64, Physical> =
+                    Point::<i32, Logical>::from((tx, ty)).to_f64().to_physical(scale);
+                if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+                    renderer,
+                    tphys,
+                    &tbuf,
+                    None,
+                    None,
+                    Some((tw, th).into()),
+                    Kind::Unspecified,
+                ) {
+                    elements.insert(0, OkayRenderElements::Memory(elem));
+                }
+            }
+        }
+
         // ====================================================================
-        // B. Bottom Floating Dock (Centered 18px Glass Pill + Squircle Icons + Zoom)
+        // B. Bottom Floating Dock (Auto-hides when any window is maximized)
         // ====================================================================
         let pinned_apps: Vec<(LauncherItem, &str, crate::icons::VectorIconKind)> = [
             (LauncherItem::FileManager, "FM", crate::icons::VectorIconKind::Files),
@@ -1412,6 +1565,26 @@ pub fn render_panel_elements(
         let pointer_near_dock = pointer_y >= dock_zone_y
             && pointer_x >= output_geo.loc.x + base_canvas_x_local - 32
             && pointer_x <= output_geo.loc.x + base_canvas_x_local + base_pill_w + 72;
+
+        let has_maximized = state
+            .space
+            .elements()
+            .any(|w| state.workspaces.is_visible(w) && state.workspaces.is_maximized(w));
+        if has_maximized {
+            if pointer_y >= output_geo.loc.y + output_geo.size.h - 4 {
+                state.panel.dock_auto_revealed = true;
+            } else if !pointer_near_dock
+                && !state.panel.launcher_open
+                && state.panel.pin_context_menu.is_none()
+            {
+                state.panel.dock_auto_revealed = false;
+            }
+        } else {
+            state.panel.dock_auto_revealed = false;
+        }
+        let dock_visible = !has_maximized || state.panel.dock_auto_revealed;
+
+        if dock_visible {
 
         let compute_zoom = |rest_idx: usize, extra_x: i32| -> i32 {
             if !pointer_near_dock {
@@ -1713,6 +1886,7 @@ pub fn render_panel_elements(
             ) {
                 elements.push(OkayRenderElements::Memory(elem));
             }
+        }
         }
 
         // Top Bar Dropdown Menus (`File`, `View`, `Window`, `Help`)
@@ -2207,29 +2381,44 @@ pub fn render_panel_elements(
             state.panel.hit_regions.push((p_global, ptarget));
         }
 
-        let menu_buf = MemoryRenderBuffer::from_slice(
-            &menu_canvas.pixels,
-            Fourcc::Abgr8888,
-            (menu_w, menu_h),
-            1,
-            Transform::Normal,
-            None,
-        );
-        let menu_phys_loc: Point<f64, Physical> =
-            Point::<i32, Logical>::from((menu_x, menu_y))
-                .to_f64()
-                .to_physical(scale);
-        if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
-            renderer,
-            menu_phys_loc,
-            &menu_buf,
-            None,
-            None,
-            Some((menu_w, menu_h).into()),
-            Kind::Unspecified,
-        ) {
-            // Front-to-back rendering order: insert at index 0 so dropdowns render above Top Bar & Dock.
-            elements.insert(0, OkayRenderElements::Memory(elem));
+        let launcher_t = state.animations.launcher_open_anim;
+        if state.animations.enabled && launcher_t < 0.995 {
+            if let Some(elem) = crate::animation::render_launcher_genie_canvas(
+                &menu_canvas.pixels,
+                menu_w,
+                menu_h,
+                Point::from((menu_x, menu_y)),
+                launcher_t,
+                renderer,
+                scale,
+            ) {
+                elements.insert(0, elem);
+            }
+        } else {
+            let menu_buf = MemoryRenderBuffer::from_slice(
+                &menu_canvas.pixels,
+                Fourcc::Abgr8888,
+                (menu_w, menu_h),
+                1,
+                Transform::Normal,
+                None,
+            );
+            let menu_phys_loc: Point<f64, Physical> =
+                Point::<i32, Logical>::from((menu_x, menu_y))
+                    .to_f64()
+                    .to_physical(scale);
+            if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                menu_phys_loc,
+                &menu_buf,
+                None,
+                None,
+                Some((menu_w, menu_h).into()),
+                Kind::Unspecified,
+            ) {
+                // Front-to-back rendering order: insert at index 0 so Launcher renders above Top Bar & Dock.
+                elements.insert(0, OkayRenderElements::Memory(elem));
+            }
         }
     }
 
@@ -2309,6 +2498,7 @@ pub fn render_titlebar_element(
     pointer_local: Point<f64, Logical>,
     is_focused: bool,
     is_pinned: bool,
+    is_maximized: bool,
     _accent: [u8; 3],
     renderer: &mut GlesRenderer,
     scale: Scale<f64>,
@@ -2325,11 +2515,15 @@ pub fn render_titlebar_element(
     } else {
         [22, 24, 34, 224]
     };
-    // SDF anti-aliased rounded top corners (18px radius), matching 18px 4-corner offscreen window clip
-    canvas.fill_rounded_rect_aa(0, 0, tb_w, tb_h + 18, 18, bg);
-    // Subtle 1px rgba(255, 255, 255, 0.14) inner top highlight
-    if tb_w > 36 {
-        canvas.fill_rect_blend(18, 1, tb_w - 36, 1, [255, 255, 255, 36]);
+    if is_maximized {
+        // Sharp 0px corners when maximized
+        canvas.fill_rect(0, 0, tb_w, tb_h, bg);
+    } else {
+        // SDF anti-aliased rounded top corners (18px radius), matching 18px 4-corner offscreen window clip
+        canvas.fill_rounded_rect_aa(0, 0, tb_w, tb_h + 18, 18, bg);
+        if tb_w > 36 {
+            canvas.fill_rect_blend(18, 1, tb_w - 36, 1, [255, 255, 255, 36]);
+        }
     }
     // Subtle 1px separator line at bottom of titlebar
     canvas.fill_rect_blend(0, tb_h - 1, tb_w, 1, [255, 255, 255, 18]);

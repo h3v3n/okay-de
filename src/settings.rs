@@ -123,6 +123,8 @@ enum SettingsAction {
     CycleMinimizeEffect,
     ReloadWallpaper,
     SetDisplayScale(usize, f64),
+    CycleDisplayResolution(usize),
+    CycleDisplayRefresh(usize),
     SwapMonitorsOrder,
     RefreshWifi,
     ToggleWifi(usize),
@@ -468,7 +470,64 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                         Some(smithay::output::Scale::Fractional(new_scale)),
                         None,
                     );
+                    smithay::desktop::layer_map_for_output(out).arrange();
                     state.retile_workspace();
+                }
+            }
+            SettingsAction::CycleDisplayResolution(out_idx) => {
+                let outputs: Vec<Output> = state.space.outputs().cloned().collect();
+                if let Some(out) = outputs.get(out_idx) {
+                    let cur = out.current_mode();
+                    let modes = out.modes();
+                    let mut resolutions: Vec<(i32, i32)> = Vec::new();
+                    for m in &modes {
+                        let r = (m.size.w, m.size.h);
+                        if !resolutions.contains(&r) {
+                            resolutions.push(r);
+                        }
+                    }
+                    resolutions.sort_by(|a, b| (b.0 * b.1).cmp(&(a.0 * a.1)));
+                    if resolutions.len() > 1 {
+                        let cur_r = cur.map(|m| (m.size.w, m.size.h)).unwrap_or(resolutions[0]);
+                        let pos = resolutions.iter().position(|r| *r == cur_r).unwrap_or(0);
+                        let next_r = resolutions[(pos + 1) % resolutions.len()];
+                        if let Some(target_mode) = modes
+                            .iter()
+                            .filter(|m| (m.size.w, m.size.h) == next_r)
+                            .max_by_key(|m| m.refresh)
+                            .copied()
+                        {
+                            out.change_current_state(Some(target_mode), None, None, None);
+                            out.set_preferred(target_mode);
+                            smithay::desktop::layer_map_for_output(out).arrange();
+                            state.retile_workspace();
+                        }
+                    }
+                }
+            }
+            SettingsAction::CycleDisplayRefresh(out_idx) => {
+                let outputs: Vec<Output> = state.space.outputs().cloned().collect();
+                if let Some(out) = outputs.get(out_idx) {
+                    if let Some(cur) = out.current_mode() {
+                        let modes = out.modes();
+                        let mut matching: Vec<_> = modes
+                            .iter()
+                            .filter(|m| m.size == cur.size)
+                            .copied()
+                            .collect();
+                        matching.sort_by(|a, b| b.refresh.cmp(&a.refresh));
+                        matching.dedup_by_key(|m| m.refresh);
+                        if matching.len() > 1 {
+                            let pos = matching
+                                .iter()
+                                .position(|m| m.refresh == cur.refresh)
+                                .unwrap_or(0);
+                            let next_mode = matching[(pos + 1) % matching.len()];
+                            out.change_current_state(Some(next_mode), None, None, None);
+                            out.set_preferred(next_mode);
+                            smithay::desktop::layer_map_for_output(out).arrange();
+                        }
+                    }
                 }
             }
             SettingsAction::SwapMonitorsOrder => {
@@ -544,9 +603,15 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
             }
             SettingsAction::ToggleMuteMic => {
                 state.settings.mic_muted = !state.settings.mic_muted;
-                let _ = Command::new("wpctl")
+                if Command::new("wpctl")
                     .args(["set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"])
-                    .spawn();
+                    .spawn()
+                    .is_err()
+                {
+                    let _ = Command::new("pactl")
+                        .args(["set-source-mute", "@DEFAULT_SOURCE@", "toggle"])
+                        .spawn();
+                }
             }
             SettingsAction::SelectAudioSink(sink_id) => {
                 crate::worker::dispatch(crate::worker::WorkerRequest::SetDefaultAudioSink {
@@ -614,10 +679,22 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                     if !path.exists() {
                         let _ = fs::write(&path, "#!/bin/sh\n# OKay DE Autostart commands\n");
                     }
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(meta) = fs::metadata(&path) {
+                            let mut perms = meta.permissions();
+                            perms.set_mode(0o755);
+                            let _ = fs::set_permissions(&path, perms);
+                        }
+                    }
                     let _ = Command::new("xdg-open")
                         .arg(&path)
                         .env("WAYLAND_DISPLAY", &state.socket_name)
                         .spawn();
+                    state
+                        .overlays
+                        .push_notification("Autostart Script", &format!("Opened {}", path.display()));
                 }
             }
         }
@@ -898,18 +975,55 @@ pub fn render_settings_elements(
                 15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
-            cy += 30;
+            cy += 24;
 
             let outputs: Vec<Output> = state.space.outputs().cloned().collect();
-            for (idx, out) in outputs.iter().enumerate() {
+            let multi_lbl = if outputs.len() > 1 {
+                format!("Multi-Monitor Active ({} displays detected)", outputs.len())
+            } else {
+                "Single Display Mode (1 display detected)".to_string()
+            };
+            canvas.fill_rounded_rect_aa(
+                content_x,
+                cy,
+                506,
+                26,
+                6,
+                if outputs.len() > 1 {
+                    [accent[0], accent[1], accent[2], 42]
+                } else {
+                    [255, 255, 255, 14]
+                },
+            );
+            canvas.draw_text_px(content_x + 12, cy + 6, &multi_lbl, 12.0, [226, 232, 248, 255]);
+            cy += 34;
+
+            for (idx, out) in outputs.iter().take(2).enumerate() {
                 let geo = state.space.output_geometry(out).unwrap_or_default();
                 let cur_scale = out.current_scale().fractional_scale();
-                let refresh_hz = out
-                    .current_mode()
-                    .map(|m| m.refresh as f64 / 1000.0)
-                    .unwrap_or(60.0);
+                let cur_mode = out.current_mode();
+                let modes = out.modes();
 
-                canvas.fill_rounded_rect_aa(content_x, cy, 506, 78, 7, [28, 28, 44, 245]);
+                let mut resolutions: Vec<(i32, i32)> = Vec::new();
+                let mut refreshes: Vec<i32> = Vec::new();
+                for m in &modes {
+                    let r = (m.size.w, m.size.h);
+                    if !resolutions.contains(&r) {
+                        resolutions.push(r);
+                    }
+                    if let Some(cm) = cur_mode {
+                        if m.size == cm.size && !refreshes.contains(&m.refresh) {
+                            refreshes.push(m.refresh);
+                        }
+                    }
+                }
+
+                let refresh_hz = cur_mode.map(|m| m.refresh as f64 / 1000.0).unwrap_or(60.0);
+                let has_multi_res = resolutions.len() > 1;
+                let has_multi_hz = refreshes.len() > 1;
+                let card_h = if has_multi_res || has_multi_hz { 112 } else { 78 };
+
+                canvas.fill_rounded_rect_aa(content_x, cy, 506, card_h, 8, [28, 28, 44, 245]);
                 let title = format!(
                     "Monitor #{}: {}  ({}x{} @ {:.0}Hz, Pos +{},+{})",
                     idx + 1,
@@ -920,15 +1034,9 @@ pub fn render_settings_elements(
                     geo.loc.x,
                     geo.loc.y
                 );
-                canvas.draw_text_px(content_x + 14, cy + 10, &title, 13.5, [238, 240, 252, 255]);
+                canvas.draw_text_px(content_x + 14, cy + 10, &title, 13.0, [238, 240, 252, 255]);
 
-                canvas.draw_text_px(
-                    content_x + 14,
-                    cy + 44,
-                    "UI Scale:",
-                    12.5,
-                    [175, 180, 205, 255],
-                );
+                canvas.draw_text_px(content_x + 14, cy + 44, "UI Scale:", 12.0, [175, 180, 205, 255]);
                 for (si, s_val) in [1.0, 1.25, 1.5, 2.0].into_iter().enumerate() {
                     let sx = content_x + 96 + si as i32 * 76;
                     let s_rect = Rectangle::new((wx + sx, wy + cy + 38).into(), (68, 28).into());
@@ -938,11 +1046,7 @@ pub fn render_settings_elements(
                     } else {
                         [44, 44, 66, 255]
                     };
-                    let fg = if is_cur {
-                        [16, 16, 24, 255]
-                    } else {
-                        [230, 232, 246, 255]
-                    };
+                    let fg = if is_cur { [16, 16, 24, 255] } else { [230, 232, 246, 255] };
                     canvas.fill_rounded_rect_aa(sx, cy + 38, 68, 28, 5, bg);
                     canvas.draw_text_px(sx + 14, cy + 44, &format!("{:.2}x", s_val), 12.0, fg);
                     state
@@ -950,7 +1054,32 @@ pub fn render_settings_elements(
                         .hit_regions
                         .push((s_rect, SettingsAction::SetDisplayScale(idx, s_val)));
                 }
-                cy += 88;
+
+                if has_multi_res || has_multi_hz {
+                    let ry = cy + 74;
+                    if has_multi_res {
+                        let res_rect = Rectangle::new((wx + content_x + 14, wy + ry).into(), (228, 28).into());
+                        canvas.fill_rounded_rect_aa(content_x + 14, ry, 228, 28, 6, [44, 44, 66, 255]);
+                        let r_lbl = format!("Resolution: {}x{}  >", geo.size.w, geo.size.h);
+                        canvas.draw_text_px(content_x + 24, ry + 7, &r_lbl, 11.5, [234, 238, 250, 255]);
+                        state
+                            .settings
+                            .hit_regions
+                            .push((res_rect, SettingsAction::CycleDisplayResolution(idx)));
+                    }
+                    if has_multi_hz {
+                        let hx = if has_multi_res { content_x + 254 } else { content_x + 14 };
+                        let hz_rect = Rectangle::new((wx + hx, wy + ry).into(), (238, 28).into());
+                        canvas.fill_rounded_rect_aa(hx, ry, 238, 28, 6, [44, 44, 66, 255]);
+                        let h_lbl = format!("Refresh Rate: {:.0} Hz  >", refresh_hz);
+                        canvas.draw_text_px(hx + 12, ry + 7, &h_lbl, 11.5, [234, 238, 250, 255]);
+                        state
+                            .settings
+                            .hit_regions
+                            .push((hz_rect, SettingsAction::CycleDisplayRefresh(idx)));
+                    }
+                }
+                cy += card_h + 10;
             }
 
             if outputs.len() >= 2 {

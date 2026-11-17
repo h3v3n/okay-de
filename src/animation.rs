@@ -126,6 +126,7 @@ pub struct AnimationManager {
     pub clipboard_open_anim: f32,
     pub control_center_open_anim: f32,
     pub top_menu_open_anim: f32,
+    pub tray_open_anim: f32,
     /// Active dock icon bounce timestamps (`key -> started_at`).
     pub dock_bounces: HashMap<String, Instant>,
 }
@@ -147,6 +148,7 @@ impl Default for AnimationManager {
             clipboard_open_anim: 0.0,
             control_center_open_anim: 0.0,
             top_menu_open_anim: 0.0,
+            tray_open_anim: 0.0,
             dock_bounces: HashMap::new(),
         }
     }
@@ -292,6 +294,7 @@ impl AnimationManager {
         clipboard_open: bool,
         control_center_open: bool,
         top_menu_open: bool,
+        tray_open: bool,
     ) {
         let now = Instant::now();
         let raw_dt = now.duration_since(self.last_tick).as_secs_f32().clamp(0.001, 0.050);
@@ -305,6 +308,7 @@ impl AnimationManager {
             self.clipboard_open_anim = if clipboard_open { 1.0 } else { 0.0 };
             self.control_center_open_anim = if control_center_open { 1.0 } else { 0.0 };
             self.top_menu_open_anim = if top_menu_open { 1.0 } else { 0.0 };
+            self.tray_open_anim = if tray_open { 1.0 } else { 0.0 };
             for anim in self.windows.values_mut() {
                 anim.open_progress = 1.0;
                 anim.move_offset = Point::from((0.0, 0.0));
@@ -332,6 +336,7 @@ impl AnimationManager {
         step_towards(&mut self.clipboard_open_anim, if clipboard_open { 1.0 } else { 0.0 }, dt * 6.5);
         step_towards(&mut self.control_center_open_anim, if control_center_open { 1.0 } else { 0.0 }, dt * 6.5);
         step_towards(&mut self.top_menu_open_anim, if top_menu_open { 1.0 } else { 0.0 }, dt * 7.5);
+        step_towards(&mut self.tray_open_anim, if tray_open { 1.0 } else { 0.0 }, dt * 7.0);
 
         for anim in self.windows.values_mut() {
             if anim.open_progress < 1.0 {
@@ -830,6 +835,132 @@ void main() {
         vec![
             Uniform::new("u_size", [w as f32, h as f32]),
             Uniform::new("u_anchor_x", anchor_local_x as f32),
+            Uniform::new("u_t", progress.clamp(0.0, 1.0)),
+        ],
+    )))
+}
+
+/// Renders the App Launcher / Launchpad with a smooth Magic Lamp / Genie upward bloom from the Dock.
+pub fn render_launcher_genie_canvas(
+    pixels: &[u8],
+    w: i32,
+    h: i32,
+    local_pos: Point<i32, Logical>,
+    progress: f32,
+    renderer: &mut GlesRenderer,
+    scale: Scale<f64>,
+) -> Option<OkayRenderElements> {
+    if w <= 0 || h <= 0 || progress <= 0.01 {
+        return None;
+    }
+    let tex = renderer
+        .import_memory(
+            pixels,
+            Fourcc::Abgr8888,
+            Size::<i32, BufferCoords>::from((w, h)),
+            false,
+        )
+        .ok()?;
+
+    const LAUNCHER_GENIE_FRAG: &str = r#"
+//_DEFINES
+precision mediump float;
+varying vec2 v_coords;
+uniform float alpha;
+uniform vec2 u_size;
+uniform float u_t;
+#ifdef EXTERNAL
+uniform samplerExternalOES tex;
+#else
+uniform sampler2D tex;
+#endif
+
+float genieS(float x) {
+    float c = clamp(x, 0.0, 1.0);
+    float cos_s = 0.5 - 0.5 * cos(3.14159265 * c);
+    float bez_s = c * c * (3.0 - 2.0 * c);
+    return mix(cos_s, bez_s, 0.35);
+}
+
+void main() {
+    vec2 px = v_coords * u_size;
+    float t = genieS(u_t);
+
+    // Bloom upward from bottom-center dock anchor (y = u_size.y)
+    float top_y = mix(u_size.y - 16.0, 0.0, smoothstep(0.0, 0.82, t));
+    float bot_y = u_size.y;
+    float span_y = max(bot_y - top_y, 2.0);
+    float v = (px.y - top_y) / span_y;
+    float vc = clamp(v, 0.0, 1.0);
+
+    float funnel = clamp(t * 1.4 - (1.0 - vc) * 0.4, 0.0, 1.0);
+    float s = genieS(funnel);
+    float cx = u_size.x * 0.5;
+    float half_src = 70.0;
+    float left_x = mix(cx - half_src, 0.0, s);
+    float right_x = mix(cx + half_src, u_size.x, s);
+    float span_x = max(right_x - left_x, 2.0);
+    float u = (px.x - left_x) / span_x;
+
+    float mask_x = smoothstep(left_x - 1.0, left_x + 0.8, px.x) *
+                   (1.0 - smoothstep(right_x - 0.8, right_x + 1.0, px.x));
+    float mask_y = smoothstep(top_y - 1.0, top_y + 0.8, px.y) *
+                   (1.0 - smoothstep(bot_y - 0.8, bot_y + 1.0, px.y));
+    float mask = mask_x * mask_y;
+    if (mask <= 0.001) {
+        gl_FragColor = vec4(0.0);
+        return;
+    }
+
+    vec4 col = texture2D(tex, clamp(vec2(u, vc), 0.0, 1.0));
+    #ifdef NO_ALPHA
+    col.a = 1.0;
+    #endif
+    float fade = smoothstep(0.0, 0.45, u_t);
+    gl_FragColor = col * (mask * alpha * fade);
+}
+"#;
+
+    thread_local! {
+        static LAUNCHER_GENIE_SHADER: RefCell<Option<GlesTexProgram>> = const { RefCell::new(None) };
+    }
+
+    let prog = LAUNCHER_GENIE_SHADER.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if borrow.is_none() {
+            if let Ok(p) = renderer.compile_custom_texture_shader(
+                LAUNCHER_GENIE_FRAG,
+                &[
+                    UniformName::new("u_size", UniformType::_2f),
+                    UniformName::new("u_t", UniformType::_1f),
+                ],
+            ) {
+                *borrow = Some(p);
+            }
+        }
+        borrow.clone()
+    })?;
+
+    let phys_loc: Point<i32, Physical> = local_pos.to_physical_precise_round(scale);
+    let tex_elem = TextureRenderElement::from_texture_with_damage(
+        Id::new(),
+        renderer.context_id(),
+        phys_loc.to_f64(),
+        tex,
+        scale.x.round().max(1.0) as i32,
+        Transform::Normal,
+        Some(1.0),
+        None,
+        Some(Size::from((w, h))),
+        None,
+        DamageSnapshot::empty(),
+        Kind::Unspecified,
+    );
+    Some(OkayRenderElements::TexShader(TextureShaderElement::new(
+        tex_elem,
+        prog,
+        vec![
+            Uniform::new("u_size", [w as f32, h as f32]),
             Uniform::new("u_t", progress.clamp(0.0, 1.0)),
         ],
     )))

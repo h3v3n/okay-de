@@ -598,7 +598,8 @@ impl OkayState {
                 0
             };
             let bot_pad = if self.panel.dock_mode {
-                crate::panel::DOCK_HEIGHT + crate::panel::DOCK_MARGIN + 4
+                // Dock auto-hides whenever a window is maximized so the window uses full height
+                0
             } else if !self.panel.panel_top {
                 36
             } else {
@@ -714,7 +715,7 @@ impl OkayState {
                 (output_geo.loc.x, output_geo.loc.y + top_bar_pad + TITLEBAR_HEIGHT).into(),
                 (
                     output_geo.size.w,
-                    (output_geo.size.h - top_bar_pad - bot_bar_pad - TITLEBAR_HEIGHT).max(120),
+                    (output_geo.size.h - top_bar_pad - TITLEBAR_HEIGHT).max(120),
                 )
                     .into(),
             );
