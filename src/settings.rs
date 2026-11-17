@@ -670,7 +670,7 @@ pub fn render_settings_elements(
     let pointer_y = state.pointer_location.y.round() as i32;
 
     let mut canvas = Canvas::new(SETTINGS_WIDTH, SETTINGS_HEIGHT);
-    canvas.fill_glass_panel(0, 0, SETTINGS_WIDTH, SETTINGS_HEIGHT, 14);
+    canvas.fill_glass_panel(0, 0, SETTINGS_WIDTH, SETTINGS_HEIGHT, 18);
 
     // Left macOS System Settings Sidebar (translucent tinted panel + 1px divider)
     canvas.fill_rounded_rect_aa(2, 2, SIDEBAR_WIDTH, SETTINGS_HEIGHT - 4, 12, [255, 255, 255, 10]);

@@ -856,6 +856,7 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                     state.panel.top_bar_menu = None;
                 } else {
                     state.panel.top_bar_menu = Some((menu, anchor_x));
+                    state.animations.top_menu_open_anim = 0.0;
                 }
             }
             ClickTarget::ToggleMute => {
@@ -1751,7 +1752,7 @@ pub fn render_panel_elements(
                 let mx = anchor_x.clamp(8, (output_geo.size.w - mw - 8).max(8));
                 let my = PANEL_HEIGHT + 6;
                 let mut mcan = Canvas::new(mw, mh);
-                mcan.fill_glass_panel(0, 0, mw, mh, 12);
+                mcan.fill_glass_panel(0, 0, mw, mh, 16);
 
                 let mut iy = 8;
                 for (lbl, hint, act, sep_after) in rows {
@@ -1778,26 +1779,43 @@ pub fn render_panel_elements(
                     }
                 }
 
-                let mbuf = MemoryRenderBuffer::from_slice(
-                    &mcan.pixels,
-                    Fourcc::Abgr8888,
-                    (mw, mh),
-                    1,
-                    Transform::Normal,
-                    None,
-                );
-                let mphys: Point<f64, Physical> =
-                    Point::<i32, Logical>::from((mx, my)).to_f64().to_physical(scale);
-                if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
-                    renderer,
-                    mphys,
-                    &mbuf,
-                    None,
-                    None,
-                    Some((mw, mh).into()),
-                    Kind::Unspecified,
-                ) {
-                    elements.push(OkayRenderElements::Memory(elem));
+                let anim_t = state.animations.top_menu_open_anim;
+                if state.animations.enabled && anim_t < 0.995 {
+                    let anchor_local = (anchor_x + 24 - mx).clamp(24, mw - 24);
+                    if let Some(elem) = crate::animation::render_topbar_genie_canvas(
+                        &mcan.pixels,
+                        mw,
+                        mh,
+                        Point::from((mx, my)),
+                        anchor_local,
+                        anim_t,
+                        renderer,
+                        scale,
+                    ) {
+                        elements.insert(0, elem);
+                    }
+                } else {
+                    let mbuf = MemoryRenderBuffer::from_slice(
+                        &mcan.pixels,
+                        Fourcc::Abgr8888,
+                        (mw, mh),
+                        1,
+                        Transform::Normal,
+                        None,
+                    );
+                    let mphys: Point<f64, Physical> =
+                        Point::<i32, Logical>::from((mx, my)).to_f64().to_physical(scale);
+                    if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+                        renderer,
+                        mphys,
+                        &mbuf,
+                        None,
+                        None,
+                        Some((mw, mh).into()),
+                        Kind::Unspecified,
+                    ) {
+                        elements.insert(0, OkayRenderElements::Memory(elem));
+                    }
                 }
             }
         }
@@ -1990,7 +2008,7 @@ pub fn render_panel_elements(
         let menu_y = base_y - slide_px;
 
         let mut menu_canvas = Canvas::new(menu_w, menu_h);
-        menu_canvas.fill_glass_panel(0, 0, menu_w, menu_h, 16);
+        menu_canvas.fill_glass_panel(0, 0, menu_w, menu_h, 18);
 
         // Header + Centered Search Bar
         menu_canvas.draw_text_px(20, 14, "Applications", 16.0, [246, 248, 255, 255]);
@@ -2225,7 +2243,7 @@ pub fn render_panel_elements(
                 .clamp(PANEL_HEIGHT + 6, (output_geo.size.h - ch - 8).max(8));
 
             let mut ctx = Canvas::new(cw, ch);
-            ctx.fill_glass_panel(0, 0, cw, ch, 10);
+            ctx.fill_glass_panel(0, 0, cw, ch, 16);
             let label = match pin_action {
                 PinContextAction::PinApp(_) => "Pin to Dock",
                 PinContextAction::UnpinBuiltin(_) | PinContextAction::UnpinCustom(_) => {
@@ -2307,11 +2325,11 @@ pub fn render_titlebar_element(
     } else {
         [22, 24, 34, 224]
     };
-    // SDF anti-aliased rounded top corners (12px radius), square bottom edge meeting the client surface
-    canvas.fill_rounded_rect_aa(0, 0, tb_w, tb_h + 12, 12, bg);
+    // SDF anti-aliased rounded top corners (18px radius), matching 18px 4-corner offscreen window clip
+    canvas.fill_rounded_rect_aa(0, 0, tb_w, tb_h + 18, 18, bg);
     // Subtle 1px rgba(255, 255, 255, 0.14) inner top highlight
-    if tb_w > 24 {
-        canvas.fill_rect_blend(12, 1, tb_w - 24, 1, [255, 255, 255, 36]);
+    if tb_w > 36 {
+        canvas.fill_rect_blend(18, 1, tb_w - 36, 1, [255, 255, 255, 36]);
     }
     // Subtle 1px separator line at bottom of titlebar
     canvas.fill_rect_blend(0, tb_h - 1, tb_w, 1, [255, 255, 255, 18]);

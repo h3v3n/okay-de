@@ -67,6 +67,8 @@ pub fn collect_output_elements(
         state.overlays.calendar_open,
         state.overlays.notif_drawer_open,
         state.overlays.clipboard_open,
+        state.overlays.control_center_open,
+        state.panel.top_bar_menu.is_some(),
     );
 
     // 0. Pointer cursor (topmost element on whichever output contains the pointer)
@@ -219,7 +221,7 @@ pub fn collect_output_elements(
                     (full_w + pad * 2, full_h + pad * 2).into(),
                 );
                 if let Some(sdf_elem) =
-                    sdf_rounded_window_element(renderer, shadow_area, 12.0, pad as f32, 0.0, alpha)
+                    sdf_rounded_window_element(renderer, shadow_area, 18.0, pad as f32, 0.0, alpha)
                 {
                     elements.push(sdf_elem);
                 }
@@ -590,7 +592,7 @@ void main() {
         program,
         vec![
             Uniform::new("u_size", [full_w as f32, full_h as f32]),
-            Uniform::new("u_radius", 12.0f32),
+            Uniform::new("u_radius", 18.0f32),
             Uniform::new("u_border_alpha", border_alpha),
         ],
     )))

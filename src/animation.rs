@@ -5,21 +5,24 @@ use std::{
 };
 
 use smithay::{
-    backend::renderer::{
-        element::{
-            solid::{SolidColorBuffer, SolidColorRenderElement},
-            texture::TextureRenderElement,
-            Id, Kind,
+    backend::{
+        allocator::Fourcc,
+        renderer::{
+            element::{
+                solid::{SolidColorBuffer, SolidColorRenderElement},
+                texture::TextureRenderElement,
+                Id, Kind,
+            },
+            gles::{
+                element::{PixelShaderElement, TextureShaderElement},
+                GlesPixelProgram, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType,
+            },
+            utils::DamageSnapshot,
+            Color32F, ImportMem, Renderer,
         },
-        gles::{
-            element::{PixelShaderElement, TextureShaderElement},
-            GlesPixelProgram, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType,
-        },
-        utils::DamageSnapshot,
-        Color32F, Renderer,
     },
     reexports::wayland_server::backend::ObjectId,
-    utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform},
+    utils::{Buffer as BufferCoords, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
 };
 
 use crate::render::OkayRenderElements;
@@ -121,6 +124,8 @@ pub struct AnimationManager {
     pub calendar_open_anim: f32,
     pub notif_open_anim: f32,
     pub clipboard_open_anim: f32,
+    pub control_center_open_anim: f32,
+    pub top_menu_open_anim: f32,
     /// Active dock icon bounce timestamps (`key -> started_at`).
     pub dock_bounces: HashMap<String, Instant>,
 }
@@ -140,6 +145,8 @@ impl Default for AnimationManager {
             calendar_open_anim: 0.0,
             notif_open_anim: 0.0,
             clipboard_open_anim: 0.0,
+            control_center_open_anim: 0.0,
+            top_menu_open_anim: 0.0,
             dock_bounces: HashMap::new(),
         }
     }
@@ -283,6 +290,8 @@ impl AnimationManager {
         calendar_open: bool,
         notif_open: bool,
         clipboard_open: bool,
+        control_center_open: bool,
+        top_menu_open: bool,
     ) {
         let now = Instant::now();
         let raw_dt = now.duration_since(self.last_tick).as_secs_f32().clamp(0.001, 0.050);
@@ -294,6 +303,8 @@ impl AnimationManager {
             self.calendar_open_anim = if calendar_open { 1.0 } else { 0.0 };
             self.notif_open_anim = if notif_open { 1.0 } else { 0.0 };
             self.clipboard_open_anim = if clipboard_open { 1.0 } else { 0.0 };
+            self.control_center_open_anim = if control_center_open { 1.0 } else { 0.0 };
+            self.top_menu_open_anim = if top_menu_open { 1.0 } else { 0.0 };
             for anim in self.windows.values_mut() {
                 anim.open_progress = 1.0;
                 anim.move_offset = Point::from((0.0, 0.0));
@@ -319,6 +330,8 @@ impl AnimationManager {
         step_towards(&mut self.calendar_open_anim, if calendar_open { 1.0 } else { 0.0 }, dt * 6.5);
         step_towards(&mut self.notif_open_anim, if notif_open { 1.0 } else { 0.0 }, dt * 6.5);
         step_towards(&mut self.clipboard_open_anim, if clipboard_open { 1.0 } else { 0.0 }, dt * 6.5);
+        step_towards(&mut self.control_center_open_anim, if control_center_open { 1.0 } else { 0.0 }, dt * 6.5);
+        step_towards(&mut self.top_menu_open_anim, if top_menu_open { 1.0 } else { 0.0 }, dt * 7.5);
 
         for anim in self.windows.values_mut() {
             if anim.open_progress < 1.0 {
@@ -689,4 +702,135 @@ fn step_towards(val: &mut f32, target: f32, max_delta: f32) {
     } else {
         *val -= max_delta;
     }
+}
+
+/// Renders a Top Bar menu/popover (`Calendar`, `Notification Center`, `Quick Settings`, `Top Bar Dropdown`)
+/// with a smooth Magic Lamp / Genie unfold animation from its exact Top Bar anchor button.
+pub fn render_topbar_genie_canvas(
+    pixels: &[u8],
+    w: i32,
+    h: i32,
+    local_pos: Point<i32, Logical>,
+    anchor_local_x: i32,
+    progress: f32,
+    renderer: &mut GlesRenderer,
+    scale: Scale<f64>,
+) -> Option<OkayRenderElements> {
+    if w <= 0 || h <= 0 || progress <= 0.01 {
+        return None;
+    }
+    let tex = renderer
+        .import_memory(
+            pixels,
+            Fourcc::Abgr8888,
+            Size::<i32, BufferCoords>::from((w, h)),
+            false,
+        )
+        .ok()?;
+
+    const GENIE_POPOVER_FRAG: &str = r#"
+//_DEFINES
+precision mediump float;
+varying vec2 v_coords;
+uniform float alpha;
+uniform vec2 u_size;
+uniform float u_anchor_x;
+uniform float u_t;
+#ifdef EXTERNAL
+uniform samplerExternalOES tex;
+#else
+uniform sampler2D tex;
+#endif
+
+float genieS(float x) {
+    float c = clamp(x, 0.0, 1.0);
+    float cos_s = 0.5 - 0.5 * cos(3.14159265 * c);
+    float bez_s = c * c * (3.0 - 2.0 * c);
+    return mix(cos_s, bez_s, 0.4);
+}
+
+void main() {
+    vec2 px = v_coords * u_size;
+    float t = genieS(u_t);
+
+    // Unfold smoothly downward from Top Bar anchor (y=0) to full height (u_size.y)
+    float bot_y = mix(6.0, u_size.y, smoothstep(0.0, 0.78, t));
+    float span_y = max(bot_y, 2.0);
+    float v = px.y / span_y;
+    float vc = clamp(v, 0.0, 1.0);
+
+    // Genie funnel: top near anchor starts narrow, unfolding smoothly to full width
+    float funnel = clamp(t * 1.45 - vc * 0.45, 0.0, 1.0);
+    float s = genieS(funnel);
+    float half_src = 22.0;
+    float ax = clamp(u_anchor_x, 24.0, max(u_size.x - 24.0, 24.0));
+    float left_x = mix(ax - half_src, 0.0, s);
+    float right_x = mix(ax + half_src, u_size.x, s);
+    float span_x = max(right_x - left_x, 2.0);
+    float u = (px.x - left_x) / span_x;
+
+    float mask_x = smoothstep(left_x - 1.0, left_x + 0.8, px.x) *
+                   (1.0 - smoothstep(right_x - 0.8, right_x + 1.0, px.x));
+    float mask_y = smoothstep(-0.5, 0.5, px.y) *
+                   (1.0 - smoothstep(bot_y - 1.0, bot_y + 1.0, px.y));
+    float mask = mask_x * mask_y;
+    if (mask <= 0.001) {
+        gl_FragColor = vec4(0.0);
+        return;
+    }
+
+    vec4 col = texture2D(tex, clamp(vec2(u, vc), 0.0, 1.0));
+    #ifdef NO_ALPHA
+    col.a = 1.0;
+    #endif
+    float fade = smoothstep(0.0, 0.45, u_t);
+    gl_FragColor = col * (mask * alpha * fade);
+}
+"#;
+
+    thread_local! {
+        static GENIE_POPOVER_SHADER: RefCell<Option<GlesTexProgram>> = const { RefCell::new(None) };
+    }
+
+    let prog = GENIE_POPOVER_SHADER.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if borrow.is_none() {
+            if let Ok(p) = renderer.compile_custom_texture_shader(
+                GENIE_POPOVER_FRAG,
+                &[
+                    UniformName::new("u_size", UniformType::_2f),
+                    UniformName::new("u_anchor_x", UniformType::_1f),
+                    UniformName::new("u_t", UniformType::_1f),
+                ],
+            ) {
+                *borrow = Some(p);
+            }
+        }
+        borrow.clone()
+    })?;
+
+    let phys_loc: Point<i32, Physical> = local_pos.to_physical_precise_round(scale);
+    let tex_elem = TextureRenderElement::from_texture_with_damage(
+        Id::new(),
+        renderer.context_id(),
+        phys_loc.to_f64(),
+        tex,
+        scale.x.round().max(1.0) as i32,
+        Transform::Normal,
+        Some(1.0),
+        None,
+        Some(Size::from((w, h))),
+        None,
+        DamageSnapshot::empty(),
+        Kind::Unspecified,
+    );
+    Some(OkayRenderElements::TexShader(TextureShaderElement::new(
+        tex_elem,
+        prog,
+        vec![
+            Uniform::new("u_size", [w as f32, h as f32]),
+            Uniform::new("u_anchor_x", anchor_local_x as f32),
+            Uniform::new("u_t", progress.clamp(0.0, 1.0)),
+        ],
+    )))
 }

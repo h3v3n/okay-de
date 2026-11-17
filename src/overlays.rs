@@ -124,7 +124,6 @@ pub struct OverlaysState {
 enum OverlayClick {
     DismissToast(usize),
     ClearNotifications,
-    CloseNotifDrawer,
     SelectClipboard(usize),
     DeleteClipboard(usize),
     ClearClipboard,
@@ -840,9 +839,6 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
                 state.overlays.history.clear();
                 state.overlays.notifications.clear();
             }
-            OverlayClick::CloseNotifDrawer => {
-                state.overlays.notif_drawer_open = false;
-            }
             OverlayClick::SelectClipboard(idx) => {
                 if let Some(text) = state.overlays.clipboard_items.get(idx).cloned() {
                     state.overlays.push_clipboard_text(text.clone());
@@ -1537,7 +1533,7 @@ pub fn render_top_overlays(
         let my = (menu_pos.y - output_geo.loc.y).clamp(8, (output_geo.size.h - mh - 8).max(8));
 
         let mut canvas = Canvas::new(mw, mh);
-        canvas.fill_glass_panel(0, 0, mw, mh, 10);
+        canvas.fill_glass_panel(0, 0, mw, mh, 16);
 
         // Label, optional shortcut hint, action, draw_separator_after
         let items: [(&str, &str, OverlayClick, bool); 6] = [
@@ -1599,7 +1595,7 @@ pub fn render_top_overlays(
         let my = (menu_pos.y - output_geo.loc.y).clamp(8, (output_geo.size.h - mh - 8).max(8));
 
         let mut canvas = Canvas::new(mw, mh);
-        canvas.fill_glass_panel(0, 0, mw, mh, 12);
+        canvas.fill_glass_panel(0, 0, mw, mh, 16);
 
         let items: [(&str, &str, OverlayClick, bool, bool); 5] = [
             ("Open", "DblClick", OverlayClick::IconCtxOpen(icon_idx), false, false),
@@ -1670,7 +1666,7 @@ pub fn render_top_overlays(
         let my = (menu_pos.y - output_geo.loc.y).clamp(PANEL_HEIGHT + 4, (output_geo.size.h - mh - 8).max(8));
 
         let mut canvas = Canvas::new(mw, mh);
-        canvas.fill_glass_panel(0, 0, mw, mh, 12);
+        canvas.fill_glass_panel(0, 0, mw, mh, 16);
 
         let is_pinned = state.workspaces.always_on_top.contains(win_id);
         let is_max = state.workspaces.maximized.contains(win_id);
@@ -1743,7 +1739,7 @@ pub fn render_top_overlays(
         let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(pw, ph);
-        canvas.fill_glass_panel(0, 0, pw, ph, 14);
+        canvas.fill_glass_panel(0, 0, pw, ph, 18);
         canvas.draw_text_px(18, 14, "Properties", 15.0, [246, 248, 255, 255]);
 
         let close_rect = Rectangle::new(
@@ -1881,7 +1877,7 @@ pub fn render_top_overlays(
         let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(cw, ch);
-        canvas.fill_glass_panel(0, 0, cw, ch, 14);
+        canvas.fill_glass_panel(0, 0, cw, ch, 18);
         canvas.draw_text_px(
             16,
             14,
@@ -1971,7 +1967,7 @@ pub fn render_top_overlays(
         let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(cal_w, cal_h);
-        canvas.fill_glass_panel(0, 0, cal_w, cal_h, 14);
+        canvas.fill_glass_panel(0, 0, cal_w, cal_h, 18);
 
         let (date_header, start_mon_0, days_in_month, today_opt) =
             calendar_grid_info(state.overlays.cal_month_offset);
@@ -2045,7 +2041,21 @@ pub fn render_top_overlays(
             ),
         );
 
-        if let Some(elem) = upload_canvas(&canvas, (cal_x, cal_y), renderer, scale) {
+        let anim_t = state.animations.calendar_open_anim;
+        if state.animations.enabled && anim_t < 0.995 {
+            if let Some(elem) = crate::animation::render_topbar_genie_canvas(
+                &canvas.pixels,
+                cal_w,
+                cal_h,
+                Point::from((cal_x, cal_y)),
+                cal_w - 64,
+                anim_t,
+                renderer,
+                scale,
+            ) {
+                elements.push(elem);
+            }
+        } else if let Some(elem) = upload_canvas(&canvas, (cal_x, cal_y), renderer, scale) {
             elements.push(elem);
         }
     }
@@ -2064,7 +2074,7 @@ pub fn render_top_overlays(
         let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(nw, nh);
-        canvas.fill_glass_panel(0, 0, nw, nh, 14);
+        canvas.fill_glass_panel(0, 0, nw, nh, 18);
         canvas.draw_text_px(
             16,
             14,
@@ -2074,16 +2084,16 @@ pub fn render_top_overlays(
         );
 
         let clear_rect = Rectangle::new(
-            (output_geo.loc.x + nx + nw - 78, output_geo.loc.y + ny + 11).into(),
-            (64, 24).into(),
+            (output_geo.loc.x + nx + nw - 90, output_geo.loc.y + ny + 11).into(),
+            (76, 24).into(),
         );
         let clear_bg = if rect_contains(clear_rect, ptr_x, ptr_y) {
-            [accent[0], accent[1], accent[2], 68]
+            [accent[0], accent[1], accent[2], 78]
         } else {
-            [255, 255, 255, 20]
+            [255, 255, 255, 22]
         };
-        canvas.fill_rounded_rect_aa(nw - 78, 11, 64, 24, 7, clear_bg);
-        canvas.draw_text_px(nw - 63, 15, "Clear", 12.0, [238, 240, 252, 255]);
+        canvas.fill_rounded_rect_aa(nw - 90, 11, 76, 24, 8, clear_bg);
+        canvas.draw_text_px(nw - 79, 15, "Clear All", 12.0, [238, 240, 252, 255]);
         state
             .overlays
             .hit_regions
@@ -2094,7 +2104,7 @@ pub fn render_top_overlays(
         } else {
             for (i, (title, body)) in state.overlays.history.iter().take(4).enumerate() {
                 let iy = 48 + i as i32 * 60;
-                canvas.fill_rounded_rect_aa(12, iy, nw - 24, 52, 10, [255, 255, 255, 14]);
+                canvas.fill_rounded_rect_aa(12, iy, nw - 24, 52, 12, [255, 255, 255, 14]);
                 canvas.fill_rounded_rect_aa(14, iy + 8, 3, 36, 2, [accent[0], accent[1], accent[2], 235]);
                 let st: String = title.chars().take(33).collect();
                 let sb: String = body.chars().take(37).collect();
@@ -2103,15 +2113,21 @@ pub fn render_top_overlays(
             }
         }
 
-        state.overlays.hit_regions.push((
-            Rectangle::new(
-                (output_geo.loc.x + nx, output_geo.loc.y + ny).into(),
-                (nw, nh).into(),
-            ),
-            OverlayClick::CloseNotifDrawer,
-        ));
-
-        if let Some(elem) = upload_canvas(&canvas, (nx, ny), renderer, scale) {
+        let anim_t = state.animations.notif_open_anim;
+        if state.animations.enabled && anim_t < 0.995 {
+            if let Some(elem) = crate::animation::render_topbar_genie_canvas(
+                &canvas.pixels,
+                nw,
+                nh,
+                Point::from((nx, ny)),
+                nw - 110,
+                anim_t,
+                renderer,
+                scale,
+            ) {
+                elements.push(elem);
+            }
+        } else if let Some(elem) = upload_canvas(&canvas, (nx, ny), renderer, scale) {
             elements.push(elem);
         }
     }
@@ -2145,7 +2161,7 @@ pub fn render_top_overlays(
         let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(cc_w, cc_h);
-        canvas.fill_glass_panel(0, 0, cc_w, cc_h, 16);
+        canvas.fill_glass_panel(0, 0, cc_w, cc_h, 18);
 
         // Connectivity card (Wi-Fi, Bluetooth, Tiling)
         canvas.fill_rounded_rect_aa(12, 12, cc_w - 24, 116, 12, [255, 255, 255, 14]);
@@ -2344,7 +2360,21 @@ pub fn render_top_overlays(
             .hit_regions
             .push((set_rect, OverlayClick::ControlOpenSettings));
 
-        if let Some(elem) = upload_canvas(&canvas, (cc_x, cc_y), renderer, scale) {
+        let anim_t = state.animations.control_center_open_anim;
+        if state.animations.enabled && anim_t < 0.995 {
+            if let Some(elem) = crate::animation::render_topbar_genie_canvas(
+                &canvas.pixels,
+                cc_w,
+                cc_h,
+                Point::from((cc_x, cc_y)),
+                cc_w - 115,
+                anim_t,
+                renderer,
+                scale,
+            ) {
+                elements.push(elem);
+            }
+        } else if let Some(elem) = upload_canvas(&canvas, (cc_x, cc_y), renderer, scale) {
             elements.push(elem);
         }
     }
