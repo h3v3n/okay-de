@@ -204,6 +204,13 @@ impl WorkspaceManager {
             .unwrap_or(false)
     }
 
+    pub fn is_maximized(&self, window: &Window) -> bool {
+        window
+            .toplevel()
+            .map(|t| self.maximized.contains(&t.wl_surface().id()))
+            .unwrap_or(false)
+    }
+
     pub fn is_pinned(&self, window: &Window) -> bool {
         window
             .toplevel()
