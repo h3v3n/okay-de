@@ -719,7 +719,7 @@ fn handle_pointer_motion_absolute<I: InputBackend>(
         .output_under_pointer()
         .or_else(|| state.space.outputs().next().cloned())
         .and_then(|o| state.space.output_geometry(&o))
-        .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
+        .unwrap_or_else(|| smithay::utils::Rectangle::from_size((1280, 720).into()));
 
     let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
     let clamped = clamp_pointer_to_outputs(state, pos);
