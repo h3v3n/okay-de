@@ -242,7 +242,7 @@ impl Default for PanelState {
             wallpaper_accent: None,
             window_gaps: 10,
             search_query: String::new(),
-            desktop_apps: scan_desktop_applications(),
+            desktop_apps: Vec::new(),
             custom_pinned: Vec::new(),
             hidden_builtins: Vec::new(),
             pin_context_menu: None,
@@ -254,7 +254,7 @@ impl Default for PanelState {
             default_file_manager: "thunar".to_string(),
             volume_percent: 75,
             volume_muted: false,
-            battery_percent: read_battery_percent(),
+            battery_percent: None,
             autostart_cmds: Vec::new(),
             lock_pin: String::new(),
             hit_regions: Vec::new(),
@@ -345,9 +345,10 @@ impl PanelState {
         let Some(path) = config_file_path() else {
             return cfg;
         };
-        let Ok(content) = fs::read_to_string(path) else {
+        let Ok(raw_bytes) = fs::read(path) else {
             return cfg;
         };
+        let content = String::from_utf8_lossy(&raw_bytes);
         let mut in_autostart_section = false;
         for line in content.lines() {
             let line = line.trim();
@@ -575,9 +576,10 @@ pub fn scan_desktop_applications() -> Vec<DesktopAppEntry> {
             if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
                 continue;
             }
-            let Ok(text) = fs::read_to_string(&path) else {
+            let Ok(raw_bytes) = fs::read(&path) else {
                 continue;
             };
+            let text = String::from_utf8_lossy(&raw_bytes);
             let mut in_main_section = false;
             let mut name = None;
             let mut exec = None;
@@ -1551,11 +1553,13 @@ pub fn render_panel_elements(
         let dock_pad_x = 16;
         let total_icons = pinned_apps.len() + custom_pinned.len() + ws_windows.len();
 
+        let min_dock_w = 120.min((output_geo.size.w - 32).max(120));
+        let max_dock_w = (output_geo.size.w - 32).max(min_dock_w);
         let base_pill_w = (dock_pad_x * 2
             + total_icons as i32 * base_icon
             + (total_icons as i32 - 1).max(0) * icon_gap
             + divider_w)
-            .clamp(280, output_geo.size.w - 32);
+            .clamp(min_dock_w, max_dock_w);
         let dock_headroom = 26;
         let base_canvas_x_local = (output_geo.size.w - (base_pill_w + 40)) / 2;
         let dock_pill_y_local = output_geo.size.h - DOCK_HEIGHT - DOCK_MARGIN;
@@ -1618,11 +1622,13 @@ pub fn render_panel_elements(
         let sum_sizes: i32 = pinned_sizes.iter().sum::<i32>()
             + custom_sizes.iter().sum::<i32>()
             + win_sizes.iter().sum::<i32>();
+        let min_dock_w = 120.min((output_geo.size.w - 32).max(120));
+        let max_dock_w = (output_geo.size.w - 32).max(min_dock_w);
         let dock_pill_w = (dock_pad_x * 2
             + sum_sizes
             + (total_icons as i32 - 1).max(0) * icon_gap
             + divider_w)
-            .clamp(280, output_geo.size.w - 32);
+            .clamp(min_dock_w, max_dock_w);
 
         // Extra canvas headroom above the pill so parabolic hover magnification & bounce never clip
         let dock_canvas_w = dock_pill_w + 40;
@@ -2622,18 +2628,6 @@ pub fn window_title_str(window: &Window) -> String {
     "Window".to_string()
 }
 
-fn read_battery_percent() -> Option<i32> {
-    let entries = fs::read_dir("/sys/class/power_supply").ok()?;
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with("BAT") {
-            let cap = fs::read_to_string(entry.path().join("capacity")).ok()?;
-            return cap.trim().parse::<i32>().ok();
-        }
-    }
-    None
-}
-
 // ============================================================================
 // TrueType Font Engine (`fontdue`: Maple Mono -> JetBrainsMono -> NotoSans)
 // ============================================================================
@@ -2812,10 +2806,12 @@ pub struct Canvas {
 
 impl Canvas {
     pub fn new(width: i32, height: i32) -> Self {
-        let len = (width.max(1) as usize) * (height.max(1) as usize) * 4;
+        let w = width.max(1);
+        let h = height.max(1);
+        let len = (w as usize) * (h as usize) * 4;
         Self {
-            width,
-            height,
+            width: w,
+            height: h,
             pixels: vec![0u8; len],
         }
     }
@@ -2845,6 +2841,9 @@ impl Canvas {
     }
 
     pub fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: [u8; 4]) {
+        if w <= 0 || h <= 0 {
+            return;
+        }
         let x0 = x.clamp(0, self.width);
         let y0 = y.clamp(0, self.height);
         let x1 = (x + w).clamp(0, self.width);
@@ -2862,6 +2861,9 @@ impl Canvas {
     }
 
     pub fn fill_rounded_rect(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: [u8; 4]) {
+        if w <= 0 || h <= 0 {
+            return;
+        }
         let r = radius.clamp(0, (w.min(h)) / 2);
         if r <= 1 {
             self.fill_rect(x, y, w, h, color);

@@ -50,6 +50,7 @@ pub enum WorkerRequest {
         sink_id: String,
     },
     RefreshSystemInfo,
+    ScanDesktopApps,
     PollExternalClipboard,
     SetExternalClipboard {
         text: String,
@@ -93,6 +94,7 @@ pub enum WorkerResponse {
         sinks: Vec<crate::system_backends::AudioSink>,
     },
     SystemInfoRefreshed(SystemInfoSnapshot),
+    DesktopAppsScanned(Vec<crate::panel::DesktopAppEntry>),
     ClipboardText {
         text: String,
     },
@@ -168,6 +170,9 @@ pub fn handle_response(state: &mut OkayState, resp: WorkerResponse) {
         }
         WorkerResponse::SystemInfoRefreshed(snap) => {
             state.settings.apply_system_info_snapshot(snap);
+        }
+        WorkerResponse::DesktopAppsScanned(apps) => {
+            state.panel.desktop_apps = apps;
         }
         WorkerResponse::ClipboardText { text } => {
             state.overlays.push_clipboard_text(text);
@@ -293,6 +298,10 @@ fn worker_loop(req_rx: mpsc::Receiver<WorkerRequest>, resp_tx: CalloopSender<Wor
             WorkerRequest::RefreshSystemInfo => {
                 let snap = crate::settings::collect_system_info_snapshot();
                 let _ = resp_tx.send(WorkerResponse::SystemInfoRefreshed(snap));
+            }
+            WorkerRequest::ScanDesktopApps => {
+                let apps = crate::panel::scan_desktop_applications();
+                let _ = resp_tx.send(WorkerResponse::DesktopAppsScanned(apps));
             }
             WorkerRequest::PollExternalClipboard => {
                 if let Ok(out) = Command::new("wl-paste").arg("--no-newline").output() {

@@ -69,7 +69,57 @@ const SUPPORTED_COLOR_FORMATS: &[Fourcc] = &[
     Fourcc::Xbgr8888,
 ];
 
+fn install_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Non-string panic payload".to_string()
+        };
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown location>".to_string());
+        let bt = std::backtrace::Backtrace::force_capture();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let report = format!(
+            "=== OKay DE Crash Report (unix={}) ===\nLocation: {}\nMessage: {}\nBacktrace:\n{}\n\n",
+            ts, loc, payload, bt
+        );
+
+        let log_path = std::env::var_os("HOME")
+            .map(|h| {
+                std::path::PathBuf::from(h)
+                    .join(".local")
+                    .join("state")
+                    .join("okay-de")
+                    .join("crash.log")
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/okay-de-crash.log"));
+        if let Some(parent) = log_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            use std::io::Write;
+            let _ = f.write_all(report.as_bytes());
+        }
+        eprintln!("{}", report);
+        prev(info);
+    }));
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    install_panic_hook();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -132,6 +182,9 @@ fn init_wayland_loop() -> Result<
 
     let (worker_tx, worker_rx) = calloop::channel::channel::<crate::worker::WorkerResponse>();
     crate::worker::init_worker(worker_tx);
+    crate::worker::dispatch(crate::worker::WorkerRequest::ScanDesktopApps);
+    crate::worker::dispatch(crate::worker::WorkerRequest::RefreshSystemInfo);
+    crate::worker::dispatch(crate::worker::WorkerRequest::PollPanelStatus);
     event_loop
         .handle()
         .insert_source(worker_rx, |event, _, state| {

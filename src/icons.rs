@@ -428,6 +428,9 @@ fn decode_icon_file(path: &Path, target_size: i32) -> Option<DecodedIcon> {
     let mut reader = decoder.read_info().ok()?;
     let mut buf = vec![0; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buf).ok()?;
+    if info.width == 0 || info.height == 0 || info.width > 4096 || info.height > 4096 {
+        return None;
+    }
     let raw = &buf[..info.buffer_size()];
 
     let rgba = match info.color_type {

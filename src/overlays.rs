@@ -1663,7 +1663,7 @@ pub fn render_top_overlays(
         let mw = 236;
         let mh = 224;
         let mx = (menu_pos.x - output_geo.loc.x).clamp(8, (output_geo.size.w - mw - 8).max(8));
-        let my = (menu_pos.y - output_geo.loc.y).clamp(PANEL_HEIGHT + 4, (output_geo.size.h - mh - 8).max(8));
+        let my = (menu_pos.y - output_geo.loc.y).clamp(PANEL_HEIGHT + 4, (output_geo.size.h - mh - 8).max(PANEL_HEIGHT + 4));
 
         let mut canvas = Canvas::new(mw, mh);
         canvas.fill_glass_panel(0, 0, mw, mh, 16);

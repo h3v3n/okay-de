@@ -156,6 +156,9 @@ fn load_png_rgba(path: &PathBuf) -> Result<RawWallpaper, Box<dyn std::error::Err
     let mut reader = decoder.read_info()?;
     let mut buf = vec![0; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buf)?;
+    if info.width == 0 || info.height == 0 || info.width > 16384 || info.height > 16384 {
+        return Err("Invalid wallpaper dimensions".into());
+    }
     let raw = &buf[..info.buffer_size()];
 
     let rgba = match info.color_type {

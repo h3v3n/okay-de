@@ -203,8 +203,6 @@ impl Default for SettingsState {
             input_devices: Vec::new(),
             hit_regions: Vec::new(),
         };
-        let snap = collect_system_info_snapshot();
-        s.apply_system_info_snapshot(snap);
         s
     }
 }
