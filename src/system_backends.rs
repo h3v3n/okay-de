@@ -420,58 +420,6 @@ pub fn set_audio_volume(pct: i32) -> (Option<i32>, Option<bool>, Vec<AudioSink>)
     poll_audio_state()
 }
 
-/// Checks for available system package updates asynchronously (`dnf` / `pacman` / `apt`).
-pub fn check_system_updates() -> String {
-    if let Ok(out) = Command::new("dnf").args(["check-update", "-q"]).output() {
-        let code = out.status.code().unwrap_or(0);
-        if code == 100 {
-            let count = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter(|l| !l.trim().is_empty() && !l.starts_with("Obsoleting"))
-                .count();
-            return format!("{} Fedora (dnf) package update(s) available", count.max(1));
-        } else if code == 0 {
-            return "System is up to date (dnf)".to_string();
-        }
-    }
-    if let Ok(out) = Command::new("checkupdates").output() {
-        if out.status.success() {
-            let count = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .count();
-            if count > 0 {
-                return format!("{} Arch (pacman) update(s) available", count);
-            }
-            return "System is up to date (pacman)".to_string();
-        }
-    }
-    if let Ok(out) = Command::new("pacman").args(["-Qu"]).output() {
-        let count = String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .count();
-        if count > 0 {
-            return format!("{} package update(s) pending (pacman)", count);
-        }
-        if out.status.success() {
-            return "System is up to date (pacman)".to_string();
-        }
-    }
-    "Click 'Install Updates' to run system updater in terminal".to_string()
-}
-
-/// Returns the interactive shell command for updating the host OS packages in a terminal.
-pub fn install_system_updates_cmd() -> &'static str {
-    if std::path::Path::new("/usr/bin/dnf").exists() {
-        "echo '=== OKay DE System Update (dnf) ===' && sudo dnf upgrade --refresh; echo; read -p 'Press Enter to close...'"
-    } else if std::path::Path::new("/usr/bin/pacman").exists() {
-        "echo '=== OKay DE System Update (pacman) ===' && sudo pacman -Syu; echo; read -p 'Press Enter to close...'"
-    } else {
-        "echo '=== OKay DE System Update (apt) ===' && sudo apt update && sudo apt upgrade; echo; read -p 'Press Enter to close...'"
-    }
-}
-
 pub fn toggle_audio_mute() -> (Option<i32>, Option<bool>, Vec<AudioSink>) {
     if Command::new("wpctl")
         .args(["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
@@ -483,58 +431,6 @@ pub fn toggle_audio_mute() -> (Option<i32>, Option<bool>, Vec<AudioSink>) {
             .output();
     }
     poll_audio_state()
-}
-
-/// Checks for available system package updates asynchronously (`dnf` / `pacman` / `apt`).
-pub fn check_system_updates() -> String {
-    if let Ok(out) = Command::new("dnf").args(["check-update", "-q"]).output() {
-        let code = out.status.code().unwrap_or(0);
-        if code == 100 {
-            let count = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter(|l| !l.trim().is_empty() && !l.starts_with("Obsoleting"))
-                .count();
-            return format!("{} Fedora (dnf) package update(s) available", count.max(1));
-        } else if code == 0 {
-            return "System is up to date (dnf)".to_string();
-        }
-    }
-    if let Ok(out) = Command::new("checkupdates").output() {
-        if out.status.success() {
-            let count = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .count();
-            if count > 0 {
-                return format!("{} Arch (pacman) update(s) available", count);
-            }
-            return "System is up to date (pacman)".to_string();
-        }
-    }
-    if let Ok(out) = Command::new("pacman").args(["-Qu"]).output() {
-        let count = String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .count();
-        if count > 0 {
-            return format!("{} package update(s) pending (pacman)", count);
-        }
-        if out.status.success() {
-            return "System is up to date (pacman)".to_string();
-        }
-    }
-    "Click 'Install Updates' to run system updater in terminal".to_string()
-}
-
-/// Returns the interactive shell command for updating the host OS packages in a terminal.
-pub fn install_system_updates_cmd() -> &'static str {
-    if std::path::Path::new("/usr/bin/dnf").exists() {
-        "echo '=== OKay DE System Update (dnf) ===' && sudo dnf upgrade --refresh; echo; read -p 'Press Enter to close...'"
-    } else if std::path::Path::new("/usr/bin/pacman").exists() {
-        "echo '=== OKay DE System Update (pacman) ===' && sudo pacman -Syu; echo; read -p 'Press Enter to close...'"
-    } else {
-        "echo '=== OKay DE System Update (apt) ===' && sudo apt update && sudo apt upgrade; echo; read -p 'Press Enter to close...'"
-    }
 }
 
 pub fn set_default_audio_sink(sink_id: &str) -> (Option<i32>, Option<bool>, Vec<AudioSink>) {
