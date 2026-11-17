@@ -229,7 +229,7 @@ impl OverlaysState {
         self.selected_icons.clear();
 
         let mut col = 1;
-        let mut row = 0;
+        let row;
         'outer: loop {
             for r in 0..6 {
                 let occupied = self

@@ -1284,6 +1284,7 @@ impl OkayState {
         let px = pos.x.round() as i32;
         let py = pos.y.round() as i32;
 
+        let mut hit: Option<Window> = None;
         for window in self.space.elements().rev() {
             if !self.workspaces.is_visible(window) || self.workspaces.is_fullscreen(window) {
                 continue;
@@ -1301,25 +1302,29 @@ impl OkayState {
             }
 
             if px >= tb_x && px < tb_x + tb_w && py >= tb_y && py < tb_y + TITLEBAR_HEIGHT {
-                let win_clone = window.clone();
-                self.focus_window(&win_clone);
-                if let Some(id) = win_clone.toplevel().map(|t| t.wl_surface().id()) {
-                    if is_right_click {
-                        self.overlays.window_context_menu = Some((Point::from((px, py)), id));
-                    } else {
-                        if !self.workspaces.always_on_top.remove(&id) {
-                            self.workspaces.always_on_top.insert(id);
-                            self.space.raise_element(&win_clone, true);
-                        }
-                        let pinned = self.workspaces.is_pinned(&win_clone);
-                        self.overlays.show_osd(
-                            "Always on Top",
-                            if pinned { "Pinned" } else { "Unpinned" },
-                            None,
-                        );
+                hit = Some(window.clone());
+                break;
+            }
+        }
+
+        if let Some(win_clone) = hit {
+            self.focus_window(&win_clone);
+            if let Some(id) = win_clone.toplevel().map(|t| t.wl_surface().id()) {
+                if is_right_click {
+                    self.overlays.window_context_menu = Some((Point::from((px, py)), id));
+                } else {
+                    if !self.workspaces.always_on_top.remove(&id) {
+                        self.workspaces.always_on_top.insert(id);
+                        self.space.raise_element(&win_clone, true);
                     }
-                    return true;
+                    let pinned = self.workspaces.is_pinned(&win_clone);
+                    self.overlays.show_osd(
+                        "Always on Top",
+                        if pinned { "Pinned" } else { "Unpinned" },
+                        None,
+                    );
                 }
+                return true;
             }
         }
         false
