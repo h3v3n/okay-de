@@ -516,25 +516,59 @@ fn scale_icon_bilinear(src: &[u8], sw: i32, sh: i32, dw: i32, dh: i32) -> Decode
     }
 }
 
-/// Blits a decoded RGBA icon onto `canvas` at `(dx, dy)` scaled to `(dw, dh)` with alpha blending.
+/// Blits a decoded RGBA icon onto `canvas` at `(dx, dy)` scaled to `(dw, dh)` with bilinear alpha-weighted filtering.
 pub fn blit_icon_to_canvas(canvas: &mut Canvas, dx: i32, dy: i32, dw: i32, dh: i32, icon: &DecodedIcon) {
     if icon.width <= 0 || icon.height <= 0 || dw <= 0 || dh <= 0 {
         return;
     }
+    let sw = icon.width;
+    let sh = icon.height;
+    let src = &icon.rgba;
+    if sw == dw && sh == dh {
+        for py in 0..dh {
+            for px in 0..dw {
+                let idx = ((py * sw + px) * 4) as usize;
+                let a = src[idx + 3];
+                if a > 2 {
+                    canvas.blend_pixel(dx + px, dy + py, [src[idx], src[idx + 1], src[idx + 2], a]);
+                }
+            }
+        }
+        return;
+    }
+
     for py in 0..dh {
-        let sy = ((py as f32 + 0.5) * (icon.height as f32 / dh as f32)) as i32;
-        let sy = sy.clamp(0, icon.height - 1);
+        let fy = (py as f32 + 0.5) * (sh as f32 / dh as f32) - 0.5;
+        let y0 = (fy.floor() as i32).clamp(0, sh - 1);
+        let y1 = (y0 + 1).clamp(0, sh - 1);
+        let wy = (fy - y0 as f32).clamp(0.0, 1.0);
         for px in 0..dw {
-            let sx = ((px as f32 + 0.5) * (icon.width as f32 / dw as f32)) as i32;
-            let sx = sx.clamp(0, icon.width - 1);
-            let idx = ((sy * icon.width + sx) * 4) as usize;
-            let a = icon.rgba[idx + 3];
-            if a > 2 {
-                canvas.blend_pixel(
-                    dx + px,
-                    dy + py,
-                    [icon.rgba[idx], icon.rgba[idx + 1], icon.rgba[idx + 2], a],
-                );
+            let fx = (px as f32 + 0.5) * (sw as f32 / dw as f32) - 0.5;
+            let x0 = (fx.floor() as i32).clamp(0, sw - 1);
+            let x1 = (x0 + 1).clamp(0, sw - 1);
+            let wx = (fx - x0 as f32).clamp(0.0, 1.0);
+
+            let i00 = ((y0 * sw + x0) * 4) as usize;
+            let i10 = ((y0 * sw + x1) * 4) as usize;
+            let i01 = ((y1 * sw + x0) * 4) as usize;
+            let i11 = ((y1 * sw + x1) * 4) as usize;
+
+            let w00 = (1.0 - wx) * (1.0 - wy);
+            let w10 = wx * (1.0 - wy);
+            let w01 = (1.0 - wx) * wy;
+            let w11 = wx * wy;
+
+            let a00 = src[i00 + 3] as f32 * w00;
+            let a10 = src[i10 + 3] as f32 * w10;
+            let a01 = src[i01 + 3] as f32 * w01;
+            let a11 = src[i11 + 3] as f32 * w11;
+            let a_sum = a00 + a10 + a01 + a11;
+            if a_sum > 2.0 {
+                let r = ((src[i00] as f32 * a00 + src[i10] as f32 * a10 + src[i01] as f32 * a01 + src[i11] as f32 * a11) / a_sum).round().clamp(0.0, 255.0) as u8;
+                let g = ((src[i00 + 1] as f32 * a00 + src[i10 + 1] as f32 * a10 + src[i01 + 1] as f32 * a01 + src[i11 + 1] as f32 * a11) / a_sum).round().clamp(0.0, 255.0) as u8;
+                let b = ((src[i00 + 2] as f32 * a00 + src[i10 + 2] as f32 * a10 + src[i01 + 2] as f32 * a01 + src[i11 + 2] as f32 * a11) / a_sum).round().clamp(0.0, 255.0) as u8;
+                let a = a_sum.round().clamp(0.0, 255.0) as u8;
+                canvas.blend_pixel(dx + px, dy + py, [r, g, b, a]);
             }
         }
     }
@@ -876,4 +910,34 @@ pub fn draw_battery_glyph(canvas: &mut Canvas, x: i32, cy: i32, percent: i32, co
     let fill_w = ((bw - 4) * percent.clamp(0, 100) / 100).max(2);
     let fill_col = if percent <= 20 { [255, 102, 96, 255] } else { [92, 224, 146, 255] };
     canvas.fill_rounded_rect_aa(x + 2, by + 2, fill_w, bh - 4, 1, fill_col);
+}
+
+/// Crisp Material 3 vector Shield icon centered at `(cx, cy)`.
+pub fn draw_shield_glyph(canvas: &mut Canvas, cx: f32, cy: f32, active: bool, scale: f32, color: [u8; 4]) {
+    let s = scale.clamp(0.7, 2.0);
+    let top_y = (cy - 6.0 * s).round() as i32;
+    let bot_y = (cy + 6.5 * s).round() as i32;
+    let h = (bot_y - top_y).max(1) as f32;
+    for py in top_y..=bot_y {
+        let t = ((py - top_y) as f32 / h).clamp(0.0, 1.0);
+        let half_w = if t < 0.15 {
+            (4.8 * s) * (0.65 + 0.35 * (t / 0.15))
+        } else if t < 0.45 {
+            4.8 * s
+        } else {
+            let k = (t - 0.45) / 0.55;
+            (4.8 * s) * (1.0 - k * k)
+        };
+        let x0 = (cx - half_w).round() as i32;
+        let x1 = (cx + half_w).round() as i32;
+        if x1 > x0 {
+            canvas.fill_rect_blend(x0, py, x1 - x0, 1, color);
+        }
+    }
+    if active {
+        // Subtle dark checkmark inside active shield
+        let chk_col = [20, 24, 36, 230];
+        draw_thick_line(canvas, cx - 2.3 * s, cy + 0.2 * s, cx - 0.5 * s, cy + 2.2 * s, 0.8 * s, chk_col);
+        draw_thick_line(canvas, cx - 0.5 * s, cy + 2.2 * s, cx + 2.6 * s, cy - 1.8 * s, 0.8 * s, chk_col);
+    }
 }

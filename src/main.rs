@@ -1,3 +1,4 @@
+mod adshield;
 mod animation;
 mod desktop;
 mod icons;
@@ -343,6 +344,7 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
 
     while state.running {
         event_loop.dispatch(Some(target_frame_duration(&state.space)), &mut state)?;
+        state.adshield.poll_updates();
         if state.last_status_poll.elapsed() >= Duration::from_secs(5) {
             state.last_status_poll = Instant::now();
             crate::worker::dispatch(crate::worker::WorkerRequest::PollPanelStatus);
@@ -488,6 +490,7 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
     // Main DRM frame & Wayland event loop
     while state.running {
         event_loop.dispatch(Some(target_frame_duration(&state.space)), &mut state)?;
+        state.adshield.poll_updates();
 
         // Render active DRM outputs
         {

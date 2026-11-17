@@ -196,6 +196,7 @@ enum ClickTarget {
     PowerReboot,
     PowerShutdown,
     PowerExit,
+    OpenAdShieldSettings,
 }
 
 #[derive(Debug)]
@@ -225,6 +226,9 @@ pub struct PanelState {
     pub battery_percent: Option<i32>,
     pub autostart_cmds: Vec<String>,
     pub lock_pin: String,
+    pub adshield_enabled: bool,
+    pub adshield_whitelist: Vec<String>,
+    pub adshield_blacklist: Vec<String>,
     hit_regions: Vec<(Rectangle<i32, Logical>, ClickTarget)>,
     right_hit_regions: Vec<(Rectangle<i32, Logical>, PinContextAction)>,
 }
@@ -257,6 +261,9 @@ impl Default for PanelState {
             battery_percent: None,
             autostart_cmds: Vec::new(),
             lock_pin: String::new(),
+            adshield_enabled: true,
+            adshield_whitelist: Vec::new(),
+            adshield_blacklist: Vec::new(),
             hit_regions: Vec::new(),
             right_hit_regions: Vec::new(),
         }
@@ -397,6 +404,17 @@ impl PanelState {
                         }
                     }
                     "minimize_effect" => cfg.minimize_effect = MinimizeEffect::from_str(val),
+                    "adshield_enabled" => self.adshield_enabled = val != "false",
+                    "adshield_whitelist" => {
+                        if !val.is_empty() && !self.adshield_whitelist.iter().any(|d| d == val) {
+                            self.adshield_whitelist.push(val.to_string());
+                        }
+                    }
+                    "adshield_blacklist" => {
+                        if !val.is_empty() && !self.adshield_blacklist.iter().any(|d| d == val) {
+                            self.adshield_blacklist.push(val.to_string());
+                        }
+                    }
                     "default_terminal" => {
                         if !val.is_empty() {
                             self.default_terminal = val.to_string();
@@ -489,6 +507,13 @@ impl PanelState {
             self.default_file_manager,
             xkb_layout,
         );
+        body.push_str(&format!("adshield_enabled = {}\n", self.adshield_enabled));
+        for d in &self.adshield_whitelist {
+            body.push_str(&format!("adshield_whitelist = \"{}\"\n", d));
+        }
+        for d in &self.adshield_blacklist {
+            body.push_str(&format!("adshield_blacklist = \"{}\"\n", d));
+        }
         for p in &self.custom_pinned {
             body.push_str(&format!(
                 "pinned_app = \"{}|{}|{}\"\n",
@@ -1050,6 +1075,15 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                 state.running = false;
                 state.loop_signal.stop();
             }
+            ClickTarget::OpenAdShieldSettings => {
+                state.panel.launcher_open = false;
+                state.panel.tray_open = false;
+                state.overlays.calendar_open = false;
+                state.overlays.notif_drawer_open = false;
+                state.overlays.control_center_open = false;
+                state.settings.open = true;
+                state.settings.active_tab = crate::settings::SettingsTab::AdShield;
+            }
         }
         return true;
     }
@@ -1157,19 +1191,29 @@ pub fn render_panel_elements(
 
         let mut mx = 12;
 
-        // Crisp `OKay` logo button (toggles Spotlight / Launcher)
-        let logo_w = 54;
+        // Crisp `OKay` pill button (toggles Spotlight / Launcher)
+        let logo_w = 56;
+        let logo_h = mb_h - 6;
+        let logo_r = logo_h / 2;
         let logo_global = Rectangle::new(
-            (output_geo.loc.x + mx, output_geo.loc.y + 2).into(),
-            (logo_w, mb_h - 4).into(),
+            (output_geo.loc.x + mx, output_geo.loc.y + 3).into(),
+            (logo_w, logo_h).into(),
         );
-        if state.panel.launcher_open {
-            mb.fill_rounded_rect_aa(mx, 3, logo_w, mb_h - 6, 7, [accent[0], accent[1], accent[2], 62]);
-            mb.stroke_rounded_rect_aa(mx, 3, logo_w, mb_h - 6, 7, [accent[0], accent[1], accent[2], 145]);
+        let logo_bg = if state.panel.launcher_open {
+            [accent[0], accent[1], accent[2], 215]
         } else if rect_contains(logo_global, pointer_x, pointer_y) {
-            mb.fill_rounded_rect_aa(mx, 3, logo_w, mb_h - 6, 7, [255, 255, 255, 30]);
-        }
-        mb.draw_text_px(mx + 10, 6, "OKay", 13.5, [246, 248, 255, 255]);
+            [255, 255, 255, 38]
+        } else {
+            [255, 255, 255, 18]
+        };
+        mb.fill_rounded_rect_aa(mx, 3, logo_w, logo_h, logo_r, logo_bg);
+        let logo_fg = if state.panel.launcher_open {
+            contrast_fg(accent)
+        } else {
+            [246, 248, 255, 255]
+        };
+        let lw = mb.measure_text_px("OKay", 12.5);
+        mb.draw_text_bold_px(mx + (logo_w - lw) / 2, 7, "OKay", 12.5, logo_fg);
         state
             .panel
             .hit_regions
@@ -1211,39 +1255,53 @@ pub fn render_panel_elements(
             mx += iw + 2;
         }
 
-        // Optional compact Workspace pills in menu bar (1..9) if enabled
-        if state.panel.show_workspaces && mx + 220 < mb_w - 300 {
+        // Material 3 Expressive Workspace pills & dots in menu bar (1..9) if enabled
+        if state.panel.show_workspaces && mx + 200 < mb_w - 300 {
             mx += 10;
+            let pill_h = mb_h - 8;
+            let pill_r = pill_h / 2;
+            let cy_ws = (mb_h as f32) * 0.5;
             for ws in 1..=9 {
-                let ww = 22;
                 let is_active = state.workspaces.active == ws;
                 let is_occ = occupied_workspaces[ws - 1];
+                let ww = if is_active { 28 } else { 18 };
                 let ws_rect = Rectangle::new(
-                    (output_geo.loc.x + mx, output_geo.loc.y + 3).into(),
-                    (ww, mb_h - 6).into(),
+                    (output_geo.loc.x + mx, output_geo.loc.y + 4).into(),
+                    (ww, pill_h).into(),
                 );
+                let hovered = rect_contains(ws_rect, pointer_x, pointer_y);
                 if is_active {
                     mb.fill_rounded_rect_aa(
                         mx,
-                        3,
+                        4,
                         ww,
-                        mb_h - 6,
-                        7,
-                        [accent[0], accent[1], accent[2], 195],
+                        pill_h,
+                        pill_r,
+                        [accent[0], accent[1], accent[2], 220],
                     );
-                } else if rect_contains(ws_rect, pointer_x, pointer_y) {
-                    mb.fill_rounded_rect_aa(mx, 3, ww, mb_h - 6, 7, [255, 255, 255, 30]);
-                } else if is_occ {
-                    mb.fill_rounded_rect_aa(mx, 3, ww, mb_h - 6, 7, [255, 255, 255, 14]);
-                }
-                let wfg = if is_active {
-                    contrast_fg(accent)
-                } else if is_occ {
-                    [220, 224, 240, 240]
+                    let lbl = ws.to_string();
+                    let tw = mb.measure_text_px(&lbl, 11.5);
+                    mb.draw_text_bold_px(mx + (ww - tw) / 2, 7, &lbl, 11.5, contrast_fg(accent));
                 } else {
-                    [130, 136, 158, 190]
-                };
-                mb.draw_text_px(mx + 7, 7, &ws.to_string(), 11.5, wfg);
+                    if hovered {
+                        mb.fill_rounded_rect_aa(mx, 4, ww, pill_h, pill_r, [255, 255, 255, 28]);
+                    }
+                    let dot_r = if hovered {
+                        4.5
+                    } else if is_occ {
+                        3.8
+                    } else {
+                        2.4
+                    };
+                    let dot_col = if hovered {
+                        [240, 244, 255, 240]
+                    } else if is_occ {
+                        [206, 214, 238, 220]
+                    } else {
+                        [134, 140, 166, 155]
+                    };
+                    mb.fill_circle_aa(mx as f32 + ww as f32 * 0.5, cy_ws, dot_r, dot_col);
+                }
                 state.panel.hit_regions.push((ws_rect, ClickTarget::Workspace(ws)));
                 mx += ww + 3;
             }
@@ -1398,6 +1456,56 @@ pub fn render_panel_elements(
             .hit_regions
             .push((tray_global, ClickTarget::ToggleTrayDrawer));
 
+        // Compact OKay AdShield pill (shield icon + blocked counter)
+        let shield_txt = if state.adshield.enabled {
+            format!("{}", state.adshield.blocked_count)
+        } else {
+            "Off".to_string()
+        };
+        let shield_txt_w = mb.measure_text_px(&shield_txt, 11.5);
+        let shield_w = 24 + shield_txt_w + 8;
+        let shield_x = tray_x - shield_w - 6;
+        let shield_global = Rectangle::new(
+            (output_geo.loc.x + shield_x, output_geo.loc.y + 3).into(),
+            (shield_w, mb_h - 6).into(),
+        );
+        let shield_bg = if state.adshield.enabled {
+            if rect_contains(shield_global, pointer_x, pointer_y) {
+                [accent[0], accent[1], accent[2], 96]
+            } else {
+                [accent[0], accent[1], accent[2], 54]
+            }
+        } else if rect_contains(shield_global, pointer_x, pointer_y) {
+            [255, 255, 255, 34]
+        } else {
+            [255, 255, 255, 16]
+        };
+        mb.fill_rounded_rect_aa(shield_x, 4, shield_w, mb_h - 8, (mb_h - 8) / 2, shield_bg);
+        let shield_col = if state.adshield.enabled {
+            [140, 244, 180, 255]
+        } else {
+            [180, 186, 206, 220]
+        };
+        crate::icons::draw_shield_glyph(
+            &mut mb,
+            (shield_x + 12) as f32,
+            (mb_h / 2) as f32,
+            state.adshield.enabled,
+            0.85,
+            shield_col,
+        );
+        mb.draw_text_px(
+            shield_x + 22,
+            7,
+            &shield_txt,
+            11.5,
+            [236, 240, 252, 250],
+        );
+        state
+            .panel
+            .hit_regions
+            .push((shield_global, ClickTarget::OpenAdShieldSettings));
+
         let mb_buf = MemoryRenderBuffer::from_slice(
             &mb.pixels,
             Fourcc::Abgr8888,
@@ -1534,6 +1642,14 @@ pub fn render_panel_elements(
                     Kind::Unspecified,
                 ) {
                     elements.insert(0, OkayRenderElements::Memory(elem));
+                    if let Some(sh) = crate::render::sdf_panel_shadow_element(
+                        renderer,
+                        Rectangle::new((tx, ty).into(), (tw, th).into()),
+                        16.0,
+                        1.0,
+                    ) {
+                        elements.insert(1, sh);
+                    }
                 }
             }
         }
@@ -2001,6 +2117,14 @@ pub fn render_panel_elements(
                         Kind::Unspecified,
                     ) {
                         elements.insert(0, OkayRenderElements::Memory(elem));
+                        if let Some(sh) = crate::render::sdf_panel_shadow_element(
+                            renderer,
+                            Rectangle::new((mx, my).into(), (mw, mh).into()),
+                            16.0,
+                            1.0,
+                        ) {
+                            elements.insert(1, sh);
+                        }
                     }
                 }
             }
@@ -2432,6 +2556,14 @@ pub fn render_panel_elements(
             ) {
                 // Front-to-back rendering order: insert at index 0 so Launcher renders above Top Bar & Dock.
                 elements.insert(0, OkayRenderElements::Memory(elem));
+                if let Some(sh) = crate::render::sdf_panel_shadow_element(
+                    renderer,
+                    Rectangle::new((menu_x, menu_y).into(), (menu_w, menu_h).into()),
+                    18.0,
+                    1.0,
+                ) {
+                    elements.insert(1, sh);
+                }
             }
         }
     }

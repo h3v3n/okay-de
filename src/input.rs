@@ -81,6 +81,9 @@ enum KeyAction {
     WifiPwBackspace,
     ConfirmWifiPw,
     CancelWifiPw,
+    AdShieldTypeChar(char),
+    AdShieldBackspace,
+    AdShieldUnfocus,
     CloseAnyOverlay,
     ExitCompositor,
 }
@@ -201,6 +204,28 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
                     }
                 }
                 return FilterResult::Intercept(KeyAction::WifiPwTypeChar('\0'));
+            }
+
+            // Inline AdShield domain input inside OKay Settings -> AdShield & Privacy
+            if state.settings.open
+                && state.settings.active_tab == crate::settings::SettingsTab::AdShield
+                && state.settings.adshield_input_focused
+                && !modifiers.logo
+                && !modifiers.ctrl
+                && !modifiers.alt
+            {
+                if raw_u32 == keysyms::KEY_Escape || raw_u32 == keysyms::KEY_Return {
+                    return FilterResult::Intercept(KeyAction::AdShieldUnfocus);
+                }
+                if raw_u32 == keysyms::KEY_BackSpace {
+                    return FilterResult::Intercept(KeyAction::AdShieldBackspace);
+                }
+                if (0x21..=0x7e).contains(&raw_u32) {
+                    if let Some(ch) = char::from_u32(raw_u32) {
+                        return FilterResult::Intercept(KeyAction::AdShieldTypeChar(ch));
+                    }
+                }
+                return FilterResult::Intercept(KeyAction::AdShieldTypeChar('\0'));
             }
 
             // Super + Return -> Spawn terminal
@@ -639,6 +664,17 @@ fn execute_key_action(state: &mut OkayState, action: KeyAction) {
         }
         KeyAction::CancelWifiPw => {
             state.settings.cancel_wifi_password();
+        }
+        KeyAction::AdShieldTypeChar(ch) => {
+            if ch != '\0' && state.settings.adshield_domain_input.chars().count() < 128 {
+                state.settings.adshield_domain_input.push(ch);
+            }
+        }
+        KeyAction::AdShieldBackspace => {
+            state.settings.adshield_domain_input.pop();
+        }
+        KeyAction::AdShieldUnfocus => {
+            state.settings.adshield_input_focused = false;
         }
         KeyAction::CloseAnyOverlay => {
             state.overlays.overview_open = false;

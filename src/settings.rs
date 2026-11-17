@@ -42,10 +42,11 @@ pub enum SettingsTab {
     DefaultApps,
     SystemInfo,
     Shortcuts,
+    AdShield,
 }
 
 impl SettingsTab {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Appearance,
         Self::Displays,
         Self::Network,
@@ -55,6 +56,7 @@ impl SettingsTab {
         Self::DefaultApps,
         Self::SystemInfo,
         Self::Shortcuts,
+        Self::AdShield,
     ];
 
     fn title(self) -> &'static str {
@@ -68,6 +70,7 @@ impl SettingsTab {
             Self::DefaultApps => "7. Default Apps",
             Self::SystemInfo => "8. System Info",
             Self::Shortcuts => "9. Keybindings",
+            Self::AdShield => "10. AdShield & Privacy",
         }
     }
 }
@@ -143,6 +146,13 @@ enum SettingsAction {
     OpenAutostartFile,
     CheckUpdates,
     InstallUpdates,
+    ToggleAdShield,
+    UpdateAdShieldList,
+    FocusAdShieldInput,
+    AddAdShieldWhitelist,
+    AddAdShieldBlacklist,
+    RemoveAdShieldWhitelist(String),
+    RemoveAdShieldBlacklist(String),
 }
 
 #[derive(Debug)]
@@ -174,6 +184,8 @@ pub struct SettingsState {
     pub disk_summary: String,
     pub input_devices: Vec<String>,
     pub update_status: String,
+    pub adshield_domain_input: String,
+    pub adshield_input_focused: bool,
     hit_regions: Vec<(Rectangle<i32, Logical>, SettingsAction)>,
 }
 
@@ -207,6 +219,8 @@ impl Default for SettingsState {
             disk_summary: String::new(),
             input_devices: Vec::new(),
             update_status: "Check GitHub (h3v3n/okay-de) for updates".to_string(),
+            adshield_domain_input: String::new(),
+            adshield_input_focused: false,
             hit_regions: Vec::new(),
         };
         s
@@ -697,6 +711,45 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
             SettingsAction::CheckUpdates => {
                 state.settings.update_status = "Checking github.com/h3v3n/okay-de...".to_string();
                 crate::worker::dispatch(crate::worker::WorkerRequest::CheckSystemUpdates);
+            }
+            SettingsAction::ToggleAdShield => {
+                let next = state.adshield.toggle();
+                state.panel.adshield_enabled = next;
+                save_all_prefs(state);
+            }
+            SettingsAction::UpdateAdShieldList => {
+                state.adshield.trigger_update_blocklist();
+            }
+            SettingsAction::FocusAdShieldInput => {
+                state.settings.adshield_input_focused = true;
+            }
+            SettingsAction::AddAdShieldWhitelist => {
+                let raw = state.settings.adshield_domain_input.trim().to_string();
+                if state.adshield.add_whitelist_domain(&raw) {
+                    state.settings.adshield_domain_input.clear();
+                    state.panel.adshield_whitelist = state.adshield.whitelist.clone();
+                    state.panel.adshield_blacklist = state.adshield.blacklist.clone();
+                    save_all_prefs(state);
+                }
+            }
+            SettingsAction::AddAdShieldBlacklist => {
+                let raw = state.settings.adshield_domain_input.trim().to_string();
+                if state.adshield.add_blacklist_domain(&raw) {
+                    state.settings.adshield_domain_input.clear();
+                    state.panel.adshield_whitelist = state.adshield.whitelist.clone();
+                    state.panel.adshield_blacklist = state.adshield.blacklist.clone();
+                    save_all_prefs(state);
+                }
+            }
+            SettingsAction::RemoveAdShieldWhitelist(dom) => {
+                state.adshield.remove_whitelist_domain(&dom);
+                state.panel.adshield_whitelist = state.adshield.whitelist.clone();
+                save_all_prefs(state);
+            }
+            SettingsAction::RemoveAdShieldBlacklist(dom) => {
+                state.adshield.remove_blacklist_domain(&dom);
+                state.panel.adshield_blacklist = state.adshield.blacklist.clone();
+                save_all_prefs(state);
             }
             SettingsAction::InstallUpdates => {
                 let cmd = crate::system_backends::install_system_updates_cmd();
@@ -1790,6 +1843,161 @@ pub fn render_settings_elements(
                 [172, 180, 206, 255],
             );
         }
+
+        SettingsTab::AdShield => {
+            canvas.draw_text_bold_px(
+                content_x,
+                cy,
+                "OKay AdShield — System-Wide Ad & Tracker Blocker",
+                15.0,
+                [accent[0], accent[1], accent[2], 255],
+            );
+            cy += 28;
+
+            // Main Toggle: System-Wide Ad & Tracker Blocker
+            let main_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 36).into());
+            draw_setting_button(
+                &mut canvas,
+                content_x,
+                cy,
+                506,
+                36,
+                "System-Wide Ad & Tracker Blocker",
+                state.adshield.enabled,
+                accent,
+            );
+            state.settings.hit_regions.push((main_rect, SettingsAction::ToggleAdShield));
+            cy += 44;
+
+            // Stats & Update Blocklist row
+            let stat_txt = format!(
+                "Blocked: {}   |   Rules: {}   |   {}",
+                state.adshield.blocked_count, state.adshield.rules_count, state.adshield.status_msg
+            );
+            let short_stat = truncate_with_ellipsis(&canvas, &stat_txt, 11.5, 326);
+            canvas.fill_rounded_rect_aa(content_x, cy, 336, 32, 8, [255, 255, 255, 14]);
+            canvas.draw_text_px(content_x + 10, cy + 8, &short_stat, 11.5, [216, 224, 246, 255]);
+
+            let upd_rect = Rectangle::new((wx + content_x + 346, wy + cy).into(), (160, 32).into());
+            let upd_lbl = if state.adshield.updating {
+                "Updating..."
+            } else {
+                "Update Blocklist"
+            };
+            let upd_bg = if state.adshield.updating {
+                [255, 255, 255, 24]
+            } else {
+                [accent[0], accent[1], accent[2], 215]
+            };
+            let upd_fg = if state.adshield.updating {
+                [200, 206, 224, 230]
+            } else {
+                contrast_fg(accent)
+            };
+            canvas.fill_rounded_rect_aa(content_x + 346, cy, 160, 32, 8, upd_bg);
+            let uw = canvas.measure_text_px(upd_lbl, 12.0);
+            canvas.draw_text_bold_px(content_x + 346 + (160 - uw) / 2, cy + 8, upd_lbl, 12.0, upd_fg);
+            state.settings.hit_regions.push((upd_rect, SettingsAction::UpdateAdShieldList));
+            cy += 42;
+
+            // Custom Whitelist / Blacklist Domain Input
+            canvas.draw_text_px(content_x, cy, "Custom Exceptions & Rules (Whitelist / Blacklist)", 12.5, [215, 220, 238, 255]);
+            cy += 20;
+            let inp_rect = Rectangle::new((wx + content_x, wy + cy).into(), (280, 32).into());
+            let inp_bg = if state.settings.adshield_input_focused {
+                [36, 40, 58, 250]
+            } else {
+                [26, 28, 42, 235]
+            };
+            canvas.fill_rounded_rect_aa(content_x, cy, 280, 32, 8, inp_bg);
+            if state.settings.adshield_input_focused {
+                canvas.stroke_rounded_rect_aa(content_x, cy, 280, 32, 8, [accent[0], accent[1], accent[2], 220]);
+            }
+            let inp_txt = if state.settings.adshield_domain_input.is_empty() {
+                if state.settings.adshield_input_focused {
+                    "Type domain (e.g. ads.example.com)|".to_string()
+                } else {
+                    "Click to add domain...".to_string()
+                }
+            } else if state.settings.adshield_input_focused {
+                format!("{}|", state.settings.adshield_domain_input)
+            } else {
+                state.settings.adshield_domain_input.clone()
+            };
+            let inp_fg = if state.settings.adshield_domain_input.is_empty() {
+                [146, 154, 182, 220]
+            } else {
+                [244, 246, 255, 255]
+            };
+            let short_inp = truncate_with_ellipsis(&canvas, &inp_txt, 12.0, 260);
+            canvas.draw_text_px(content_x + 10, cy + 8, &short_inp, 12.0, inp_fg);
+            state.settings.hit_regions.push((inp_rect, SettingsAction::FocusAdShieldInput));
+
+            let wl_btn = Rectangle::new((wx + content_x + 288, wy + cy).into(), (104, 32).into());
+            canvas.fill_rounded_rect_aa(content_x + 288, cy, 104, 32, 8, [64, 178, 128, 210]);
+            canvas.draw_text_bold_px(content_x + 300, cy + 8, "+ Whitelist", 11.5, [18, 24, 20, 255]);
+            state.settings.hit_regions.push((wl_btn, SettingsAction::AddAdShieldWhitelist));
+
+            let bl_btn = Rectangle::new((wx + content_x + 400, wy + cy).into(), (106, 32).into());
+            canvas.fill_rounded_rect_aa(content_x + 400, cy, 106, 32, 8, [226, 86, 98, 215]);
+            canvas.draw_text_bold_px(content_x + 412, cy + 8, "+ Blacklist", 11.5, [255, 246, 248, 255]);
+            state.settings.hit_regions.push((bl_btn, SettingsAction::AddAdShieldBlacklist));
+            cy += 40;
+
+            // Active Whitelist & Blacklist pills (up to 3 each)
+            if !state.adshield.whitelist.is_empty() || !state.adshield.blacklist.is_empty() {
+                let mut px = content_x;
+                for dom in state.adshield.whitelist.iter().take(3) {
+                    let lbl = format!("WL: {} x", dom.chars().take(14).collect::<String>());
+                    let pw = (canvas.measure_text_px(&lbl, 10.5) + 14).min(162);
+                    if px + pw > content_x + 506 {
+                        break;
+                    }
+                    let pr = Rectangle::new((wx + px, wy + cy).into(), (pw, 22).into());
+                    canvas.fill_rounded_rect_aa(px, cy, pw, 22, 11, [64, 178, 128, 52]);
+                    canvas.draw_text_px(px + 7, cy + 4, &lbl, 10.5, [156, 242, 198, 255]);
+                    state.settings.hit_regions.push((pr, SettingsAction::RemoveAdShieldWhitelist(dom.clone())));
+                    px += pw + 6;
+                }
+                for dom in state.adshield.blacklist.iter().take(3) {
+                    let lbl = format!("BL: {} x", dom.chars().take(14).collect::<String>());
+                    let pw = (canvas.measure_text_px(&lbl, 10.5) + 14).min(162);
+                    if px + pw > content_x + 506 {
+                        break;
+                    }
+                    let pr = Rectangle::new((wx + px, wy + cy).into(), (pw, 22).into());
+                    canvas.fill_rounded_rect_aa(px, cy, pw, 22, 11, [226, 86, 98, 58]);
+                    canvas.draw_text_px(px + 7, cy + 4, &lbl, 10.5, [255, 178, 186, 255]);
+                    state.settings.hit_regions.push((pr, SettingsAction::RemoveAdShieldBlacklist(dom.clone())));
+                    px += pw + 6;
+                }
+                cy += 28;
+            }
+
+            // Recent Blocked Domains list
+            canvas.draw_text_px(content_x, cy, "Recently Blocked Domains", 12.5, [215, 220, 238, 255]);
+            cy += 20;
+            if state.adshield.recent_blocked.is_empty() {
+                canvas.fill_rounded_rect_aa(content_x, cy, 506, 42, 10, [255, 255, 255, 10]);
+                canvas.draw_text_px(
+                    content_x + 12,
+                    cy + 13,
+                    "No blocked queries yet (local DNS proxy listening on 127.0.0.1:5353).",
+                    11.5,
+                    [156, 164, 190, 230],
+                );
+            } else {
+                let max_rows = ((SETTINGS_HEIGHT - cy - 18) / 26).clamp(1, 8) as usize;
+                for (dom, ts) in state.adshield.recent_blocked.iter().take(max_rows) {
+                    canvas.fill_rounded_rect_aa(content_x, cy, 506, 23, 6, [255, 255, 255, 10]);
+                    let short_dom = truncate_with_ellipsis(&canvas, dom, 11.5, 410);
+                    canvas.draw_text_px(content_x + 10, cy + 4, &short_dom, 11.5, [238, 240, 252, 255]);
+                    let tw = canvas.measure_text_px(ts, 11.0);
+                    canvas.draw_text_px(content_x + 496 - tw, cy + 5, ts, 11.0, [154, 162, 190, 230]);
+                    cy += 26;
+                }
+            }
+        }
     }
 
     let buf = MemoryRenderBuffer::from_slice(
@@ -1812,7 +2020,18 @@ pub fn render_settings_elements(
         Some((SETTINGS_WIDTH, SETTINGS_HEIGHT).into()),
         Kind::Unspecified,
     ) {
-        Ok(elem) => vec![OkayRenderElements::Memory(elem)],
+        Ok(elem) => {
+            let mut out = vec![OkayRenderElements::Memory(elem)];
+            if let Some(sh) = crate::render::sdf_panel_shadow_element(
+                renderer,
+                Rectangle::new(local_pos, (SETTINGS_WIDTH, SETTINGS_HEIGHT).into()),
+                18.0,
+                1.0,
+            ) {
+                out.push(sh);
+            }
+            out
+        }
         Err(_) => Vec::new(),
     }
 }

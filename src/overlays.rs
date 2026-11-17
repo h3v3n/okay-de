@@ -141,6 +141,7 @@ enum OverlayClick {
     ControlConnectWifi(usize),
     ControlConnectBt(usize),
     ControlToggleTiling,
+    ControlToggleAdShield,
     ControlCycleMinimize,
     ControlOpenSettings,
     OverviewFocus(ObjectId),
@@ -405,7 +406,7 @@ impl OverlaysState {
             },
             DesktopIcon {
                 label: "Settings".to_string(),
-                icon_name: Some("preferences-system".to_string()),
+                icon_name: None,
                 kind: crate::icons::VectorIconKind::Settings,
                 exec_cmd: None,
                 grid_col: 0,
@@ -924,6 +925,18 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
                     enable: state.settings.bt_powered,
                 });
                 state.settings.bt_status = format!("Bluetooth {}", flag);
+            }
+            OverlayClick::ControlToggleAdShield => {
+                let next = state.adshield.toggle();
+                state.panel.adshield_enabled = next;
+                state.panel.save_full_config(
+                    state.pointer_sensitivity,
+                    state.natural_scroll,
+                    state.animations.enabled,
+                    state.animations.speed,
+                    state.animations.minimize_effect,
+                    &state.settings.xkb_layout,
+                );
             }
             OverlayClick::ControlExpandWifi => {
                 state.overlays.cc_wifi_expanded = !state.overlays.cc_wifi_expanded;
@@ -2074,13 +2087,57 @@ pub fn render_top_overlays(
             }
         } else if let Some(elem) = upload_canvas(&canvas, (cal_x, cal_y), renderer, scale) {
             elements.push(elem);
+            if let Some(sh) = crate::render::sdf_panel_shadow_element(
+                renderer,
+                Rectangle::new((cal_x, cal_y).into(), (cal_w, cal_h).into()),
+                18.0,
+                1.0,
+            ) {
+                elements.push(sh);
+            }
         }
     }
 
     // 6. Notification Center Drawer
     if state.overlays.notif_drawer_open {
-        let nw = 336;
-        let nh = 304;
+        let nw = 356;
+        let max_body_w = nw - 48;
+        let probe = Canvas::new(1, 1);
+        let mut prepared_cards: Vec<(String, Vec<String>, i32)> = Vec::new();
+        let mut cards_total_h = 0i32;
+        for (title, body) in state.overlays.history.iter().take(4) {
+            let mut lines: Vec<String> = Vec::new();
+            let mut cur_line = String::new();
+            for word in body.split_whitespace() {
+                let cand = if cur_line.is_empty() {
+                    word.to_string()
+                } else {
+                    format!("{} {}", cur_line, word)
+                };
+                if probe.measure_text_px(&cand, 11.5) <= max_body_w {
+                    cur_line = cand;
+                } else {
+                    if !cur_line.is_empty() {
+                        lines.push(cur_line);
+                    }
+                    cur_line = word.to_string();
+                }
+            }
+            if !cur_line.is_empty() {
+                lines.push(cur_line);
+            }
+            if lines.is_empty() {
+                lines.push(String::new());
+            }
+            let card_h = 34 + (lines.len() as i32) * 16;
+            cards_total_h += card_h + 8;
+            prepared_cards.push((title.clone(), lines, card_h));
+        }
+        let nh = if prepared_cards.is_empty() {
+            148
+        } else {
+            (58 + cards_total_h).clamp(160, 440)
+        };
         let nx = (output_geo.size.w - nw - 12).max(8);
         let ny = if state.panel.dock_mode || state.panel.panel_top {
             PANEL_HEIGHT + 8
@@ -2116,17 +2173,22 @@ pub fn render_top_overlays(
             .hit_regions
             .push((clear_rect, OverlayClick::ClearNotifications));
 
-        if state.overlays.history.is_empty() {
+        if prepared_cards.is_empty() {
             canvas.draw_text_px(16, 62, "No recent notifications.", 12.5, [156, 162, 188, 235]);
         } else {
-            for (i, (title, body)) in state.overlays.history.iter().take(4).enumerate() {
-                let iy = 48 + i as i32 * 60;
-                canvas.fill_rounded_rect_aa(12, iy, nw - 24, 52, 12, [255, 255, 255, 14]);
-                canvas.fill_rounded_rect_aa(14, iy + 8, 3, 36, 2, [accent[0], accent[1], accent[2], 235]);
-                let st: String = title.chars().take(33).collect();
-                let sb: String = body.chars().take(37).collect();
-                canvas.draw_text_px(24, iy + 8, &st, 12.5, [242, 244, 255, 255]);
-                canvas.draw_text_px(24, iy + 28, &sb, 11.5, [178, 184, 208, 240]);
+            let mut iy = 48;
+            for (title, lines, card_h) in prepared_cards {
+                if iy + card_h > nh - 8 {
+                    break;
+                }
+                canvas.fill_rounded_rect_aa(12, iy, nw - 24, card_h, 12, [255, 255, 255, 14]);
+                canvas.fill_rounded_rect_aa(14, iy + 8, 3, card_h - 16, 2, [accent[0], accent[1], accent[2], 235]);
+                let st: String = title.chars().take(38).collect();
+                canvas.draw_text_bold_px(24, iy + 8, &st, 12.5, [242, 244, 255, 255]);
+                for (li, line) in lines.iter().enumerate() {
+                    canvas.draw_text_px(24, iy + 27 + li as i32 * 16, line, 11.5, [182, 188, 212, 240]);
+                }
+                iy += card_h + 8;
             }
         }
 
@@ -2146,6 +2208,14 @@ pub fn render_top_overlays(
             }
         } else if let Some(elem) = upload_canvas(&canvas, (nx, ny), renderer, scale) {
             elements.push(elem);
+            if let Some(sh) = crate::render::sdf_panel_shadow_element(
+                renderer,
+                Rectangle::new((nx, ny).into(), (nw, nh).into()),
+                18.0,
+                1.0,
+            ) {
+                elements.push(sh);
+            }
         }
     }
 
@@ -2167,7 +2237,7 @@ pub fn render_top_overlays(
         };
 
         let cc_w = 310;
-        let cc_h = 266 + extra_h;
+        let cc_h = 301 + extra_h;
         let cc_x = (output_geo.size.w - cc_w - 12).max(8);
         let cc_y = if state.panel.dock_mode || state.panel.panel_top {
             PANEL_HEIGHT + 8
@@ -2180,27 +2250,39 @@ pub fn render_top_overlays(
         let mut canvas = Canvas::new(cc_w, cc_h);
         canvas.fill_glass_panel(0, 0, cc_w, cc_h, 18);
 
-        // Connectivity card (Wi-Fi, Bluetooth, Tiling)
-        canvas.fill_rounded_rect_aa(12, 12, cc_w - 24, 116, 12, [255, 255, 255, 14]);
+        // Connectivity & AdShield card (Wi-Fi, Bluetooth, AdShield, Layout)
+        canvas.fill_rounded_rect_aa(12, 12, cc_w - 24, 151, 12, [255, 255, 255, 14]);
         let wifi_on = !state.settings.wifi_status.to_lowercase().contains("off");
-        let toggles: [(&str, &str, bool, OverlayClick, Option<(bool, OverlayClick)>); 3] = [
+        let adshield_sub = if state.adshield.enabled {
+            format!("Active • {} blocked", state.adshield.blocked_count)
+        } else {
+            "Disabled".to_string()
+        };
+        let toggles: [(&str, String, bool, OverlayClick, Option<(bool, OverlayClick)>); 4] = [
             (
                 "Wi-Fi",
-                if wifi_on { "Connected" } else { "Off" },
+                if wifi_on { "Connected".to_string() } else { "Off".to_string() },
                 wifi_on,
                 OverlayClick::ControlToggleWifi,
                 Some((wifi_expanded, OverlayClick::ControlExpandWifi)),
             ),
             (
                 "Bluetooth",
-                if state.settings.bt_powered { "On" } else { "Off" },
+                if state.settings.bt_powered { "On".to_string() } else { "Off".to_string() },
                 state.settings.bt_powered,
                 OverlayClick::ControlToggleBt,
                 Some((bt_expanded, OverlayClick::ControlExpandBt)),
             ),
             (
+                "AdShield",
+                adshield_sub,
+                state.adshield.enabled,
+                OverlayClick::ControlToggleAdShield,
+                None,
+            ),
+            (
                 "Layout",
-                state.workspaces.layout_mode.short_label(),
+                state.workspaces.layout_mode.short_label().to_string(),
                 state.workspaces.tiling_enabled(),
                 OverlayClick::ControlToggleTiling,
                 None,
@@ -2222,10 +2304,11 @@ pub fn render_top_overlays(
             match i {
                 0 => crate::icons::draw_wifi_glyph(&mut canvas, 34.0, (ry + 21) as f32, 0.9, pill_fg),
                 1 => crate::icons::draw_bluetooth_glyph(&mut canvas, 34.0, (ry + 16) as f32, 0.95, pill_fg),
+                2 => crate::icons::draw_shield_glyph(&mut canvas, 34.0, (ry + 16) as f32, active, 0.95, pill_fg),
                 _ => crate::icons::draw_tiling_glyph(&mut canvas, 34.0, (ry + 16) as f32, 0.95, pill_fg),
             }
             canvas.draw_text_px(54, ry + 3, lbl, 12.5, [244, 246, 255, 255]);
-            canvas.draw_text_px(54, ry + 18, sub, 10.5, [158, 166, 192, 230]);
+            canvas.draw_text_px(54, ry + 18, &sub, 10.5, [158, 166, 192, 230]);
             state.overlays.hit_regions.push((row_rect, act));
 
             if let Some((is_exp, exp_act)) = expand_opt {
@@ -2250,7 +2333,7 @@ pub fn render_top_overlays(
 
         // Expanded Wi-Fi Networks or Bluetooth Devices sub-panel
         if wifi_expanded || bt_expanded {
-            let sub_y = 136;
+            let sub_y = 171;
             let sub_h = extra_h - 8;
             canvas.fill_rounded_rect_aa(12, sub_y, cc_w - 24, sub_h, 12, [255, 255, 255, 12]);
             let header_txt = if wifi_expanded {
@@ -2321,7 +2404,7 @@ pub fn render_top_overlays(
         }
 
         // Sound Volume Slider Card
-        let vol_y = 136 + extra_h;
+        let vol_y = 171 + extra_h;
         canvas.fill_rounded_rect_aa(12, vol_y, cc_w - 24, 64, 12, [255, 255, 255, 14]);
         let vol_lbl = if state.panel.volume_muted {
             "Sound  (Muted)".to_string()
@@ -2393,6 +2476,14 @@ pub fn render_top_overlays(
             }
         } else if let Some(elem) = upload_canvas(&canvas, (cc_x, cc_y), renderer, scale) {
             elements.push(elem);
+            if let Some(sh) = crate::render::sdf_panel_shadow_element(
+                renderer,
+                Rectangle::new((cc_x, cc_y).into(), (cc_w, cc_h).into()),
+                18.0,
+                1.0,
+            ) {
+                elements.push(sh);
+            }
         }
     }
 

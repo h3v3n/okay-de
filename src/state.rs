@@ -342,6 +342,7 @@ pub struct OkayState {
     pub settings: crate::settings::SettingsState,
     pub animations: crate::animation::AnimationManager,
     pub overlays: crate::overlays::OverlaysState,
+    pub adshield: crate::adshield::AdShieldManager,
 }
 
 impl OkayState {
@@ -389,6 +390,12 @@ impl OkayState {
         let mut overlays = crate::overlays::OverlaysState::new();
         overlays.lock_pin = cfg.lock_pin;
 
+        let adshield = crate::adshield::AdShieldManager::new(
+            panel.adshield_enabled,
+            panel.adshield_whitelist.clone(),
+            panel.adshield_blacklist.clone(),
+        );
+
         Self {
             display_handle,
             loop_signal,
@@ -431,6 +438,7 @@ impl OkayState {
             settings,
             animations,
             overlays,
+            adshield,
         }
     }
 
