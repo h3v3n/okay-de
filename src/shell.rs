@@ -2,8 +2,9 @@ use std::{io::Write, os::fd::OwnedFd};
 
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
-    delegate_compositor, delegate_data_control, delegate_data_device, delegate_layer_shell,
-    delegate_output, delegate_seat, delegate_shm, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_compositor, delegate_data_control, delegate_data_device, delegate_fractional_scale,
+    delegate_layer_shell, delegate_output, delegate_seat, delegate_session_lock, delegate_shm,
+    delegate_xdg_decoration, delegate_xdg_shell,
     desktop::{
         layer_map_for_output, LayerSurface, PopupKind, Window,
     },
@@ -34,6 +35,7 @@ use smithay::{
             get_parent, is_sync_subsurface, with_states, CompositorClientState,
             CompositorHandler, CompositorState,
         },
+        fractional_scale::{self, FractionalScaleHandler},
         output::OutputHandler,
         selection::{
             data_device::{
@@ -43,9 +45,11 @@ use smithay::{
             wlr_data_control::{DataControlHandler, DataControlState},
             SelectionHandler, SelectionSource, SelectionTarget,
         },
+        session_lock::{LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker},
         shell::{
             wlr_layer::{
-                Layer, LayerSurfaceData, WlrLayerShellHandler, WlrLayerShellState,
+                KeyboardInteractivity, Layer, LayerSurfaceData, WlrLayerShellHandler,
+                WlrLayerShellState,
             },
             xdg::{
                 decoration::XdgDecorationHandler,
@@ -156,6 +160,7 @@ impl XdgShellHandler for OkayState {
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let id = surface.wl_surface().id();
+        self.unstack_window(&id);
         self.workspaces.remove_window(&id);
         self.focus_stack.retain(|x| x != &id);
         self.animations.windows.remove(&id);
@@ -444,14 +449,31 @@ impl OkayState {
                     .unwrap_or(true)
             });
 
-            let mut map = layer_map_for_output(&output);
-            map.arrange();
+            let mut keyboard_focus_surface: Option<WlSurface> = None;
+            {
+                let mut map = layer_map_for_output(&output);
+                map.arrange();
 
-            if !initial_configure_sent {
-                if let Some(layer) = map.layers().find(|l| l.wl_surface() == surface).cloned() {
-                    layer.layer_surface().send_configure();
+                let found_layer = map.layers().find(|l| l.wl_surface() == surface).cloned();
+                if let Some(layer) = found_layer {
+                    if !initial_configure_sent {
+                        layer.layer_surface().send_configure();
+                    }
+                    if layer.cached_state().keyboard_interactivity == KeyboardInteractivity::Exclusive {
+                        keyboard_focus_surface = Some(layer.wl_surface().clone());
+                    }
                 }
             }
+            if let Some(focus_surf) = keyboard_focus_surface {
+                if let Some(kb) = self.seat.get_keyboard() {
+                    kb.set_focus(
+                        self,
+                        Some(focus_surf),
+                        smithay::utils::SERIAL_COUNTER.next_serial(),
+                    );
+                }
+            }
+            self.retile_workspace();
         }
     }
 }
@@ -483,12 +505,27 @@ impl WlrLayerShellHandler for OkayState {
         };
 
         let layer_surface = LayerSurface::new(surface, namespace);
-        let mut map = layer_map_for_output(&output);
-        if let Err(err) = map.map_layer(&layer_surface) {
-            tracing::warn!(?err, "Failed to map layer surface");
-            return;
+        let exclusive_kb = layer_surface.cached_state().keyboard_interactivity
+            == KeyboardInteractivity::Exclusive;
+        let focus_surf = layer_surface.wl_surface().clone();
+        {
+            let mut map = layer_map_for_output(&output);
+            if let Err(err) = map.map_layer(&layer_surface) {
+                tracing::warn!(?err, "Failed to map layer surface");
+                return;
+            }
+            map.arrange();
         }
-        map.arrange();
+        if exclusive_kb {
+            if let Some(kb) = self.seat.get_keyboard() {
+                kb.set_focus(
+                    self,
+                    Some(focus_surf),
+                    smithay::utils::SERIAL_COUNTER.next_serial(),
+                );
+            }
+        }
+        self.retile_workspace();
     }
 
     fn new_popup(&mut self, _parent: smithay::wayland::shell::wlr_layer::LayerSurface, popup: PopupSurface) {
@@ -498,6 +535,7 @@ impl WlrLayerShellHandler for OkayState {
     }
 
     fn layer_destroyed(&mut self, surface: smithay::wayland::shell::wlr_layer::LayerSurface) {
+        let mut destroyed_id = None;
         for output in self.space.outputs() {
             let mut map = layer_map_for_output(output);
             let found = map
@@ -505,9 +543,22 @@ impl WlrLayerShellHandler for OkayState {
                 .find(|l| l.layer_surface() == &surface)
                 .cloned();
             if let Some(layer) = found {
+                destroyed_id = Some(layer.wl_surface().id());
                 map.unmap_layer(&layer);
                 map.arrange();
                 break;
+            }
+        }
+        self.retile_workspace();
+        if let Some(did) = destroyed_id {
+            let need_refocus = self
+                .seat
+                .get_keyboard()
+                .and_then(|k| k.current_focus())
+                .map(|s| s.id() == did)
+                .unwrap_or(false);
+            if need_refocus {
+                self.refocus_topmost_visible();
             }
         }
     }
@@ -595,6 +646,67 @@ impl DataControlHandler for OkayState {
 impl ClientDndGrabHandler for OkayState {}
 impl ServerDndGrabHandler for OkayState {}
 
+impl FractionalScaleHandler for OkayState {
+    fn new_fractional_scale(&mut self, surface: WlSurface) {
+        let scale = self
+            .space
+            .outputs()
+            .next()
+            .map(|o| o.current_scale().fractional_scale())
+            .unwrap_or(1.0);
+        with_states(&surface, |states| {
+            fractional_scale::with_fractional_scale(states, |fs| {
+                fs.set_preferred_scale(scale);
+            });
+        });
+    }
+}
+
+impl SessionLockHandler for OkayState {
+    fn lock_state(&mut self) -> &mut SessionLockManagerState {
+        &mut self.session_lock_state
+    }
+
+    fn lock(&mut self, confirmation: SessionLocker) {
+        self.ext_locked = true;
+        self.overlays.locked = true;
+        confirmation.lock();
+    }
+
+    fn unlock(&mut self) {
+        self.ext_locked = false;
+        self.overlays.locked = false;
+        self.ext_lock_surfaces.clear();
+        self.refocus_topmost_visible();
+    }
+
+    fn new_surface(&mut self, surface: LockSurface, wl_output: WlOutput) {
+        let output = Output::from_resource(&wl_output)
+            .or_else(|| self.space.outputs().next().cloned());
+        if let Some(out) = output {
+            let size = self
+                .space
+                .output_geometry(&out)
+                .map(|g| g.size)
+                .unwrap_or_else(|| (1280, 720).into());
+            surface.with_pending_state(|s| {
+                s.size = Some(smithay::utils::Size::from((size.w as u32, size.h as u32)));
+            });
+            surface.send_configure();
+            let wl_surf = surface.wl_surface().clone();
+            self.ext_lock_surfaces.retain(|(o, _)| o != &out);
+            self.ext_lock_surfaces.push((out, surface));
+            if let Some(kb) = self.seat.get_keyboard() {
+                kb.set_focus(
+                    self,
+                    Some(wl_surf),
+                    smithay::utils::SERIAL_COUNTER.next_serial(),
+                );
+            }
+        }
+    }
+}
+
 delegate_compositor!(OkayState);
 delegate_shm!(OkayState);
 delegate_xdg_shell!(OkayState);
@@ -604,3 +716,5 @@ delegate_seat!(OkayState);
 delegate_output!(OkayState);
 delegate_data_device!(OkayState);
 delegate_data_control!(OkayState);
+delegate_fractional_scale!(OkayState);
+delegate_session_lock!(OkayState);

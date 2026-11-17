@@ -465,6 +465,7 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                         None,
                     );
                     smithay::desktop::layer_map_for_output(out).arrange();
+                    state.update_output_fractional_scales(out);
                     state.retile_workspace();
                 }
             }
@@ -494,6 +495,7 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                             out.change_current_state(Some(target_mode), None, None, None);
                             out.set_preferred(target_mode);
                             smithay::desktop::layer_map_for_output(out).arrange();
+                            state.update_output_fractional_scales(out);
                             state.retile_workspace();
                         }
                     }
@@ -520,6 +522,7 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                             out.change_current_state(Some(next_mode), None, None, None);
                             out.set_preferred(next_mode);
                             smithay::desktop::layer_map_for_output(out).arrange();
+                            state.update_output_fractional_scales(out);
                         }
                     }
                 }

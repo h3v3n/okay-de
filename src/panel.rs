@@ -2505,7 +2505,8 @@ pub fn render_titlebar_element(
     is_focused: bool,
     is_pinned: bool,
     is_maximized: bool,
-    _accent: [u8; 3],
+    accent: [u8; 3],
+    stack_tabs: Option<(&[(smithay::reexports::wayland_server::backend::ObjectId, String)], usize)>,
     renderer: &mut GlesRenderer,
     scale: Scale<f64>,
 ) -> Option<OkayRenderElements> {
@@ -2558,22 +2559,54 @@ pub fn render_titlebar_element(
         }
     }
 
-    // Centered window title
-    let mut title = window_title_str(window);
-    if is_pinned {
-        title = format!("[PIN] {}", title);
-    }
-    let avail_title_w = (tb_w - 144).max(32);
-    let max_chars = (avail_title_w / 8).max(1) as usize;
-    let short_title: String = title.chars().take(max_chars).collect();
-    let title_w = canvas.measure_text_px(&short_title, 13.0);
-    let title_x = ((tb_w - title_w) / 2).max(74);
-    let title_fg = if is_focused {
-        [238, 240, 250, 255]
+    if let Some((tabs, active_idx)) = stack_tabs.filter(|(t, _)| t.len() >= 2) {
+        // Material 3 Expressive tabbed stack pills in titlebar
+        let tabs_area_w = (tb_w - 110).max(40);
+        let tab_w = (tabs_area_w / tabs.len() as i32).max(28);
+        for (i, (_id, tab_title)) in tabs.iter().enumerate() {
+            let tx = 74 + (i as i32) * tab_w;
+            let tw = (tab_w - 4).max(24);
+            let is_active_tab = i == active_idx;
+            let pill_col = if is_active_tab {
+                [accent[0], accent[1], accent[2], 235]
+            } else {
+                [255, 255, 255, 20]
+            };
+            let fg = if is_active_tab {
+                contrast_fg(accent)
+            } else {
+                [206, 210, 224, 220]
+            };
+            canvas.fill_rounded_rect_aa(tx, 4, tw, tb_h - 8, 9, pill_col);
+            let max_chars = ((tw - 14) / 7).max(1) as usize;
+            let label: String = tab_title.chars().take(max_chars).collect();
+            let lw = canvas.measure_text_px(&label, 12.0);
+            let lx = tx + ((tw - lw) / 2).max(6);
+            canvas.draw_text_px(lx, 7, &label, 12.0, fg);
+        }
+        // Unstack button on the right
+        if tb_w > 110 {
+            canvas.fill_rounded_rect_aa(tb_w - 30, 5, 22, tb_h - 10, 8, [255, 255, 255, 22]);
+            canvas.draw_text_px(tb_w - 22, 6, "^", 12.0, [220, 224, 238, 230]);
+        }
     } else {
-        [152, 156, 174, 255]
-    };
-    canvas.draw_text_px(title_x, 7, &short_title, 13.0, title_fg);
+        // Centered window title
+        let mut title = window_title_str(window);
+        if is_pinned {
+            title = format!("[PIN] {}", title);
+        }
+        let avail_title_w = (tb_w - 144).max(32);
+        let max_chars = (avail_title_w / 8).max(1) as usize;
+        let short_title: String = title.chars().take(max_chars).collect();
+        let title_w = canvas.measure_text_px(&short_title, 13.0);
+        let title_x = ((tb_w - title_w) / 2).max(74);
+        let title_fg = if is_focused {
+            [238, 240, 250, 255]
+        } else {
+            [152, 156, 174, 255]
+        };
+        canvas.draw_text_px(title_x, 7, &short_title, 13.0, title_fg);
+    }
 
     let buf = MemoryRenderBuffer::from_slice(
         &canvas.pixels,

@@ -734,7 +734,12 @@ fn move_pointer_to(state: &mut OkayState, pos: Point<f64, Logical>, time_msec: u
                     }
                 }
 
-                state.overlays.snap_preview = state.detect_snap_zone(pos).map(|(_, r)| r);
+                let win_id = window.toplevel().map(|t| t.wl_surface().id());
+                if let Some((_, tb_rect)) = state.window_titlebar_under(pos, win_id.as_ref()) {
+                    state.overlays.snap_preview = Some(tb_rect);
+                } else {
+                    state.overlays.snap_preview = state.detect_snap_zone(pos).map(|(_, r)| r);
+                }
                 state.space.map_element(window, new_loc, false);
                 return;
             }
@@ -1015,7 +1020,12 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
             match grab {
                 PointerGrabMode::Move { window, .. } => {
                     state.overlays.snap_preview = None;
-                    if let Some((zone, _)) = state.detect_snap_zone(state.pointer_location) {
+                    let win_id = window.toplevel().map(|t| t.wl_surface().id());
+                    if let Some((target, _)) =
+                        state.window_titlebar_under(state.pointer_location, win_id.as_ref())
+                    {
+                        state.stack_window_onto(&window, &target);
+                    } else if let Some((zone, _)) = state.detect_snap_zone(state.pointer_location) {
                         state.snap_window(&window, zone);
                     }
                 }

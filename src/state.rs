@@ -13,6 +13,7 @@ use smithay::{
         pointer::CursorImageStatus,
         Seat, SeatState,
     },
+    output::Output,
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
@@ -23,12 +24,14 @@ use smithay::{
     },
     utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER},
     wayland::{
-        compositor::{CompositorClientState, CompositorState},
+        compositor::{with_states, CompositorClientState, CompositorState},
+        fractional_scale::{self, FractionalScaleManagerState},
         output::OutputManagerState,
         selection::{
             data_device::{set_data_device_selection, DataDeviceState},
             wlr_data_control::DataControlState,
         },
+        session_lock::{LockSurface, SessionLockManagerState},
         shell::{
             wlr_layer::{Layer, WlrLayerShellState},
             xdg::{decoration::XdgDecorationState, XdgShellState},
@@ -107,7 +110,14 @@ pub enum SnapZone {
     Maximize,
 }
 
-/// Manages virtual workspaces (1..=9), per-window states, and tiling/floating layout.
+/// A tabbed container of stacked windows sharing the same screen geometry.
+#[derive(Debug, Clone)]
+pub struct WindowStack {
+    pub tabs: Vec<ObjectId>,
+    pub active: usize,
+}
+
+/// Manages virtual workspaces (1..=9), per-window states, window stacks, and tiling/floating layout.
 #[derive(Debug)]
 pub struct WorkspaceManager {
     pub active: usize,
@@ -122,6 +132,7 @@ pub struct WorkspaceManager {
     pub per_workspace_layouts: HashMap<usize, LayoutMode>,
     pub master_ratio: f32,
     pub tile_order: Vec<ObjectId>,
+    pub window_stacks: Vec<WindowStack>,
 }
 
 impl Default for WorkspaceManager {
@@ -139,6 +150,7 @@ impl Default for WorkspaceManager {
             per_workspace_layouts: HashMap::new(),
             master_ratio: 0.50,
             tile_order: Vec::new(),
+            window_stacks: Vec::new(),
         }
     }
 }
@@ -218,8 +230,22 @@ impl WorkspaceManager {
             .unwrap_or(false)
     }
 
+    pub fn is_hidden_in_stack(&self, window: &Window) -> bool {
+        let Some(id) = window.toplevel().map(|t| t.wl_surface().id()) else {
+            return false;
+        };
+        for stack in &self.window_stacks {
+            if stack.tabs.contains(&id) {
+                return stack.tabs.get(stack.active) != Some(&id);
+            }
+        }
+        false
+    }
+
     pub fn is_visible(&self, window: &Window) -> bool {
-        self.is_on_active_workspace(window) && !self.is_minimized(window)
+        self.is_on_active_workspace(window)
+            && !self.is_minimized(window)
+            && !self.is_hidden_in_stack(window)
     }
 }
 
@@ -280,6 +306,11 @@ pub struct OkayState {
     pub data_device_state: DataDeviceState,
     #[allow(dead_code)]
     pub data_control_state: DataControlState,
+    #[allow(dead_code)]
+    pub fractional_scale_manager_state: FractionalScaleManagerState,
+    pub session_lock_state: SessionLockManagerState,
+    pub ext_lock_surfaces: Vec<(Output, LockSurface)>,
+    pub ext_locked: bool,
 
     // Seat & input tracking
     pub seat: Seat<Self>,
@@ -330,6 +361,10 @@ impl OkayState {
         let mut seat_state = SeatState::new();
         let data_device_state = DataDeviceState::new::<Self>(&display_handle);
         let data_control_state = DataControlState::new::<Self, _>(&display_handle, None, |_| true);
+        let fractional_scale_manager_state =
+            FractionalScaleManagerState::new::<Self>(&display_handle);
+        let session_lock_state =
+            SessionLockManagerState::new::<Self, _>(&display_handle, |_| true);
         crate::screencopy::init_screencopy_global(&display_handle);
 
         let mut seat = seat_state.new_wl_seat(&display_handle, "seat-0");
@@ -369,6 +404,10 @@ impl OkayState {
             seat_state,
             data_device_state,
             data_control_state,
+            fractional_scale_manager_state,
+            session_lock_state,
+            ext_lock_surfaces: Vec::new(),
+            ext_locked: false,
             seat,
             pointer_location: Point::from((0.0, 0.0)),
             cursor_status: CursorImageStatus::default_named(),
@@ -577,7 +616,8 @@ impl OkayState {
         let id = toplevel.wl_surface().id();
         let output_geo = self
             .output_under_pointer()
-            .and_then(|o| self.space.output_geometry(&o))
+            .or_else(|| self.space.outputs().next().cloned())
+            .map(|o| self.effective_work_area(&o))
             .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
 
         if self.workspaces.maximized.remove(&id) {
@@ -884,7 +924,8 @@ impl OkayState {
         self.workspaces.maximized.remove(&id);
         let output_geo = self
             .output_under_pointer()
-            .and_then(|o| self.space.output_geometry(&o))
+            .or_else(|| self.space.outputs().next().cloned())
+            .map(|o| self.effective_work_area(&o))
             .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
 
         let rect = self.compute_snap_rect(output_geo, zone);
@@ -940,9 +981,7 @@ impl OkayState {
         else {
             return;
         };
-        let Some(output_geo) = self.space.output_geometry(&output) else {
-            return;
-        };
+        let output_geo = self.effective_work_area(&output);
 
         let windows = self.ordered_visible_windows();
         let n = windows.len();
@@ -1181,7 +1220,8 @@ impl OkayState {
         };
         let output_geo = self
             .output_under_pointer()
-            .and_then(|o| self.space.output_geometry(&o))
+            .or_else(|| self.space.outputs().next().cloned())
+            .map(|o| self.effective_work_area(&o))
             .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
         let top_pad = if self.panel.dock_mode || self.panel.panel_top {
             crate::panel::PANEL_HEIGHT
@@ -1279,6 +1319,24 @@ impl OkayState {
             return true;
         }
 
+        // Stacked window tab pills & Unstack (`^`) button on titlebar
+        if let Some(win_id) = window.toplevel().map(|t| t.wl_surface().id()) {
+            if let Some((stack_idx, tabs, _active)) = self.stack_tabs_for(&win_id) {
+                let unstack_x = tb_rect.size.w - 30;
+                if rel_x >= unstack_x && rel_x <= tb_rect.size.w - 6 {
+                    self.unstack_window(&win_id);
+                    return true;
+                }
+                let avail_w = (unstack_x - 76).max(60);
+                let tab_w = (avail_w / tabs.len().max(1) as i32).clamp(48, 130);
+                if rel_x >= 74 && rel_x < 74 + tab_w * tabs.len() as i32 {
+                    let tab_idx = ((rel_x - 74) / tab_w).clamp(0, tabs.len() as i32 - 1) as usize;
+                    self.switch_stack_tab(stack_idx, tab_idx);
+                    return true;
+                }
+            }
+        }
+
         // Double-click titlebar -> Toggle Maximize / Restore
         if let Some(win_id) = window.toplevel().map(|t| t.wl_surface().id()) {
             let now = Instant::now();
@@ -1304,6 +1362,207 @@ impl OkayState {
             initial_window_loc: win_loc,
         });
         true
+    }
+
+    /// Notifies all mapped XDG and Layer surfaces on `output` of its updated fractional scale (`wp_fractional_scale_v1`).
+    pub fn update_output_fractional_scales(&self, output: &Output) {
+        let scale = output.current_scale().fractional_scale();
+        for window in self.space.elements() {
+            if let Some(toplevel) = window.toplevel() {
+                with_states(toplevel.wl_surface(), |states| {
+                    fractional_scale::with_fractional_scale(states, |fs| {
+                        fs.set_preferred_scale(scale);
+                    });
+                });
+            }
+        }
+        let map = layer_map_for_output(output);
+        for layer in map.layers() {
+            with_states(layer.wl_surface(), |states| {
+                fractional_scale::with_fractional_scale(states, |fs| {
+                    fs.set_preferred_scale(scale);
+                });
+            });
+        }
+    }
+
+    /// Computes the effective work area on `output`, respecting both `zwlr_layer_shell_v1` `exclusive_zone`
+    /// and OKay DE's native Top Bar / Dock.
+    pub fn effective_work_area(&self, output: &Output) -> Rectangle<i32, Logical> {
+        let geo = self
+            .space
+            .output_geometry(output)
+            .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
+        let non_excl = layer_map_for_output(output).non_exclusive_zone();
+        let mut x0 = geo.loc.x + non_excl.loc.x;
+        let mut y0 = geo.loc.y + non_excl.loc.y;
+        let mut x1 = x0 + non_excl.size.w.max(120);
+        let mut y1 = y0 + non_excl.size.h.max(120);
+
+        let top_bar = if self.panel.dock_mode || self.panel.panel_top {
+            crate::panel::PANEL_HEIGHT
+        } else {
+            0
+        };
+        y0 = y0.max(geo.loc.y + top_bar);
+        x0 = x0.max(geo.loc.x);
+        x1 = x1.min(geo.loc.x + geo.size.w);
+        y1 = y1.min(geo.loc.y + geo.size.h);
+
+        Rectangle::new((x0, y0).into(), ((x1 - x0).max(120), (y1 - y0).max(120)).into())
+    }
+
+    /// Returns `(stack_idx, Vec<(ObjectId, tab_title)>, active_idx)` if `id` belongs to a >=2-tab stack.
+    pub fn stack_tabs_for(&self, id: &ObjectId) -> Option<(usize, Vec<(ObjectId, String)>, usize)> {
+        for (s_idx, stack) in self.workspaces.window_stacks.iter().enumerate() {
+            if stack.tabs.len() >= 2 && stack.tabs.contains(id) {
+                let mut list = Vec::with_capacity(stack.tabs.len());
+                for tid in &stack.tabs {
+                    let title = self
+                        .space
+                        .elements()
+                        .find(|w| w.toplevel().map(|t| t.wl_surface().id() == *tid).unwrap_or(false))
+                        .map(crate::panel::window_title_str)
+                        .unwrap_or_else(|| "Tab".to_string());
+                    list.push((tid.clone(), title));
+                }
+                let active = stack.active.min(list.len().saturating_sub(1));
+                return Some((s_idx, list, active));
+            }
+        }
+        None
+    }
+
+    /// Returns another visible window whose server-side titlebar is under `pos` (for drag-to-stack).
+    pub fn window_titlebar_under(
+        &self,
+        pos: Point<f64, Logical>,
+        exclude: Option<&ObjectId>,
+    ) -> Option<(Window, Rectangle<i32, Logical>)> {
+        let px = pos.x.round() as i32;
+        let py = pos.y.round() as i32;
+        for window in self.space.elements().rev() {
+            if !self.workspaces.is_visible(window) || self.workspaces.is_fullscreen(window) {
+                continue;
+            }
+            let wid = window.toplevel().map(|t| t.wl_surface().id());
+            if exclude.is_some() && wid.as_ref() == exclude {
+                continue;
+            }
+            let Some(win_loc) = self.space.element_location(window) else {
+                continue;
+            };
+            let geo = window.geometry();
+            let tb_x = win_loc.x + geo.loc.x;
+            let tb_y = win_loc.y + geo.loc.y - TITLEBAR_HEIGHT;
+            let tb_w = geo.size.w.max(120);
+            if px >= tb_x && px < tb_x + tb_w && py >= tb_y && py < tb_y + TITLEBAR_HEIGHT {
+                let full_rect = Rectangle::new((tb_x, tb_y).into(), (tb_w, geo.size.h + TITLEBAR_HEIGHT).into());
+                return Some((window.clone(), full_rect));
+            }
+        }
+        None
+    }
+
+    /// Groups `dragged` into `target`'s tabbed Window Stack, matching `target`'s geometry.
+    pub fn stack_window_onto(&mut self, dragged: &Window, target: &Window) {
+        let (Some(d_top), Some(t_top)) = (dragged.toplevel(), target.toplevel()) else {
+            return;
+        };
+        let d_id = d_top.wl_surface().id();
+        let t_id = t_top.wl_surface().id();
+        if d_id == t_id {
+            return;
+        }
+
+        // Remove `dragged` from any previous stack first
+        self.unstack_window(&d_id);
+
+        if let Some(t_loc) = self.space.element_location(target) {
+            let t_size = target.geometry().size;
+            self.space.map_element(dragged.clone(), t_loc, true);
+            d_top.with_pending_state(|s| {
+                s.size = Some(t_size);
+            });
+            d_top.send_configure();
+        }
+
+        if let Some(stack) = self
+            .workspaces
+            .window_stacks
+            .iter_mut()
+            .find(|s| s.tabs.contains(&t_id))
+        {
+            if !stack.tabs.contains(&d_id) {
+                stack.tabs.push(d_id.clone());
+            }
+            stack.active = stack.tabs.iter().position(|x| x == &d_id).unwrap_or(0);
+        } else {
+            self.workspaces.window_stacks.push(WindowStack {
+                tabs: vec![t_id, d_id.clone()],
+                active: 1,
+            });
+        }
+
+        self.focus_window(dragged);
+        self.overlays.show_osd("Window Stack", "Grouped into tabs", None);
+        self.retile_workspace();
+    }
+
+    /// Switches the visible tab inside a `WindowStack`.
+    pub fn switch_stack_tab(&mut self, stack_idx: usize, tab_idx: usize) {
+        let Some(stack) = self.workspaces.window_stacks.get_mut(stack_idx) else {
+            return;
+        };
+        if tab_idx >= stack.tabs.len() || tab_idx == stack.active {
+            return;
+        }
+        let old_id = stack.tabs.get(stack.active).cloned();
+        let new_id = stack.tabs.get(tab_idx).cloned();
+        stack.active = tab_idx;
+
+        if let (Some(oid), Some(nid)) = (old_id, new_id) {
+            let old_win = self
+                .space
+                .elements()
+                .find(|w| w.toplevel().map(|t| t.wl_surface().id() == oid).unwrap_or(false))
+                .cloned();
+            let new_win = self
+                .space
+                .elements()
+                .find(|w| w.toplevel().map(|t| t.wl_surface().id() == nid).unwrap_or(false))
+                .cloned();
+            if let (Some(ow), Some(nw)) = (old_win, new_win) {
+                if let Some(loc) = self.space.element_location(&ow) {
+                    let sz = ow.geometry().size;
+                    self.space.map_element(nw.clone(), loc, true);
+                    if let Some(t) = nw.toplevel() {
+                        t.with_pending_state(|s| s.size = Some(sz));
+                        t.send_configure();
+                    }
+                }
+                self.focus_window(&nw);
+            }
+        }
+    }
+
+    /// Detaches `id` from any Window Stack, dissolving stacks with fewer than 2 tabs.
+    pub fn unstack_window(&mut self, id: &ObjectId) {
+        let mut dissolve = Vec::new();
+        for (idx, stack) in self.workspaces.window_stacks.iter_mut().enumerate() {
+            if let Some(pos) = stack.tabs.iter().position(|x| x == id) {
+                stack.tabs.remove(pos);
+                if stack.active >= stack.tabs.len() && !stack.tabs.is_empty() {
+                    stack.active = stack.tabs.len() - 1;
+                }
+                if stack.tabs.len() < 2 {
+                    dissolve.push(idx);
+                }
+            }
+        }
+        for idx in dissolve.into_iter().rev() {
+            self.workspaces.window_stacks.remove(idx);
+        }
     }
 
     /// Handles middle-click on a window titlebar (toggles Always-on-Top) or right-click (Window Menu).
@@ -1491,7 +1750,8 @@ impl OkayState {
     pub fn next_window_position(&mut self, win_size: smithay::utils::Size<i32, Logical>) -> Point<i32, Logical> {
         let output_geo = self
             .output_under_pointer()
-            .and_then(|o| self.space.output_geometry(&o))
+            .or_else(|| self.space.outputs().next().cloned())
+            .map(|o| self.effective_work_area(&o))
             .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
 
         let usable_h = (output_geo.size.h - crate::panel::PANEL_HEIGHT).max(200);

@@ -83,6 +83,24 @@ pub fn collect_output_elements(
         ));
     }
 
+    // 0a. ext_session_lock_v1: when locked, render ONLY the lock surface(s) + cursor (hide desktop & windows)
+    if state.ext_locked {
+        for (lock_out, lock_surf) in &state.ext_lock_surfaces {
+            if lock_out == output {
+                let lock_elems: Vec<OkayRenderElements> = render_elements_from_surface_tree(
+                    renderer,
+                    lock_surf.wl_surface(),
+                    (0, 0),
+                    scale,
+                    1.0,
+                    Kind::Unspecified,
+                );
+                elements.extend(lock_elems);
+            }
+        }
+        return elements;
+    }
+
     // 0b. Topmost desktop overlays (isolated with catch_unwind so a UI panic never kills the compositor)
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::overlays::render_top_overlays(state, renderer, output, scale)
@@ -214,6 +232,11 @@ pub fn collect_output_elements(
                 state.theme.inactive_border_color[3].clamp(0.06, 0.14)
             };
 
+            let stack_tabs = win_id
+                .as_ref()
+                .and_then(|id| state.stack_tabs_for(id))
+                .map(|(_, tabs, act)| (tabs, act));
+
             let rendered_offscreen = win_id.as_ref().and_then(|id| {
                 render_rounded_window_offscreen(
                     renderer,
@@ -229,6 +252,7 @@ pub fn collect_output_elements(
                     scale,
                     alpha,
                     border_alpha,
+                    stack_tabs.as_ref().map(|(t, a)| (t.as_slice(), *a)),
                 )
             });
 
@@ -268,6 +292,7 @@ pub fn collect_output_elements(
                     is_pinned,
                     is_maximized,
                     accent,
+                    stack_tabs.as_ref().map(|(t, a)| (t.as_slice(), *a)),
                     renderer,
                     scale,
                 ) {
@@ -476,6 +501,7 @@ fn render_rounded_window_offscreen(
     scale: Scale<f64>,
     alpha: f32,
     border_alpha: f32,
+    stack_tabs: Option<(&[(ObjectId, String)], usize)>,
 ) -> Option<OkayRenderElements> {
     if !window.alive() {
         return None;
@@ -529,6 +555,7 @@ fn render_rounded_window_offscreen(
         is_pinned,
         is_maximized,
         accent,
+        stack_tabs,
         renderer,
         scale,
     ) {
