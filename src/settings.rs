@@ -119,6 +119,7 @@ enum SettingsAction {
     SelectAccent(usize),
     ToggleDynamicAccent,
     ToggleM3Expressive,
+    SetAppearanceMode(crate::panel::AppearanceMode),
     ToggleAnimations,
     AdjustAnimSpeed(f32),
     CycleMinimizeEffect,
@@ -445,7 +446,25 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                 save_all_prefs(state);
             }
             SettingsAction::ToggleM3Expressive => {
-                state.panel.m3_expressive = !state.panel.m3_expressive;
+                let next = match state.panel.appearance_mode {
+                    crate::panel::AppearanceMode::Material3Expressive => {
+                        crate::panel::AppearanceMode::GlassBlur
+                    }
+                    crate::panel::AppearanceMode::GlassBlur => {
+                        crate::panel::AppearanceMode::Material3Expressive
+                    }
+                };
+                state.panel.appearance_mode = next;
+                state.panel.m3_expressive =
+                    next == crate::panel::AppearanceMode::Material3Expressive;
+                state.blur_dirty = true;
+                save_all_prefs(state);
+            }
+            SettingsAction::SetAppearanceMode(mode) => {
+                state.panel.appearance_mode = mode;
+                state.panel.m3_expressive =
+                    mode == crate::panel::AppearanceMode::Material3Expressive;
+                state.blur_dirty = true;
                 save_all_prefs(state);
             }
             SettingsAction::ToggleAnimations => {
@@ -462,6 +481,7 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
             }
             SettingsAction::ReloadWallpaper => {
                 state.desktop.reload();
+                state.blur_dirty = true;
                 state.panel.wallpaper_accent = state.desktop.dominant_accent();
                 if state.panel.dynamic_accent {
                     state.theme.active_border_color = state.panel.accent_f32();
@@ -994,23 +1014,49 @@ pub fn render_settings_elements(
             state.settings.hit_regions.push((s_inc, SettingsAction::AdjustAnimSpeed(0.25)));
             cy += 44;
 
-            // Row 4: M3 Expressive Surfaces
-            let exp_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 36).into());
+            // Row 4: Appearance Mode Switcher (Material 3 Expressive vs Glass / Blur)
+            canvas.draw_text_px(content_x, cy, "Appearance Mode", 13.0, [215, 220, 238, 255]);
+            cy += 20;
+            let is_m3e = state.panel.appearance_mode
+                == crate::panel::AppearanceMode::Material3Expressive;
+            let is_glass =
+                state.panel.appearance_mode == crate::panel::AppearanceMode::GlassBlur;
+
+            let m3e_rect = Rectangle::new((wx + content_x, wy + cy).into(), (248, 36).into());
             draw_setting_button(
                 &mut canvas,
                 content_x,
                 cy,
-                506,
+                248,
                 36,
-                "M3 Expressive Surfaces",
-                state.panel.m3_expressive,
+                "Material 3 Expressive",
+                is_m3e,
                 accent,
             );
-            state
-                .settings
-                .hit_regions
-                .push((exp_rect, SettingsAction::ToggleM3Expressive));
-            cy += 46;
+            state.settings.hit_regions.push((
+                m3e_rect,
+                SettingsAction::SetAppearanceMode(
+                    crate::panel::AppearanceMode::Material3Expressive,
+                ),
+            ));
+
+            let glass_rect =
+                Rectangle::new((wx + content_x + 258, wy + cy).into(), (248, 36).into());
+            draw_setting_button(
+                &mut canvas,
+                content_x + 258,
+                cy,
+                248,
+                36,
+                "Glass / Blur (Kawase)",
+                is_glass,
+                accent,
+            );
+            state.settings.hit_regions.push((
+                glass_rect,
+                SettingsAction::SetAppearanceMode(crate::panel::AppearanceMode::GlassBlur),
+            ));
+            cy += 44;
 
             // Row 6: Circular Accent Color Swatch Dots with Active Ring
             canvas.draw_text_px(content_x, cy, "Accent Color", 13.0, [215, 220, 238, 255]);
@@ -2051,8 +2097,12 @@ pub fn render_settings_elements(
     ) {
         Ok(elem) => {
             let mut out = vec![OkayRenderElements::Memory(elem)];
-            if let Some(sh) = crate::render::sdf_panel_shadow_element(
+            if let Some(sh) = crate::render::panel_backdrop_element(
+                state,
                 renderer,
+                output,
+                scale,
+                "settings",
                 Rectangle::new(local_pos, (SETTINGS_WIDTH, SETTINGS_HEIGHT).into()),
                 18.0,
                 1.0,

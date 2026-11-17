@@ -46,13 +46,44 @@ pub const ACCENT_PRESETS: [(&str, [u8; 3], [f32; 4]); 6] = [
     ("Crimson", [235, 111, 146], [0.922, 0.435, 0.573, 1.0]),
 ];
 
+/// Visual appearance mode for OKay DE surfaces (live-switchable in System Settings).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppearanceMode {
+    /// Material 3 Expressive (M3E): opaque/tonal `surfaceContainer`, clear `outlineVariant`,
+    /// soft SDF drop shadows, and vibrant color accents.
+    Material3Expressive,
+    /// Glass / Blur: translucent surfaces with Dual-Kawase blur, anti-banding noise grain,
+    /// and a subtle 1px bright edge on Dock, Top Bar, and system windows.
+    GlassBlur,
+}
+
+impl AppearanceMode {
+    pub fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Material3Expressive => "material3_expressive",
+            Self::GlassBlur => "glass_blur",
+        }
+    }
+
+    pub fn from_str(val: &str) -> Self {
+        match val.trim().to_ascii_lowercase().as_str() {
+            "m3e" | "m3_expressive" | "material3_expressive" | "expressive" => {
+                Self::Material3Expressive
+            }
+            _ => Self::GlassBlur,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct MaterialPalette {
     pub accent: [u8; 3],
     pub surface: [u8; 3],
     pub surface_container: [u8; 3],
     pub outline: [u8; 3],
+    pub outline_variant: [u8; 3],
     pub expressive: bool,
+    pub appearance_mode: AppearanceMode,
 }
 
 impl Default for MaterialPalette {
@@ -62,7 +93,9 @@ impl Default for MaterialPalette {
             surface: [24, 26, 36],
             surface_container: [32, 35, 48],
             outline: [76, 86, 112],
+            outline_variant: [88, 98, 128],
             expressive: false,
+            appearance_mode: AppearanceMode::GlassBlur,
         }
     }
 }
@@ -208,6 +241,7 @@ pub struct PanelState {
     pub accent_preset: usize,
     pub dynamic_accent: bool,
     pub m3_expressive: bool,
+    pub appearance_mode: AppearanceMode,
     pub wallpaper_accent: Option<[u8; 3]>,
     pub window_gaps: i32,
     pub search_query: String,
@@ -244,6 +278,7 @@ impl Default for PanelState {
             accent_preset: 1,
             dynamic_accent: false,
             m3_expressive: false,
+            appearance_mode: AppearanceMode::GlassBlur,
             wallpaper_accent: None,
             window_gaps: 10,
             search_query: String::new(),
@@ -311,13 +346,27 @@ impl PanelState {
 
     /// Computes the cohesive Material You / M3 Expressive tonal palette from the active accent.
     pub fn material_palette(&self) -> MaterialPalette {
-        let accent = self.accent_rgb();
+        let raw_accent = self.accent_rgb();
+        let is_m3e = self.appearance_mode == AppearanceMode::Material3Expressive;
+        let accent = if is_m3e {
+            // Boost vibrancy slightly in Material 3 Expressive mode
+            let max_c = raw_accent[0].max(raw_accent[1]).max(raw_accent[2]).max(1) as f32;
+            let boost = (245.0 / max_c).clamp(1.0, 1.18);
+            [
+                ((raw_accent[0] as f32 * boost).round().clamp(0.0, 255.0)) as u8,
+                ((raw_accent[1] as f32 * boost).round().clamp(0.0, 255.0)) as u8,
+                ((raw_accent[2] as f32 * boost).round().clamp(0.0, 255.0)) as u8,
+            ]
+        } else {
+            raw_accent
+        };
         let mix = |base: u8, tint: u8, t: f32| -> u8 {
             ((base as f32 * (1.0 - t) + tint as f32 * t).round().clamp(0.0, 255.0)) as u8
         };
-        let t_surf = if self.m3_expressive { 0.14 } else { 0.06 };
-        let t_cont = if self.m3_expressive { 0.22 } else { 0.11 };
-        let t_out = if self.m3_expressive { 0.42 } else { 0.24 };
+        let t_surf = if is_m3e { 0.14 } else { 0.07 };
+        let t_cont = if is_m3e { 0.22 } else { 0.12 };
+        let t_out = if is_m3e { 0.44 } else { 0.24 };
+        let t_out_var = if is_m3e { 0.36 } else { 0.18 };
 
         MaterialPalette {
             accent,
@@ -336,7 +385,13 @@ impl PanelState {
                 mix(78, accent[1], t_out),
                 mix(98, accent[2], t_out),
             ],
-            expressive: self.m3_expressive,
+            outline_variant: [
+                mix(88, accent[0], t_out_var),
+                mix(94, accent[1], t_out_var),
+                mix(118, accent[2], t_out_var),
+            ],
+            expressive: is_m3e,
+            appearance_mode: self.appearance_mode,
         }
     }
 
@@ -387,7 +442,17 @@ impl PanelState {
                         }
                     }
                     "dynamic_accent" => self.dynamic_accent = val == "true",
-                    "m3_expressive" => self.m3_expressive = val == "true",
+                    "m3_expressive" => {
+                        self.m3_expressive = val == "true";
+                        if self.m3_expressive {
+                            self.appearance_mode = AppearanceMode::Material3Expressive;
+                        }
+                    }
+                    "appearance_mode" => {
+                        self.appearance_mode = AppearanceMode::from_str(val);
+                        self.m3_expressive =
+                            self.appearance_mode == AppearanceMode::Material3Expressive;
+                    }
                     "window_gaps" => {
                         if let Ok(g) = val.parse::<i32>() {
                             self.window_gaps = g.clamp(0, 32);
@@ -510,6 +575,7 @@ impl PanelState {
             self.default_file_manager,
             xkb_layout,
         );
+        body.push_str(&format!("appearance_mode = \"{}\"\n", self.appearance_mode.as_config_str()));
         body.push_str(&format!("adshield_enabled = {}\n", self.adshield_enabled));
         body.push_str(&format!("pointer_accel_disabled = {}\n", self.pointer_accel_disabled));
         for d in &self.adshield_whitelist {
@@ -1188,10 +1254,32 @@ pub fn render_panel_elements(
         let mb_h = PANEL_HEIGHT;
         let mut mb = Canvas::new(mb_w, mb_h);
 
-        // Translucent dark glass: rgba(24, 26, 36, 0.86) + subtle 1px bottom border
-        mb.fill_rect(0, 0, mb_w, mb_h, [24, 26, 36, 219]);
-        mb.fill_rect_blend(0, 0, mb_w, 1, [255, 255, 255, 26]);
-        mb.fill_rect_blend(0, mb_h - 1, mb_w, 1, [255, 255, 255, 18]);
+        let pal = active_m3_palette();
+        match pal.appearance_mode {
+            AppearanceMode::GlassBlur => {
+                // Translucent glass over Dual-Kawase blur + subtle 1px bright edge
+                mb.fill_rect(0, 0, mb_w, mb_h, [pal.surface[0], pal.surface[1], pal.surface[2], 140]);
+                mb.fill_rect_blend(0, 0, mb_w, 1, [255, 255, 255, 42]);
+                mb.fill_rect_blend(0, mb_h - 1, mb_w, 1, [255, 255, 255, 46]);
+            }
+            AppearanceMode::Material3Expressive => {
+                // Opaque/tonal surfaceContainer + clear outlineVariant bottom edge
+                mb.fill_rect(
+                    0,
+                    0,
+                    mb_w,
+                    mb_h,
+                    [pal.surface_container[0], pal.surface_container[1], pal.surface_container[2], 250],
+                );
+                mb.fill_rect_blend(
+                    0,
+                    mb_h - 1,
+                    mb_w,
+                    1,
+                    [pal.outline_variant[0], pal.outline_variant[1], pal.outline_variant[2], 205],
+                );
+            }
+        }
 
         let mut mx = 12;
 
@@ -1528,6 +1616,20 @@ pub fn render_panel_elements(
             Kind::Unspecified,
         ) {
             elements.push(OkayRenderElements::Memory(elem));
+            if state.panel.appearance_mode == AppearanceMode::GlassBlur {
+                if let Some(blur_el) = crate::render::panel_backdrop_element(
+                    state,
+                    renderer,
+                    output,
+                    scale,
+                    "top_bar",
+                    Rectangle::new((0, 0).into(), (mb_w, mb_h).into()),
+                    0.0,
+                    1.0,
+                ) {
+                    elements.push(blur_el);
+                }
+            }
         }
 
         // Background Apps / Tray Drawer Popover (from Top Bar Chevron Arrow)
@@ -1646,8 +1748,12 @@ pub fn render_panel_elements(
                     Kind::Unspecified,
                 ) {
                     elements.insert(0, OkayRenderElements::Memory(elem));
-                    if let Some(sh) = crate::render::sdf_panel_shadow_element(
+                    if let Some(sh) = crate::render::panel_backdrop_element(
+                        state,
                         renderer,
+                        output,
+                        scale,
+                        "tray_drawer",
                         Rectangle::new((tx, ty).into(), (tw, th).into()),
                         16.0,
                         1.0,
@@ -1983,9 +2089,23 @@ pub fn render_panel_elements(
             Kind::Unspecified,
         ) {
             elements.push(OkayRenderElements::Memory(elem));
+            let dock_pill_x_local = dock_canvas_x_local + dock_pill_x_in_canvas;
+            if let Some(bd_el) = crate::render::panel_backdrop_element(
+                state,
+                renderer,
+                output,
+                scale,
+                "dock",
+                Rectangle::new(
+                    (dock_pill_x_local, dock_pill_y_local).into(),
+                    (dock_pill_w, DOCK_HEIGHT).into(),
+                ),
+                18.0,
+                1.0,
+            ) {
+                elements.push(bd_el);
+            }
         }
-
-        // Floating glass tooltip pill above hovered Dock icon
         if let Some((tip_cx, tip_y, tip_label)) = dock_tooltip {
             let short_tip: String = tip_label.chars().take(28).collect();
             let tmp = Canvas::new(1, 1);
@@ -2121,8 +2241,12 @@ pub fn render_panel_elements(
                         Kind::Unspecified,
                     ) {
                         elements.insert(0, OkayRenderElements::Memory(elem));
-                        if let Some(sh) = crate::render::sdf_panel_shadow_element(
+                        if let Some(sh) = crate::render::panel_backdrop_element(
+                            state,
                             renderer,
+                            output,
+                            scale,
+                            "top_menu",
                             Rectangle::new((mx, my).into(), (mw, mh).into()),
                             16.0,
                             1.0,
@@ -2278,6 +2402,20 @@ pub fn render_panel_elements(
             Kind::Unspecified,
         ) {
             elements.push(OkayRenderElements::Memory(elem));
+            if state.panel.appearance_mode == AppearanceMode::GlassBlur {
+                if let Some(blur_el) = crate::render::panel_backdrop_element(
+                    state,
+                    renderer,
+                    output,
+                    scale,
+                    "top_bar",
+                    Rectangle::new((0, bar_y_local).into(), (bar_w, bar_h).into()),
+                    0.0,
+                    1.0,
+                ) {
+                    elements.push(blur_el);
+                }
+            }
         }
     }
 
@@ -2560,8 +2698,12 @@ pub fn render_panel_elements(
             ) {
                 // Front-to-back rendering order: insert at index 0 so Launcher renders above Top Bar & Dock.
                 elements.insert(0, OkayRenderElements::Memory(elem));
-                if let Some(sh) = crate::render::sdf_panel_shadow_element(
+                if let Some(sh) = crate::render::panel_backdrop_element(
+                    state,
                     renderer,
+                    output,
+                    scale,
+                    "launcher",
                     Rectangle::new((menu_x, menu_y).into(), (menu_w, menu_h).into()),
                     18.0,
                     1.0,
@@ -3258,25 +3400,54 @@ impl Canvas {
         }
     }
 
-    /// Draws a clean Material 3 tonal surface panel tinted by the active Material You palette
-    /// with subtle 1.5% tonal grain noise and 1px `rgba(255, 255, 255, 0.08)` outline.
+    /// Draws a surface panel styled according to the active `AppearanceMode`:
+    /// - `Material3Expressive`: opaque/tonal `surfaceContainer` with clear `outlineVariant` border.
+    /// - `GlassBlur`: translucent `surface` over Dual-Kawase blur with 1px bright edge & grain.
     pub fn fill_glass_panel(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32) {
         if w <= 0 || h <= 0 {
             return;
         }
         let pal = active_m3_palette();
-        // Crisp 1px rgba(255, 255, 255, 0.08) + tonal outline border
-        self.fill_rounded_rect_aa(x, y, w, h, radius, [255, 255, 255, 22]);
-        // Clean Material 3 tonal surface body
+        match pal.appearance_mode {
+            AppearanceMode::Material3Expressive => {
+                // Opaque/tonal surfaceContainer body
+                if w > 2 && h > 2 {
+                    self.fill_rounded_rect_aa(
+                        x + 1,
+                        y + 1,
+                        w - 2,
+                        h - 2,
+                        (radius - 1).max(2),
+                        [pal.surface_container[0], pal.surface_container[1], pal.surface_container[2], 250],
+                    );
+                }
+                // Clear outlineVariant perimeter border
+                self.stroke_rounded_rect_aa(
+                    x,
+                    y,
+                    w,
+                    h,
+                    radius,
+                    [pal.outline_variant[0], pal.outline_variant[1], pal.outline_variant[2], 210],
+                );
+            }
+            AppearanceMode::GlassBlur => {
+                // Translucent glass body so Dual-Kawase blurred backdrop shines through
+                if w > 2 && h > 2 {
+                    self.fill_rounded_rect_aa(
+                        x + 1,
+                        y + 1,
+                        w - 2,
+                        h - 2,
+                        (radius - 1).max(2),
+                        [pal.surface[0], pal.surface[1], pal.surface[2], 144],
+                    );
+                }
+                // Subtle 1px bright edge on outline
+                self.stroke_rounded_rect_aa(x, y, w, h, radius, [255, 255, 255, 48]);
+            }
+        }
         if w > 2 && h > 2 {
-            self.fill_rounded_rect_aa(
-                x + 1,
-                y + 1,
-                w - 2,
-                h - 2,
-                (radius - 1).max(2),
-                [pal.surface[0], pal.surface[1], pal.surface[2], 246],
-            );
             // Subtle 1.5% tonal grain noise on interior pixels to prevent flat banding
             let x0 = (x + 2).clamp(0, self.width);
             let y0 = (y + 2).clamp(0, self.height);
@@ -3290,7 +3461,7 @@ impl Canvas {
                     let delta = ((hval >> 24) & 3) as i16 - 1;
                     if delta != 0 {
                         let idx = ((py * self.width + px) as usize) * 4;
-                        if self.pixels[idx + 3] > 200 {
+                        if self.pixels[idx + 3] > 100 {
                             self.pixels[idx] = (self.pixels[idx] as i16 + delta).clamp(0, 255) as u8;
                             self.pixels[idx + 1] = (self.pixels[idx + 1] as i16 + delta).clamp(0, 255) as u8;
                             self.pixels[idx + 2] = (self.pixels[idx + 2] as i16 + delta).clamp(0, 255) as u8;

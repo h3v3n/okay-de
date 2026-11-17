@@ -2087,8 +2087,12 @@ pub fn render_top_overlays(
             }
         } else if let Some(elem) = upload_canvas(&canvas, (cal_x, cal_y), renderer, scale) {
             elements.push(elem);
-            if let Some(sh) = crate::render::sdf_panel_shadow_element(
+            if let Some(sh) = crate::render::panel_backdrop_element(
+                state,
                 renderer,
+                output,
+                scale,
+                "calendar",
                 Rectangle::new((cal_x, cal_y).into(), (cal_w, cal_h).into()),
                 18.0,
                 1.0,
@@ -2208,8 +2212,12 @@ pub fn render_top_overlays(
             }
         } else if let Some(elem) = upload_canvas(&canvas, (nx, ny), renderer, scale) {
             elements.push(elem);
-            if let Some(sh) = crate::render::sdf_panel_shadow_element(
+            if let Some(sh) = crate::render::panel_backdrop_element(
+                state,
                 renderer,
+                output,
+                scale,
+                "notif_drawer",
                 Rectangle::new((nx, ny).into(), (nw, nh).into()),
                 18.0,
                 1.0,
@@ -2476,8 +2484,12 @@ pub fn render_top_overlays(
             }
         } else if let Some(elem) = upload_canvas(&canvas, (cc_x, cc_y), renderer, scale) {
             elements.push(elem);
-            if let Some(sh) = crate::render::sdf_panel_shadow_element(
+            if let Some(sh) = crate::render::panel_backdrop_element(
+                state,
                 renderer,
+                output,
+                scale,
+                "control_center",
                 Rectangle::new((cc_x, cc_y).into(), (cc_w, cc_h).into()),
                 18.0,
                 1.0,

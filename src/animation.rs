@@ -383,6 +383,20 @@ impl AnimationManager {
         }
     }
 
+    /// Returns `true` if any background/window animation is currently active (used for blur damage tracking).
+    pub fn has_active_bg_animations(&self) -> bool {
+        if self.workspace_slide_x.abs() > 0.01 {
+            return true;
+        }
+        self.windows.values().any(|a| {
+            a.open_progress < 0.999
+                || a.open_blur_alpha > 0.001
+                || a.move_offset.x.abs() > 0.01
+                || a.move_offset.y.abs() > 0.01
+                || (a.minimize_progress > 0.001 && a.minimize_progress < 0.999)
+        })
+    }
+
     /// Renders the **Magic Lamp (Genie)** continuous GLSL fragment UV-warp (or Scale/Glide card)
     /// for a window that is mid-minimize or mid-unminimize — zero stair-stepping!
     pub fn render_minimize_effect(

@@ -337,6 +337,7 @@ pub struct OkayState {
 
     // Visual theme & future shader/animation hooks
     pub theme: CompositorTheme,
+    pub blur_dirty: bool,
 
     // Native desktop wallpaper, taskbar/launcher panel, settings window, animations & overlays
     pub desktop: crate::desktop::DesktopState,
@@ -448,6 +449,7 @@ impl OkayState {
             focus_stack: Vec::new(),
             next_spawn_offset: 0,
             theme,
+            blur_dirty: true,
             desktop: crate::desktop::DesktopState::new(),
             panel,
             settings,

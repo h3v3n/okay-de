@@ -101,50 +101,13 @@ pub fn collect_output_elements(
         return elements;
     }
 
-    // 0b. Topmost desktop overlays (isolated with catch_unwind so a UI panic never kills the compositor)
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::overlays::render_top_overlays(state, renderer, output, scale)
-    })) {
-        Ok(elems) => elements.extend(elems),
-        Err(_) => tracing::error!("Recovered from panic in render_top_overlays"),
-    }
-
+    // Collect background elements (windows, bottom layers, desktop icons, wallpaper) first
+    // so Dual-Kawase blur can capture them when dirty without re-running on idle frames.
+    let mut bg_elements: Vec<OkayRenderElements> = Vec::new();
     let layer_map = layer_map_for_output(output);
 
-    // 1. Overlay and Top layer-shell surfaces (notifications, bars, docks, launchers)
-    for layer_type in [Layer::Overlay, Layer::Top] {
-        for layer in layer_map.layers_on(layer_type).rev() {
-            if let Some(geo) = layer_map.layer_geometry(layer) {
-                let loc = geo.loc.to_physical_precise_round(scale);
-                let surface_elems: Vec<OkayRenderElements> =
-                    render_elements_from_surface_tree(
-                        renderer,
-                        layer.wl_surface(),
-                        loc,
-                        scale,
-                        1.0,
-                        Kind::Unspecified,
-                    );
-                elements.extend(surface_elems);
-            }
-        }
-    }
-
-    // 2. Native OKay DE taskbar, launcher popup & OKay Settings window (panic-isolated)
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::panel::render_panel_elements(state, renderer, output, scale)
-    })) {
-        Ok(elems) => elements.extend(elems),
-        Err(_) => tracing::error!("Recovered from panic in render_panel_elements"),
-    }
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::settings::render_settings_elements(state, renderer, output, scale)
-    })) {
-        Ok(elems) => elements.extend(elems),
-        Err(_) => tracing::error!("Recovered from panic in render_settings_elements"),
-    }
-
     // 2b. Active Magic Lamp (Genie) minimize / restore animations
+    let mut has_dynamic_content = false;
     for window in state.space.elements().rev() {
         if !state.workspaces.is_on_active_workspace(window) {
             continue;
@@ -152,7 +115,8 @@ pub fn collect_output_elements(
         if let Some(toplevel) = window.toplevel() {
             let id = toplevel.wl_surface().id();
             if state.animations.is_animating_minimize(&id) {
-                elements.extend(state.animations.render_minimize_effect(
+                has_dynamic_content = true;
+                bg_elements.extend(state.animations.render_minimize_effect(
                     &id,
                     output_geo.loc,
                     renderer,
@@ -173,6 +137,8 @@ pub fn collect_output_elements(
 
     let mut ordered_windows: Vec<_> = state.space.elements().rev().cloned().collect();
     ordered_windows.sort_by_key(|w| if state.workspaces.is_pinned(w) { 0 } else { 1 });
+
+    let mut scene_hash: u64 = (state.workspaces.active_workspace() as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
 
     for window in &ordered_windows {
         if !window.alive() {
@@ -196,6 +162,17 @@ pub fn collect_output_elements(
             continue;
         };
 
+        has_dynamic_content = true;
+        if let Some(ref id) = win_id {
+            scene_hash = scene_hash
+                .rotate_left(7)
+                ^ (id.protocol_id() as u64)
+                ^ ((win_loc.x as u64) << 16)
+                ^ ((win_loc.y as u64) << 32)
+                ^ ((win_geo_check.size.w as u64) << 44)
+                ^ ((win_geo_check.size.h as u64) << 54);
+        }
+
         let (move_dx, move_dy, open_p, open_blur_alpha) = win_id
             .as_ref()
             .and_then(|id| state.animations.windows.get(id))
@@ -218,7 +195,7 @@ pub fn collect_output_elements(
         if state.workspaces.is_fullscreen(window) {
             let win_elements: Vec<OkayRenderElements> =
                 window.render_elements(renderer, phys_loc, scale, alpha);
-            elements.extend(win_elements);
+            bg_elements.extend(win_elements);
         } else {
             let is_focused = win_id.as_ref() == focused_id.as_ref();
             let is_pinned = state.workspaces.is_pinned(window);
@@ -229,10 +206,12 @@ pub fn collect_output_elements(
             let tb_h = crate::state::TITLEBAR_HEIGHT;
             let full_w = win_geo.size.w.max(120);
             let full_h = win_geo.size.h + tb_h;
-            let border_alpha = if is_focused {
-                0.16f32
+            let border_alpha = if state.panel.appearance_mode == crate::panel::AppearanceMode::GlassBlur {
+                if is_focused { 0.20f32 } else { 0.10f32 }
+            } else if is_focused {
+                0.22f32
             } else {
-                state.theme.inactive_border_color[3].clamp(0.06, 0.14)
+                state.theme.inactive_border_color[3].clamp(0.08, 0.16)
             };
 
             let stack_tabs = win_id
@@ -270,15 +249,15 @@ pub fn collect_output_elements(
                     let anim_r = (sw.min(sh) as f32 * 0.5) * (1.0 - open_ease) + corner_radius * open_ease;
                     let blur_area = Rectangle::new((sx, sy).into(), (sw, sh).into());
                     if let Some(blur_elem) = open_blur_veil_element(renderer, blur_area, anim_r, open_blur_alpha) {
-                        elements.push(blur_elem);
+                        bg_elements.push(blur_elem);
                     }
                 }
-                elements.push(rounded_elem);
+                bg_elements.push(rounded_elem);
             } else {
                 // Fallback direct rendering
                 let win_elements: Vec<OkayRenderElements> =
                     window.render_elements(renderer, phys_loc, scale, alpha);
-                elements.extend(win_elements);
+                bg_elements.extend(win_elements);
 
                 if let Some(tb_elem) = crate::panel::render_titlebar_element(
                     window,
@@ -292,7 +271,7 @@ pub fn collect_output_elements(
                     renderer,
                     scale,
                 ) {
-                    elements.push(tb_elem);
+                    bg_elements.push(tb_elem);
                 }
 
                 let pad = 14;
@@ -308,7 +287,7 @@ pub fn collect_output_elements(
                     border_alpha,
                     alpha,
                 ) {
-                    elements.push(sdf_elem);
+                    bg_elements.push(sdf_elem);
                 }
             }
         }
@@ -328,26 +307,102 @@ pub fn collect_output_elements(
                         1.0,
                         Kind::Unspecified,
                     );
-                elements.extend(surface_elems);
+                if !surface_elems.is_empty() {
+                    has_dynamic_content = true;
+                    bg_elements.extend(surface_elems);
+                }
             }
         }
     }
 
     // 4a. Desktop Rubber-Band Selection Box (underneath windows, above desktop icons)
     if let Some(rb_elem) = crate::overlays::render_desktop_rubberband(state, renderer, output, scale) {
-        elements.push(rb_elem);
+        has_dynamic_content = true;
+        bg_elements.push(rb_elem);
     }
 
     // 4b. Desktop Icons Grid (right above wallpaper, underneath all windows)
-    elements.extend(crate::overlays::render_desktop_icons(
-        state, renderer, output, scale,
-    ));
-
-    // 5. Native OKay DE desktop wallpaper / gradient (bottommost)
-    if let Some(bg) = state.desktop.background_element(renderer, output, scale) {
-        elements.push(bg);
+    let icon_elems = crate::overlays::render_desktop_icons(state, renderer, output, scale);
+    if !icon_elems.is_empty() {
+        bg_elements.extend(icon_elems);
     }
 
+    // 5. Native OKay DE desktop wallpaper / gradient (bottommost)
+    let wallpaper_elem = state.desktop.background_element(renderer, output, scale);
+    if let Some(ref bg) = wallpaper_elem {
+        bg_elements.push(bg.clone());
+    }
+
+    // Check whether the scene behind glass panels changed (for zero-idle-GPU Dual-Kawase blur)
+    thread_local! {
+        static LAST_SCENE_HASH: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
+    }
+    let scene_changed = LAST_SCENE_HASH.with(|cell| {
+        let mut map = cell.borrow_mut();
+        let prev = map.insert(output.name(), scene_hash);
+        prev != Some(scene_hash)
+    });
+    let global_dirty =
+        state.blur_dirty || scene_changed || state.animations.has_active_bg_animations();
+    state.blur_dirty = false;
+
+    if state.panel.appearance_mode == crate::panel::AppearanceMode::GlassBlur {
+        let clear_color = Color32F::from(state.theme.background_color);
+        crate::blur::update_output_blur(
+            renderer,
+            output,
+            scale,
+            state.desktop.revision,
+            wallpaper_elem.as_ref(),
+            &bg_elements,
+            has_dynamic_content,
+            global_dirty,
+            clear_color,
+        );
+    }
+
+    // 0b. Topmost desktop overlays (isolated with catch_unwind so a UI panic never kills the compositor)
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::overlays::render_top_overlays(state, renderer, output, scale)
+    })) {
+        Ok(elems) => elements.extend(elems),
+        Err(_) => tracing::error!("Recovered from panic in render_top_overlays"),
+    }
+
+    // 1. Overlay and Top layer-shell surfaces (notifications, bars, docks, launchers)
+    for layer_type in [Layer::Overlay, Layer::Top] {
+        for layer in layer_map.layers_on(layer_type).rev() {
+            if let Some(geo) = layer_map.layer_geometry(layer) {
+                let loc = geo.loc.to_physical_precise_round(scale);
+                let surface_elems: Vec<OkayRenderElements> =
+                    render_elements_from_surface_tree(
+                        renderer,
+                        layer.wl_surface(),
+                        loc,
+                        scale,
+                        1.0,
+                        Kind::Unspecified,
+                    );
+                elements.extend(surface_elems);
+            }
+        }
+    }
+
+    // 2. Native OKay DE taskbar, launcher popup & OKay Settings window (panic-isolated)
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::panel::render_panel_elements(state, renderer, output, scale)
+    })) {
+        Ok(elems) => elements.extend(elems),
+        Err(_) => tracing::error!("Recovered from panic in render_panel_elements"),
+    }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::settings::render_settings_elements(state, renderer, output, scale)
+    })) {
+        Ok(elems) => elements.extend(elems),
+        Err(_) => tracing::error!("Recovered from panic in render_settings_elements"),
+    }
+
+    elements.extend(bg_elements);
     elements
 }
 
@@ -764,6 +819,127 @@ void main() {
         ],
         Kind::Unspecified,
     )))
+}
+
+/// Renders a soft Material 3 Expressive SDF drop shadow around a floating panel `area`
+/// (discards interior pixels so translucent panels never show dark shadow artifacts).
+pub fn sdf_panel_shadow_element(
+    renderer: &mut GlesRenderer,
+    area: Rectangle<i32, Logical>,
+    radius: f32,
+    alpha: f32,
+) -> Option<OkayRenderElements> {
+    if area.size.w <= 0 || area.size.h <= 0 || alpha <= 0.005 {
+        return None;
+    }
+
+    const SHADOW_FRAG: &str = r#"
+precision mediump float;
+varying vec2 v_coords;
+uniform vec2 size;
+uniform float alpha;
+uniform float u_radius;
+uniform float u_pad;
+
+float sdRoundedBox(vec2 p, vec2 b, float r) {
+    vec2 q = abs(p) - b + vec2(r);
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+}
+
+void main() {
+    vec2 px = v_coords * size;
+    vec2 half_size = size * 0.5;
+    vec2 box_half = max(half_size - vec2(u_pad), vec2(1.0));
+    vec2 p = px - half_size - vec2(0.0, 2.5);
+    float d = sdRoundedBox(p, box_half, u_radius);
+    if (d <= 0.0) {
+        discard;
+    }
+    float contact = exp(-d * 0.34) * 0.26;
+    float ambient = exp(-d * 0.11) * 0.18;
+    float a = clamp((contact + ambient) * alpha, 0.0, 1.0);
+    gl_FragColor = vec4(0.0, 0.0, 0.0, a);
+}
+"#;
+
+    thread_local! {
+        static PANEL_SHADOW_SHADER: RefCell<Option<GlesPixelProgram>> = const { RefCell::new(None) };
+    }
+
+    let program = PANEL_SHADOW_SHADER.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if borrow.is_none() {
+            if let Ok(prog) = renderer.compile_custom_pixel_shader(
+                SHADOW_FRAG,
+                &[
+                    UniformName::new("u_radius", UniformType::_1f),
+                    UniformName::new("u_pad", UniformType::_1f),
+                ],
+            ) {
+                *borrow = Some(prog);
+            }
+        }
+        borrow.clone()
+    })?;
+
+    let pad = 16;
+    let padded_area = Rectangle::new(
+        area.loc - Point::from((pad, pad)),
+        (area.size.w + pad * 2, area.size.h + pad * 2).into(),
+    );
+
+    Some(OkayRenderElements::Shader(PixelShaderElement::new(
+        program,
+        padded_area,
+        None,
+        alpha,
+        vec![
+            Uniform::new("u_radius", radius),
+            Uniform::new("u_pad", pad as f32),
+        ],
+        Kind::Unspecified,
+    )))
+}
+
+/// Emits the appropriate backdrop element for a UI panel based on the active `AppearanceMode`:
+/// - `GlassBlur`: Dual-Kawase blurred backdrop clipped with an SDF rounded-rect mask, anti-banding
+///   noise grain, and subtle 1px bright edge.
+/// - `Material3Expressive`: soft analytical SDF drop shadow around floating panels.
+#[allow(clippy::too_many_arguments)]
+pub fn panel_backdrop_element(
+    state: &OkayState,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+    scale: Scale<f64>,
+    key: &'static str,
+    rect: Rectangle<i32, Logical>,
+    radius: f32,
+    alpha: f32,
+) -> Option<OkayRenderElements> {
+    match state.panel.appearance_mode {
+        crate::panel::AppearanceMode::GlassBlur => {
+            let pal = crate::panel::active_m3_palette();
+            crate::blur::blur_panel_element(
+                renderer,
+                output,
+                scale,
+                key,
+                rect,
+                radius,
+                pal.surface,
+                0.24,
+                0.22,
+                alpha,
+            )
+        }
+        crate::panel::AppearanceMode::Material3Expressive => {
+            if radius <= 0.0 {
+                None
+            } else {
+                sdf_panel_shadow_element(renderer, rect, radius, alpha)
+            }
+        }
+    }
 }
 
 /// Renders a subtle frosted-blur/glow veil over a newly opening window that smoothly fades out.

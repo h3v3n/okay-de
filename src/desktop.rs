@@ -30,12 +30,25 @@ struct RawWallpaper {
 }
 
 /// Manages desktop background surfaces (wallpaper image or dark gradient) per output.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DesktopState {
     wallpaper: Option<RawWallpaper>,
     extracted_accent: Option<[u8; 3]>,
     attempted_load: bool,
     cached_buffers: HashMap<String, (Size<i32, Physical>, MemoryRenderBuffer)>,
+    pub revision: u64,
+}
+
+impl Default for DesktopState {
+    fn default() -> Self {
+        Self {
+            wallpaper: None,
+            extracted_accent: None,
+            attempted_load: false,
+            cached_buffers: HashMap::new(),
+            revision: 1,
+        }
+    }
 }
 
 impl DesktopState {
@@ -80,6 +93,7 @@ impl DesktopState {
         self.wallpaper = None;
         self.extracted_accent = None;
         self.cached_buffers.clear();
+        self.revision = self.revision.wrapping_add(1);
         tracing::info!("Reloaded desktop wallpaper configuration");
     }
 

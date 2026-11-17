@@ -1,5 +1,6 @@
 mod adshield;
 mod animation;
+mod blur;
 mod desktop;
 mod icons;
 mod input;

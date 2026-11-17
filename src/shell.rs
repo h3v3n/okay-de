@@ -94,6 +94,7 @@ impl CompositorHandler for OkayState {
                 .cloned()
             {
                 window.on_commit();
+                self.blur_dirty = true;
             }
         }
 
