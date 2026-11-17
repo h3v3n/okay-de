@@ -112,6 +112,8 @@ pub struct AnimationManager {
     pub windows: HashMap<ObjectId, WindowAnimation>,
     /// Exact global logical rectangle of each window's taskbar/dock button (`ObjectId -> Rect`).
     pub taskbar_button_rects: HashMap<ObjectId, Rectangle<i32, Logical>>,
+    /// Fallback center rectangle of the Dock pill in global logical coordinates.
+    pub dock_center_rect: Option<Rectangle<i32, Logical>>,
     /// Horizontal slide offset in logical pixels when switching workspaces (`1..9`).
     pub workspace_slide_x: f64,
     /// Smoothly animated popup progress (`0.0 .. 1.0`) for Start Menu, Calendar, Notifications, Clipboard.
@@ -132,6 +134,7 @@ impl Default for AnimationManager {
             last_tick: Instant::now(),
             windows: HashMap::new(),
             taskbar_button_rects: HashMap::new(),
+            dock_center_rect: None,
             workspace_slide_x: 0.0,
             launcher_open_anim: 0.0,
             calendar_open_anim: 0.0,
@@ -212,10 +215,11 @@ impl AnimationManager {
             .taskbar_button_rects
             .get(&id)
             .copied()
+            .or(self.dock_center_rect)
             .unwrap_or_else(|| {
                 Rectangle::new(
-                    (output_loc.x + output_size.w / 2 - 60, output_loc.y + output_size.h - 38).into(),
-                    (120, 32).into(),
+                    (output_loc.x + output_size.w / 2 - 21, output_loc.y + output_size.h - 54).into(),
+                    (42, 42).into(),
                 )
             });
         let target_local = Rectangle::new(
@@ -248,10 +252,11 @@ impl AnimationManager {
             .taskbar_button_rects
             .get(&id)
             .copied()
+            .or(self.dock_center_rect)
             .unwrap_or_else(|| {
                 Rectangle::new(
-                    (output_loc.x + output_size.w / 2 - 60, output_loc.y + output_size.h - 38).into(),
-                    (120, 32).into(),
+                    (output_loc.x + output_size.w / 2 - 21, output_loc.y + output_size.h - 54).into(),
+                    (42, 42).into(),
                 )
             });
         let target_local = Rectangle::new(
@@ -372,10 +377,12 @@ impl AnimationManager {
 
         let t = cubic_ease_in_out(anim.minimize_progress);
         let src = anim.start_rect;
-        // Live-track the app's current Dock icon rect so it always flies straight into its icon.
+        // Live-track the app's current Dock icon rect (or Dock center) so it always flies straight into the Dock.
         let dst = self
             .taskbar_button_rects
             .get(id)
+            .copied()
+            .or(self.dock_center_rect)
             .map(|r| Rectangle::new(r.loc - output_loc, r.size))
             .unwrap_or(anim.target_button_rect);
         let accent = anim.accent_rgb;

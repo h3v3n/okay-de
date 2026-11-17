@@ -903,40 +903,48 @@ pub fn render_panel_elements(
             }
         }
 
-        // Right-side macOS Status Icons & Live Clock (`Day DD Mon HH:MM`)
+        // Right-side macOS Status Pills & Live Clock (`Day DD Mon HH:MM`)
         let clock_str = current_macos_clock();
-        let clock_w = (mb.measure_text_px(&clock_str, 12.5) + 16).max(118);
+        let clock_w = (mb.measure_text_px(&clock_str, 12.0) + 20).max(120);
         let clock_x = (mb_w - clock_w - 10).max(mx + 8);
         let clock_global = Rectangle::new(
-            (output_geo.loc.x + clock_x, output_geo.loc.y + 2).into(),
-            (clock_w, mb_h - 4).into(),
+            (output_geo.loc.x + clock_x, output_geo.loc.y + 3).into(),
+            (clock_w, mb_h - 6).into(),
         );
-        if state.overlays.calendar_open || rect_contains(clock_global, pointer_x, pointer_y) {
-            mb.fill_rounded_rect_aa(clock_x, 3, clock_w, mb_h - 6, 5, [255, 255, 255, 32]);
-        }
-        mb.draw_text_px(clock_x + 8, 7, &clock_str, 12.5, [242, 244, 252, 255]);
+        let clock_bg = if state.overlays.calendar_open {
+            [accent[0], accent[1], accent[2], 74]
+        } else if rect_contains(clock_global, pointer_x, pointer_y) {
+            [255, 255, 255, 34]
+        } else {
+            [255, 255, 255, 16]
+        };
+        mb.fill_rounded_rect_aa(clock_x, 4, clock_w, mb_h - 8, 6, clock_bg);
+        mb.draw_text_px(clock_x + 10, 7, &clock_str, 12.0, [244, 246, 255, 255]);
         state
             .panel
             .hit_regions
             .push((clock_global, ClickTarget::ToggleCalendar));
 
         // Notification Bell (`N` + unread accent badge)
-        let notif_w = 26;
-        let notif_x = clock_x - notif_w - 4;
+        let notif_w = 28;
+        let notif_x = clock_x - notif_w - 6;
         let notif_global = Rectangle::new(
-            (output_geo.loc.x + notif_x, output_geo.loc.y + 2).into(),
-            (notif_w, mb_h - 4).into(),
+            (output_geo.loc.x + notif_x, output_geo.loc.y + 3).into(),
+            (notif_w, mb_h - 6).into(),
         );
-        if state.overlays.notif_drawer_open {
-            mb.fill_rounded_rect_aa(notif_x, 3, notif_w, mb_h - 6, 6, [accent[0], accent[1], accent[2], 62]);
+        let notif_bg = if state.overlays.notif_drawer_open {
+            [accent[0], accent[1], accent[2], 74]
         } else if rect_contains(notif_global, pointer_x, pointer_y) {
-            mb.fill_rounded_rect_aa(notif_x, 3, notif_w, mb_h - 6, 6, [255, 255, 255, 30]);
-        }
-        mb.draw_text_px(notif_x + 8, 7, "N", 12.0, [228, 232, 246, 248]);
+            [255, 255, 255, 34]
+        } else {
+            [255, 255, 255, 16]
+        };
+        mb.fill_rounded_rect_aa(notif_x, 4, notif_w, mb_h - 8, 6, notif_bg);
+        mb.draw_text_px(notif_x + 9, 7, "N", 12.0, [232, 236, 248, 250]);
         if !state.overlays.notifications.is_empty() || !state.overlays.history.is_empty() {
             mb.fill_circle_aa(
                 (notif_x + notif_w - 6) as f32,
-                7.5,
+                8.0,
                 2.5,
                 [accent[0], accent[1], accent[2], 255],
             );
@@ -947,18 +955,23 @@ pub fn render_panel_elements(
             .push((notif_global, ClickTarget::ToggleNotifDrawer));
 
         // Control Center Icon (`CC`)
-        let cc_w = 28;
-        let cc_x = notif_x - cc_w - 4;
+        let cc_w = 30;
+        let cc_x = notif_x - cc_w - 6;
         let cc_global = Rectangle::new(
-            (output_geo.loc.x + cc_x, output_geo.loc.y + 2).into(),
-            (cc_w, mb_h - 4).into(),
+            (output_geo.loc.x + cc_x, output_geo.loc.y + 3).into(),
+            (cc_w, mb_h - 6).into(),
         );
-        if state.overlays.control_center_open || rect_contains(cc_global, pointer_x, pointer_y) {
-            mb.fill_rounded_rect_aa(cc_x, 3, cc_w, mb_h - 6, 5, [255, 255, 255, 34]);
-        }
+        let cc_bg = if state.overlays.control_center_open {
+            [accent[0], accent[1], accent[2], 74]
+        } else if rect_contains(cc_global, pointer_x, pointer_y) {
+            [255, 255, 255, 34]
+        } else {
+            [255, 255, 255, 16]
+        };
+        mb.fill_rounded_rect_aa(cc_x, 4, cc_w, mb_h - 8, 6, cc_bg);
         // Two mini pill-switch glyphs representing macOS Control Center
-        mb.fill_rounded_rect_aa(cc_x + 6, 8, 16, 5, 2, [232, 236, 248, 235]);
-        mb.fill_rounded_rect_aa(cc_x + 6, 15, 16, 5, 2, [180, 188, 212, 210]);
+        mb.fill_rounded_rect_aa(cc_x + 7, 9, 16, 4, 2, [238, 242, 252, 240]);
+        mb.fill_rounded_rect_aa(cc_x + 7, 15, 16, 4, 2, [190, 198, 224, 220]);
         state
             .panel
             .hit_regions
@@ -968,35 +981,41 @@ pub fn render_panel_elements(
         let vol_lbl = if state.panel.volume_muted {
             "Mute".to_string()
         } else if let Some(bat) = state.panel.battery_percent {
-            format!("{}% B{}", state.panel.volume_percent, bat)
+            format!("{}%  B{}", state.panel.volume_percent, bat)
         } else {
-            format!("{}%", state.panel.volume_percent)
+            format!("Vol {}%", state.panel.volume_percent)
         };
-        let vol_w = mb.measure_text_px(&vol_lbl, 11.5) + 14;
-        let vol_x = cc_x - vol_w - 4;
+        let vol_w = mb.measure_text_px(&vol_lbl, 11.5) + 16;
+        let vol_x = cc_x - vol_w - 6;
         let vol_global = Rectangle::new(
-            (output_geo.loc.x + vol_x, output_geo.loc.y + 2).into(),
-            (vol_w, mb_h - 4).into(),
+            (output_geo.loc.x + vol_x, output_geo.loc.y + 3).into(),
+            (vol_w, mb_h - 6).into(),
         );
-        if rect_contains(vol_global, pointer_x, pointer_y) {
-            mb.fill_rounded_rect_aa(vol_x, 3, vol_w, mb_h - 6, 5, [255, 255, 255, 28]);
-        }
-        mb.draw_text_px(vol_x + 7, 7, &vol_lbl, 11.5, [215, 220, 236, 240]);
+        let vol_bg = if rect_contains(vol_global, pointer_x, pointer_y) {
+            [255, 255, 255, 34]
+        } else {
+            [255, 255, 255, 16]
+        };
+        mb.fill_rounded_rect_aa(vol_x, 4, vol_w, mb_h - 8, 6, vol_bg);
+        mb.draw_text_px(vol_x + 8, 7, &vol_lbl, 11.5, [224, 228, 244, 248]);
         state
             .panel
             .hit_regions
             .push((vol_global, ClickTarget::ToggleMute));
 
-        let wifi_w = 34;
-        let wifi_x = vol_x - wifi_w - 4;
+        let wifi_w = 40;
+        let wifi_x = vol_x - wifi_w - 6;
         let wifi_global = Rectangle::new(
-            (output_geo.loc.x + wifi_x, output_geo.loc.y + 2).into(),
-            (wifi_w, mb_h - 4).into(),
+            (output_geo.loc.x + wifi_x, output_geo.loc.y + 3).into(),
+            (wifi_w, mb_h - 6).into(),
         );
-        if rect_contains(wifi_global, pointer_x, pointer_y) {
-            mb.fill_rounded_rect_aa(wifi_x, 3, wifi_w, mb_h - 6, 5, [255, 255, 255, 28]);
-        }
-        mb.draw_text_px(wifi_x + 5, 7, "WiFi", 11.5, [215, 220, 236, 240]);
+        let wifi_bg = if rect_contains(wifi_global, pointer_x, pointer_y) {
+            [255, 255, 255, 34]
+        } else {
+            [255, 255, 255, 16]
+        };
+        mb.fill_rounded_rect_aa(wifi_x, 4, wifi_w, mb_h - 8, 6, wifi_bg);
+        mb.draw_text_px(wifi_x + 8, 7, "WiFi", 11.5, [224, 228, 244, 248]);
         state
             .panel
             .hit_regions
@@ -1099,6 +1118,17 @@ pub fn render_panel_elements(
         let dock_pill_x_in_canvas = 20;
         let dock_pill_y_in_canvas = dock_headroom;
         let dock_canvas_x_local = (output_geo.size.w - dock_canvas_w) / 2;
+
+        if is_primary {
+            state.animations.dock_center_rect = Some(Rectangle::new(
+                (
+                    output_geo.loc.x + dock_canvas_x_local + dock_canvas_w / 2 - 21,
+                    output_geo.loc.y + dock_pill_y_local + 8,
+                )
+                    .into(),
+                (42, 42).into(),
+            ));
+        }
 
         let mut dock = Canvas::new(dock_canvas_w, dock_canvas_h);
         dock.fill_glass_panel(
@@ -2216,10 +2246,11 @@ impl Canvas {
         self.fill_rounded_rect_aa(x - 1, y + 1, w + 2, h + 2, radius + 1, [0, 0, 0, 72]);
         // Translucent dark glass body: rgba(24, 26, 36, 0.90) -> alpha 230
         self.fill_rounded_rect_aa(x, y, w, h, radius, [24, 26, 36, 230]);
-        // Subtle 1px inner top highlight: rgba(255, 255, 255, 0.14) -> alpha 36
+        // Subtle 1px inner top & bottom glass edge highlights
         let inset = (radius / 2).max(4);
         if w > inset * 2 {
-            self.fill_rect_blend(x + inset, y + 1, w - inset * 2, 1, [255, 255, 255, 36]);
+            self.fill_rect_blend(x + inset, y + 1, w - inset * 2, 1, [255, 255, 255, 42]);
+            self.fill_rect_blend(x + inset, y + h - 2, w - inset * 2, 1, [255, 255, 255, 14]);
         }
     }
 

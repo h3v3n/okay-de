@@ -1152,33 +1152,49 @@ pub fn render_top_overlays(
 
     // 4. Clipboard History Manager (`Super + V`)
     if state.overlays.clipboard_open {
-        let cw = 360;
-        let ch = 64 + (state.overlays.clipboard_items.len().max(1) as i32 * 36);
+        let cw = 380;
+        let ch = 68 + (state.overlays.clipboard_items.len().max(1) as i32 * 36);
         let cx = (output_geo.size.w - cw) / 2;
         let cy = (output_geo.size.h - ch) / 2;
+        let ptr_x = state.pointer_location.x.round() as i32;
+        let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(cw, ch);
         canvas.fill_glass_panel(0, 0, cw, ch, 14);
         canvas.draw_text_px(
             16,
             14,
-            "Clipboard History (Super+V)",
+            "Clipboard History",
             14.5,
             [244, 246, 254, 255],
         );
+        let badge = format!("{} items", state.overlays.clipboard_items.len());
+        let bw = canvas.measure_text_px(&badge, 11.0);
+        canvas.fill_rounded_rect_aa(cw - bw - 28, 12, bw + 14, 20, 6, [accent[0], accent[1], accent[2], 36]);
+        canvas.draw_text_px(cw - bw - 21, 15, &badge, 11.0, [accent[0], accent[1], accent[2], 245]);
 
         for (idx, item) in state.overlays.clipboard_items.iter().enumerate() {
-            let iy = 48 + idx as i32 * 34;
-            canvas.fill_rounded_rect_aa(10, iy, cw - 20, 30, 7, [255, 255, 255, 16]);
-            let short: String = item.chars().take(40).collect();
-            canvas.draw_text_px(18, iy + 7, &short, 13.0, [235, 238, 250, 255]);
-            state.overlays.hit_regions.push((
-                Rectangle::new(
-                    (output_geo.loc.x + cx + 10, output_geo.loc.y + cy + iy).into(),
-                    (cw - 20, 30).into(),
-                ),
-                OverlayClick::SelectClipboard(idx),
-            ));
+            let iy = 48 + idx as i32 * 36;
+            let row_rect = Rectangle::new(
+                (output_geo.loc.x + cx + 12, output_geo.loc.y + cy + iy).into(),
+                (cw - 24, 30).into(),
+            );
+            let hovered = rect_contains(row_rect, ptr_x, ptr_y);
+            let row_bg = if hovered {
+                [accent[0], accent[1], accent[2], 54]
+            } else {
+                [255, 255, 255, 14]
+            };
+            canvas.fill_rounded_rect_aa(12, iy, cw - 24, 30, 8, row_bg);
+            if hovered || idx == 0 {
+                canvas.fill_rounded_rect_aa(14, iy + 5, 3, 20, 2, [accent[0], accent[1], accent[2], 235]);
+            }
+            let short: String = item.chars().take(42).collect();
+            canvas.draw_text_px(24, iy + 7, &short, 12.5, [238, 240, 252, 255]);
+            state
+                .overlays
+                .hit_regions
+                .push((row_rect, OverlayClick::SelectClipboard(idx)));
         }
 
         if let Some(elem) = upload_canvas(&canvas, (cx, cy), renderer, scale) {
@@ -1188,8 +1204,8 @@ pub fn render_top_overlays(
 
     // 5. Calendar Popup (when clicking taskbar clock)
     if state.overlays.calendar_open {
-        let cal_w = 270;
-        let cal_h = 235;
+        let cal_w = 276;
+        let cal_h = 244;
         let cal_x = (output_geo.size.w - cal_w - 12).max(8);
         let cal_y = if state.panel.dock_mode || state.panel.panel_top {
             PANEL_HEIGHT + 8
@@ -1201,25 +1217,26 @@ pub fn render_top_overlays(
         canvas.fill_glass_panel(0, 0, cal_w, cal_h, 14);
 
         let (date_header, cur_day) = current_date_info();
-        canvas.draw_text_px(16, 14, &date_header, 14.5, [244, 246, 254, 255]);
+        canvas.draw_text_px(16, 14, &date_header, 14.5, [246, 248, 255, 255]);
+        canvas.fill_rounded_rect_aa(12, 38, cal_w - 24, 24, 6, [255, 255, 255, 12]);
         canvas.draw_text_px(
-            16,
-            42,
+            18,
+            43,
             "Mo   Tu   We   Th   Fr   Sa   Su",
-            12.5,
-            [165, 170, 195, 255],
+            12.0,
+            [168, 174, 200, 245],
         );
 
         for day in 1..=30 {
             let col = (day - 1) % 7;
             let row = (day - 1) / 7;
-            let dx = 14 + col * 35;
-            let dy = 68 + row * 30;
+            let dx = 16 + col * 35;
+            let dy = 72 + row * 31;
             if day == cur_day {
-                canvas.fill_rounded_rect_aa(dx - 4, dy - 3, 28, 24, 7, [accent[0], accent[1], accent[2], 255]);
+                canvas.fill_rounded_rect_aa(dx - 4, dy - 3, 28, 24, 7, [accent[0], accent[1], accent[2], 240]);
                 canvas.draw_text_px(dx + 2, dy, &format!("{:2}", day), 12.5, contrast_fg(accent));
             } else {
-                canvas.draw_text_px(dx + 2, dy, &format!("{:2}", day), 12.5, [230, 232, 246, 255]);
+                canvas.draw_text_px(dx + 2, dy, &format!("{:2}", day), 12.5, [230, 234, 248, 250]);
             }
         }
 
@@ -1238,45 +1255,54 @@ pub fn render_top_overlays(
 
     // 6. Notification Center Drawer
     if state.overlays.notif_drawer_open {
-        let nw = 330;
-        let nh = 300;
+        let nw = 336;
+        let nh = 304;
         let nx = (output_geo.size.w - nw - 12).max(8);
         let ny = if state.panel.dock_mode || state.panel.panel_top {
             PANEL_HEIGHT + 8
         } else {
             (output_geo.size.h - 36 - nh - 8).max(8)
         };
+        let ptr_x = state.pointer_location.x.round() as i32;
+        let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(nw, nh);
         canvas.fill_glass_panel(0, 0, nw, nh, 14);
         canvas.draw_text_px(
-            14,
+            16,
             14,
             "Notification Center",
             14.5,
-            [244, 246, 254, 255],
+            [246, 248, 255, 255],
         );
 
-        canvas.fill_rounded_rect_aa(nw - 78, 10, 66, 24, 7, [255, 255, 255, 24]);
-        canvas.draw_text_px(nw - 66, 14, "Clear", 12.0, [235, 238, 250, 255]);
-        state.overlays.hit_regions.push((
-            Rectangle::new(
-                (output_geo.loc.x + nx + nw - 78, output_geo.loc.y + ny + 10).into(),
-                (66, 24).into(),
-            ),
-            OverlayClick::ClearNotifications,
-        ));
+        let clear_rect = Rectangle::new(
+            (output_geo.loc.x + nx + nw - 78, output_geo.loc.y + ny + 11).into(),
+            (64, 24).into(),
+        );
+        let clear_bg = if rect_contains(clear_rect, ptr_x, ptr_y) {
+            [accent[0], accent[1], accent[2], 68]
+        } else {
+            [255, 255, 255, 20]
+        };
+        canvas.fill_rounded_rect_aa(nw - 78, 11, 64, 24, 7, clear_bg);
+        canvas.draw_text_px(nw - 63, 15, "Clear", 12.0, [238, 240, 252, 255]);
+        state
+            .overlays
+            .hit_regions
+            .push((clear_rect, OverlayClick::ClearNotifications));
 
         if state.overlays.history.is_empty() {
-            canvas.draw_text_px(16, 60, "No recent notifications.", 13.0, [160, 165, 190, 255]);
+            canvas.draw_text_px(16, 62, "No recent notifications.", 12.5, [156, 162, 188, 235]);
         } else {
             for (i, (title, body)) in state.overlays.history.iter().take(4).enumerate() {
-                let iy = 46 + i as i32 * 60;
-                canvas.fill_rounded_rect_aa(10, iy, nw - 20, 52, 8, [32, 32, 48, 240]);
-                let st: String = title.chars().take(34).collect();
-                let sb: String = body.chars().take(38).collect();
-                canvas.draw_text_px(18, iy + 8, &st, 13.0, [accent[0], accent[1], accent[2], 255]);
-                canvas.draw_text_px(18, iy + 28, &sb, 12.0, [220, 224, 240, 255]);
+                let iy = 48 + i as i32 * 60;
+                canvas.fill_rounded_rect_aa(12, iy, nw - 24, 52, 10, [255, 255, 255, 14]);
+                canvas.fill_rounded_rect_aa(14, iy + 8, 3, 36, 2, [accent[0], accent[1], accent[2], 235]);
+                let st: String = title.chars().take(33).collect();
+                let sb: String = body.chars().take(37).collect();
+                canvas.draw_text_px(24, iy + 8, &st, 12.5, [242, 244, 255, 255]);
+                canvas.draw_text_px(24, iy + 28, &sb, 11.5, [178, 184, 208, 240]);
             }
         }
 
@@ -1295,20 +1321,22 @@ pub fn render_top_overlays(
 
     // 6b. Compact macOS Control Center Popup
     if state.overlays.control_center_open {
-        let cc_w = 296;
-        let cc_h = 260;
+        let cc_w = 300;
+        let cc_h = 266;
         let cc_x = (output_geo.size.w - cc_w - 12).max(8);
         let cc_y = if state.panel.dock_mode || state.panel.panel_top {
             PANEL_HEIGHT + 8
         } else {
             (output_geo.size.h - 36 - cc_h - 8).max(8)
         };
+        let ptr_x = state.pointer_location.x.round() as i32;
+        let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(cc_w, cc_h);
         canvas.fill_glass_panel(0, 0, cc_w, cc_h, 16);
 
         // Connectivity card (Wi-Fi, Bluetooth, Tiling)
-        canvas.fill_rounded_rect_aa(12, 12, cc_w - 24, 114, 12, [255, 255, 255, 16]);
+        canvas.fill_rounded_rect_aa(12, 12, cc_w - 24, 116, 12, [255, 255, 255, 14]);
         let wifi_on = !state.settings.wifi_status.to_lowercase().contains("off");
         let toggles = [
             ("Wi-Fi", if wifi_on { "Connected" } else { "Off" }, wifi_on, OverlayClick::ControlToggleWifi),
@@ -1316,41 +1344,44 @@ pub fn render_top_overlays(
             ("Layout", state.workspaces.layout_mode.short_label(), state.workspaces.tiling_enabled(), OverlayClick::ControlToggleTiling),
         ];
         for (i, (lbl, sub, active, act)) in toggles.into_iter().enumerate() {
-            let ry = 18 + i as i32 * 34;
-            let pill_col = if active { [accent[0], accent[1], accent[2], 240] } else { [255, 255, 255, 32] };
+            let ry = 18 + i as i32 * 35;
+            let row_rect = Rectangle::new(
+                (output_geo.loc.x + cc_x + 16, output_geo.loc.y + cc_y + ry).into(),
+                (cc_w - 32, 32).into(),
+            );
+            if rect_contains(row_rect, ptr_x, ptr_y) {
+                canvas.fill_rounded_rect_aa(16, ry, cc_w - 32, 32, 8, [255, 255, 255, 18]);
+            }
+            let pill_col = if active { [accent[0], accent[1], accent[2], 240] } else { [255, 255, 255, 30] };
             let pill_fg = if active { contrast_fg(accent) } else { [220, 224, 240, 255] };
-            canvas.fill_circle_aa(34.0, (ry + 14) as f32, 12.0, pill_col);
-            canvas.draw_text_px(27, ry + 7, &lbl[..2], 11.0, pill_fg);
-            canvas.draw_text_px(54, ry + 2, lbl, 12.5, [242, 244, 252, 255]);
-            canvas.draw_text_px(54, ry + 16, sub, 10.5, [156, 164, 188, 225]);
-            state.overlays.hit_regions.push((
-                Rectangle::new(
-                    (output_geo.loc.x + cc_x + 16, output_geo.loc.y + cc_y + ry).into(),
-                    (cc_w - 32, 30).into(),
-                ),
-                act,
-            ));
+            canvas.fill_circle_aa(34.0, (ry + 16) as f32, 12.0, pill_col);
+            canvas.draw_text_px(27, ry + 9, &lbl[..2], 11.0, pill_fg);
+            canvas.draw_text_px(54, ry + 3, lbl, 12.5, [244, 246, 255, 255]);
+            canvas.draw_text_px(54, ry + 18, sub, 10.5, [158, 166, 192, 230]);
+            state.overlays.hit_regions.push((row_rect, act));
         }
 
         // Sound Volume Slider Card
-        canvas.fill_rounded_rect_aa(12, 134, cc_w - 24, 62, 12, [255, 255, 255, 16]);
+        canvas.fill_rounded_rect_aa(12, 136, cc_w - 24, 64, 12, [255, 255, 255, 14]);
         let vol_lbl = if state.panel.volume_muted {
             "Sound  (Muted)".to_string()
         } else {
             format!("Sound  ({}%)", state.panel.volume_percent)
         };
-        canvas.draw_text_px(24, 142, &vol_lbl, 12.0, [238, 240, 250, 255]);
+        canvas.draw_text_px(24, 144, &vol_lbl, 12.0, [240, 242, 252, 255]);
         let track_x = 24;
-        let track_y = 168;
+        let track_y = 171;
         let track_w = cc_w - 48;
-        canvas.fill_rounded_rect_aa(track_x, track_y, track_w, 12, 6, [255, 255, 255, 28]);
-        let fill_w = ((track_w as f32 * state.panel.volume_percent as f32 / 100.0).round() as i32).max(12);
-        canvas.fill_rounded_rect_aa(track_x, track_y, fill_w, 12, 6, [242, 244, 252, 235]);
+        canvas.fill_rounded_rect_aa(track_x, track_y, track_w, 10, 5, [255, 255, 255, 28]);
+        let fill_w = ((track_w as f32 * state.panel.volume_percent as f32 / 100.0).round() as i32).max(10);
+        canvas.fill_rounded_rect_aa(track_x, track_y, fill_w, 10, 5, [accent[0], accent[1], accent[2], 235]);
+        let knob_x = (track_x + fill_w).clamp(track_x + 6, track_x + track_w - 6);
+        canvas.fill_circle_aa(knob_x as f32, (track_y + 5) as f32, 7.0, [248, 250, 255, 255]);
         for step in [0, 25, 50, 75, 100] {
             let sx = track_x + (step * track_w / 100) - (track_w / 10);
             state.overlays.hit_regions.push((
                 Rectangle::new(
-                    (output_geo.loc.x + cc_x + sx.max(track_x), output_geo.loc.y + cc_y + 158).into(),
+                    (output_geo.loc.x + cc_x + sx.max(track_x), output_geo.loc.y + cc_y + 160).into(),
                     ((track_w / 5).max(36), 28).into(),
                 ),
                 OverlayClick::ControlSetVolume(step),
@@ -1363,25 +1394,33 @@ pub fn render_top_overlays(
             crate::animation::MinimizeEffect::ScaleGlide => "FX: Scale",
             crate::animation::MinimizeEffect::Off => "FX: Off",
         };
-        canvas.fill_rounded_rect_aa(12, 204, 130, 40, 10, [255, 255, 255, 18]);
-        canvas.draw_text_px(24, 217, min_lbl, 12.0, [238, 240, 252, 255]);
-        state.overlays.hit_regions.push((
-            Rectangle::new(
-                (output_geo.loc.x + cc_x + 12, output_geo.loc.y + cc_y + 204).into(),
-                (130, 40).into(),
-            ),
-            OverlayClick::ControlCycleMinimize,
-        ));
+        let fx_rect = Rectangle::new(
+            (output_geo.loc.x + cc_x + 12, output_geo.loc.y + cc_y + 208).into(),
+            (132, 42).into(),
+        );
+        let fx_bg = if rect_contains(fx_rect, ptr_x, ptr_y) {
+            [255, 255, 255, 32]
+        } else {
+            [255, 255, 255, 16]
+        };
+        canvas.fill_rounded_rect_aa(12, 208, 132, 42, 10, fx_bg);
+        canvas.draw_text_px(26, 222, min_lbl, 12.0, [240, 242, 252, 255]);
+        state
+            .overlays
+            .hit_regions
+            .push((fx_rect, OverlayClick::ControlCycleMinimize));
 
-        canvas.fill_rounded_rect_aa(150, 204, 134, 40, 10, [accent[0], accent[1], accent[2], 225]);
-        canvas.draw_text_px(164, 217, "Settings...", 12.0, contrast_fg(accent));
-        state.overlays.hit_regions.push((
-            Rectangle::new(
-                (output_geo.loc.x + cc_x + 150, output_geo.loc.y + cc_y + 204).into(),
-                (134, 40).into(),
-            ),
-            OverlayClick::ControlOpenSettings,
-        ));
+        let set_rect = Rectangle::new(
+            (output_geo.loc.x + cc_x + 152, output_geo.loc.y + cc_y + 208).into(),
+            (136, 42).into(),
+        );
+        let set_alpha = if rect_contains(set_rect, ptr_x, ptr_y) { 250 } else { 225 };
+        canvas.fill_rounded_rect_aa(152, 208, 136, 42, 10, [accent[0], accent[1], accent[2], set_alpha]);
+        canvas.draw_text_px(176, 222, "Settings...", 12.0, contrast_fg(accent));
+        state
+            .overlays
+            .hit_regions
+            .push((set_rect, OverlayClick::ControlOpenSettings));
 
         if let Some(elem) = upload_canvas(&canvas, (cc_x, cc_y), renderer, scale) {
             elements.push(elem);
@@ -1390,8 +1429,8 @@ pub fn render_top_overlays(
 
     // 7. Active Toast Notifications in Top-Right Corner
     for (idx, toast) in state.overlays.notifications.iter().take(3).enumerate() {
-        let tw = 310;
-        let th = 62;
+        let tw = 316;
+        let th = 64;
         let tx = (output_geo.size.w - tw - 14).max(8);
         let top_offset = if state.panel.dock_mode || state.panel.panel_top {
             PANEL_HEIGHT + 12
@@ -1402,10 +1441,11 @@ pub fn render_top_overlays(
 
         let mut canvas = Canvas::new(tw, th);
         canvas.fill_glass_panel(0, 0, tw, th, 12);
+        canvas.fill_rounded_rect_aa(6, 10, 3, th - 20, 2, [accent[0], accent[1], accent[2], 235]);
         let st: String = toast.title.chars().take(32).collect();
         let sb: String = toast.body.chars().take(38).collect();
-        canvas.draw_text_px(14, 11, &st, 13.0, [246, 248, 255, 255]);
-        canvas.draw_text_px(14, 32, &sb, 11.5, [190, 198, 222, 240]);
+        canvas.draw_text_px(16, 12, &st, 13.0, [246, 248, 255, 255]);
+        canvas.draw_text_px(16, 33, &sb, 11.5, [186, 194, 218, 240]);
 
         state.overlays.hit_regions.push((
             Rectangle::new(
