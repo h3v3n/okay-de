@@ -1588,7 +1588,7 @@ pub fn render_top_overlays(
         let my = (menu_pos.y - output_geo.loc.y).clamp(8, (output_geo.size.h - mh - 8).max(8));
 
         let mut canvas = Canvas::new(mw, mh);
-        canvas.fill_glass_panel(0, 0, mw, mh, 18);
+        canvas.fill_frosted_backdrop_panel(0, 0, mw, mh, 18);
 
         // Label, optional shortcut hint, action, draw_separator_after
         let items: [(&str, &str, OverlayClick, bool); 6] = [
@@ -1639,6 +1639,18 @@ pub fn render_top_overlays(
 
         if let Some(elem) = upload_canvas(&canvas, (mx, my), renderer, scale) {
             elements.push(elem);
+            if let Some(sh) = crate::render::panel_backdrop_element(
+                state,
+                renderer,
+                output,
+                scale,
+                "desktop_ctx",
+                Rectangle::new((mx, my).into(), (mw, mh).into()),
+                18.0,
+                1.0,
+            ) {
+                elements.push(sh);
+            }
         }
     }
 
@@ -1650,7 +1662,7 @@ pub fn render_top_overlays(
         let my = (menu_pos.y - output_geo.loc.y).clamp(8, (output_geo.size.h - mh - 8).max(8));
 
         let mut canvas = Canvas::new(mw, mh);
-        canvas.fill_glass_panel(0, 0, mw, mh, 16);
+        canvas.fill_frosted_backdrop_panel(0, 0, mw, mh, 16);
 
         let items: [(&str, &str, OverlayClick, bool, bool); 5] = [
             ("Open", "DblClick", OverlayClick::IconCtxOpen(icon_idx), false, false),
@@ -1710,6 +1722,18 @@ pub fn render_top_overlays(
 
         if let Some(elem) = upload_canvas(&canvas, (mx, my), renderer, scale) {
             elements.push(elem);
+            if let Some(sh) = crate::render::panel_backdrop_element(
+                state,
+                renderer,
+                output,
+                scale,
+                "icon_ctx",
+                Rectangle::new((mx, my).into(), (mw, mh).into()),
+                16.0,
+                1.0,
+            ) {
+                elements.push(sh);
+            }
         }
     }
 
@@ -1721,7 +1745,7 @@ pub fn render_top_overlays(
         let my = (menu_pos.y - output_geo.loc.y).clamp(PANEL_HEIGHT + 4, (output_geo.size.h - mh - 8).max(PANEL_HEIGHT + 4));
 
         let mut canvas = Canvas::new(mw, mh);
-        canvas.fill_glass_panel(0, 0, mw, mh, 16);
+        canvas.fill_frosted_backdrop_panel(0, 0, mw, mh, 16);
 
         let is_pinned = state.workspaces.always_on_top.contains(win_id);
         let is_max = state.workspaces.maximized.contains(win_id);
@@ -1781,6 +1805,18 @@ pub fn render_top_overlays(
 
         if let Some(elem) = upload_canvas(&canvas, (mx, my), renderer, scale) {
             elements.push(elem);
+            if let Some(sh) = crate::render::panel_backdrop_element(
+                state,
+                renderer,
+                output,
+                scale,
+                "win_ctx",
+                Rectangle::new((mx, my).into(), (mw, mh).into()),
+                16.0,
+                1.0,
+            ) {
+                elements.push(sh);
+            }
         }
     }
 
@@ -1794,7 +1830,7 @@ pub fn render_top_overlays(
         let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(pw, ph);
-        canvas.fill_glass_panel(0, 0, pw, ph, 18);
+        canvas.fill_frosted_backdrop_panel(0, 0, pw, ph, 18);
         canvas.draw_text_px(18, 14, "Properties", 15.0, [246, 248, 255, 255]);
 
         let close_rect = Rectangle::new(
@@ -1829,6 +1865,18 @@ pub fn render_top_overlays(
 
         if let Some(elem) = upload_canvas(&canvas, (px, py), renderer, scale) {
             elements.push(elem);
+            if let Some(sh) = crate::render::panel_backdrop_element(
+                state,
+                renderer,
+                output,
+                scale,
+                "properties",
+                Rectangle::new((px, py).into(), (pw, ph).into()),
+                18.0,
+                1.0,
+            ) {
+                elements.push(sh);
+            }
         }
     }
 
@@ -1856,7 +1904,7 @@ pub fn render_top_overlays(
             let sx = (output_geo.size.w - sw) / 2;
             let sy = (output_geo.size.h - sh) / 2;
             let mut canvas = Canvas::new(sw, sh);
-            canvas.fill_glass_panel(0, 0, sw, sh, 14);
+            canvas.fill_frosted_backdrop_panel(0, 0, sw, sh, 14);
             canvas.draw_text_px(
                 16,
                 14,
@@ -1895,6 +1943,18 @@ pub fn render_top_overlays(
 
             if let Some(elem) = upload_canvas(&canvas, (sx, sy), renderer, scale) {
                 elements.push(elem);
+                if let Some(sh) = crate::render::panel_backdrop_element(
+                    state,
+                    renderer,
+                    output,
+                    scale,
+                    "alttab",
+                    Rectangle::new((sx, sy).into(), (sw, sh).into()),
+                    14.0,
+                    1.0,
+                ) {
+                    elements.push(sh);
+                }
             }
         }
     }
@@ -1909,7 +1969,7 @@ pub fn render_top_overlays(
         let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(cw, ch);
-        canvas.fill_glass_panel(0, 0, cw, ch, 18);
+        canvas.fill_frosted_backdrop_panel(0, 0, cw, ch, 18);
         canvas.draw_text_px(
             16,
             14,
@@ -1982,6 +2042,18 @@ pub fn render_top_overlays(
 
         if let Some(elem) = upload_canvas(&canvas, (cx, cy), renderer, scale) {
             elements.push(elem);
+            if let Some(sh) = crate::render::panel_backdrop_element(
+                state,
+                renderer,
+                output,
+                scale,
+                "clipboard",
+                Rectangle::new((cx, cy).into(), (cw, ch).into()),
+                18.0,
+                1.0,
+            ) {
+                elements.push(sh);
+            }
         }
     }
 
@@ -1999,11 +2071,7 @@ pub fn render_top_overlays(
         let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(cal_w, cal_h);
-        if !state.animations.enabled || state.animations.calendar_open_anim >= 0.995 {
-            canvas.fill_frosted_backdrop_panel(0, 0, cal_w, cal_h, 18);
-        } else {
-            canvas.fill_glass_panel(0, 0, cal_w, cal_h, 18);
-        }
+        canvas.fill_frosted_backdrop_panel(0, 0, cal_w, cal_h, 18);
 
         let (date_header, start_mon_0, days_in_month, today_opt) =
             calendar_grid_info(state.overlays.cal_month_offset);
@@ -2090,6 +2158,23 @@ pub fn render_top_overlays(
                 scale,
             ) {
                 elements.push(elem);
+                let (bd_rect, bd_alpha) = crate::render::animated_topbar_backdrop_rect(
+                    Rectangle::new((cal_x, cal_y).into(), (cal_w, cal_h).into()),
+                    cal_w - 64,
+                    anim_t,
+                );
+                if let Some(sh) = crate::render::panel_backdrop_element(
+                    state,
+                    renderer,
+                    output,
+                    scale,
+                    "calendar",
+                    bd_rect,
+                    18.0,
+                    bd_alpha,
+                ) {
+                    elements.push(sh);
+                }
             }
         } else if let Some(elem) = upload_canvas(&canvas, (cal_x, cal_y), renderer, scale) {
             elements.push(elem);
@@ -2158,11 +2243,7 @@ pub fn render_top_overlays(
         let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(nw, nh);
-        if !state.animations.enabled || state.animations.notif_open_anim >= 0.995 {
-            canvas.fill_frosted_backdrop_panel(0, 0, nw, nh, 18);
-        } else {
-            canvas.fill_glass_panel(0, 0, nw, nh, 18);
-        }
+        canvas.fill_frosted_backdrop_panel(0, 0, nw, nh, 18);
         canvas.draw_text_px(
             16,
             14,
@@ -2219,6 +2300,23 @@ pub fn render_top_overlays(
                 scale,
             ) {
                 elements.push(elem);
+                let (bd_rect, bd_alpha) = crate::render::animated_topbar_backdrop_rect(
+                    Rectangle::new((nx, ny).into(), (nw, nh).into()),
+                    nw - 110,
+                    anim_t,
+                );
+                if let Some(sh) = crate::render::panel_backdrop_element(
+                    state,
+                    renderer,
+                    output,
+                    scale,
+                    "notif_drawer",
+                    bd_rect,
+                    18.0,
+                    bd_alpha,
+                ) {
+                    elements.push(sh);
+                }
             }
         } else if let Some(elem) = upload_canvas(&canvas, (nx, ny), renderer, scale) {
             elements.push(elem);
@@ -2266,11 +2364,7 @@ pub fn render_top_overlays(
         let ptr_y = state.pointer_location.y.round() as i32;
 
         let mut canvas = Canvas::new(cc_w, cc_h);
-        if !state.animations.enabled || state.animations.control_center_open_anim >= 0.995 {
-            canvas.fill_frosted_backdrop_panel(0, 0, cc_w, cc_h, 18);
-        } else {
-            canvas.fill_glass_panel(0, 0, cc_w, cc_h, 18);
-        }
+        canvas.fill_frosted_backdrop_panel(0, 0, cc_w, cc_h, 18);
 
         // Connectivity & AdShield card (Wi-Fi, Bluetooth, AdShield, Layout)
         canvas.fill_rounded_rect_aa(12, 12, cc_w - 24, 151, 12, [255, 255, 255, 14]);
@@ -2495,6 +2589,23 @@ pub fn render_top_overlays(
                 scale,
             ) {
                 elements.push(elem);
+                let (bd_rect, bd_alpha) = crate::render::animated_topbar_backdrop_rect(
+                    Rectangle::new((cc_x, cc_y).into(), (cc_w, cc_h).into()),
+                    cc_w - 115,
+                    anim_t,
+                );
+                if let Some(sh) = crate::render::panel_backdrop_element(
+                    state,
+                    renderer,
+                    output,
+                    scale,
+                    "control_center",
+                    bd_rect,
+                    18.0,
+                    bd_alpha,
+                ) {
+                    elements.push(sh);
+                }
             }
         } else if let Some(elem) = upload_canvas(&canvas, (cc_x, cc_y), renderer, scale) {
             elements.push(elem);
@@ -2526,7 +2637,7 @@ pub fn render_top_overlays(
         let ty = top_offset + idx as i32 * (th + 8);
 
         let mut canvas = Canvas::new(tw, th);
-        canvas.fill_glass_panel(0, 0, tw, th, 12);
+        canvas.fill_frosted_backdrop_panel(0, 0, tw, th, 12);
         canvas.fill_rounded_rect_aa(6, 10, 3, th - 20, 2, [accent[0], accent[1], accent[2], 235]);
         let st: String = toast.title.chars().take(32).collect();
         let sb: String = toast.body.chars().take(38).collect();
@@ -2543,6 +2654,18 @@ pub fn render_top_overlays(
 
         if let Some(elem) = upload_canvas(&canvas, (tx, ty), renderer, scale) {
             elements.push(elem);
+            if let Some(sh) = crate::render::panel_backdrop_element(
+                state,
+                renderer,
+                output,
+                scale,
+                "toast",
+                Rectangle::new((tx, ty).into(), (tw, th).into()),
+                12.0,
+                1.0,
+            ) {
+                elements.push(sh);
+            }
         }
     }
 
@@ -2553,7 +2676,7 @@ pub fn render_top_overlays(
         let ox = (output_geo.size.w - ow) / 2;
         let oy = (output_geo.size.h - 140).max(PANEL_HEIGHT + 24);
         let mut canvas = Canvas::new(ow, oh);
-        canvas.fill_glass_panel(0, 0, ow, oh, 14);
+        canvas.fill_frosted_backdrop_panel(0, 0, ow, oh, 14);
         canvas.draw_text_px(16, 12, &osd.title, 12.5, [176, 184, 212, 245]);
         let vw = canvas.measure_text_px(&osd.value, 13.0);
         canvas.draw_text_px(ow - 16 - vw, 12, &osd.value, 13.0, [246, 248, 255, 255]);
@@ -2565,6 +2688,18 @@ pub fn render_top_overlays(
         }
         if let Some(elem) = upload_canvas(&canvas, (ox, oy), renderer, scale) {
             elements.push(elem);
+            if let Some(sh) = crate::render::panel_backdrop_element(
+                state,
+                renderer,
+                output,
+                scale,
+                "osd",
+                Rectangle::new((ox, oy).into(), (ow, oh).into()),
+                14.0,
+                1.0,
+            ) {
+                elements.push(sh);
+            }
         }
     }
 

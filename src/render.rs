@@ -928,6 +928,43 @@ pub fn panel_backdrop_element(
     }
 }
 
+/// Computes the scaled rect and alpha for a Top Bar popover animating with `render_topbar_genie_canvas`.
+pub fn animated_topbar_backdrop_rect(
+    rect: Rectangle<i32, Logical>,
+    anchor_local_x: i32,
+    t: f32,
+) -> (Rectangle<i32, Logical>, f32) {
+    let x = t.clamp(0.0, 1.0);
+    let ease = 1.0 - (1.0 - x).powi(4);
+    let s = 0.95 + 0.05 * ease;
+    let w = (rect.size.w as f32 * s).round().max(1.0) as i32;
+    let h = (rect.size.h as f32 * s).round().max(1.0) as i32;
+    let pivot_x = (anchor_local_x as f32).clamp(16.0, (rect.size.w - 16).max(16) as f32);
+    let dx = (pivot_x * (1.0 - s)).round() as i32;
+    (
+        Rectangle::new((rect.loc.x + dx, rect.loc.y).into(), (w, h).into()),
+        ease,
+    )
+}
+
+/// Computes the scaled rect and alpha for the Launcher animating with `render_launcher_genie_canvas`.
+pub fn animated_launcher_backdrop_rect(
+    rect: Rectangle<i32, Logical>,
+    t: f32,
+) -> (Rectangle<i32, Logical>, f32) {
+    let x = t.clamp(0.0, 1.0);
+    let ease = 1.0 - (1.0 - x).powi(4);
+    let s = 0.95 + 0.05 * ease;
+    let w = (rect.size.w as f32 * s).round().max(1.0) as i32;
+    let h = (rect.size.h as f32 * s).round().max(1.0) as i32;
+    let dx = (rect.size.w - w) / 2;
+    let dy = rect.size.h - h;
+    (
+        Rectangle::new((rect.loc.x + dx, rect.loc.y + dy).into(), (w, h).into()),
+        ease,
+    )
+}
+
 /// Renders a subtle frosted-blur/glow veil over a newly opening window that smoothly fades out.
 fn open_blur_veil_element(
     renderer: &mut GlesRenderer,

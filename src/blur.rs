@@ -95,12 +95,6 @@ float sdRoundedBox(vec2 p, vec2 b, float r) {
     return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
 }
 
-float hash12(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
 void main() {
     vec2 local_uv = clamp(v_coords, vec2(0.0), vec2(1.0));
     vec2 px = local_uv * u_size;
@@ -126,10 +120,6 @@ void main() {
 
     // Lighter frosted glass tint so background colors & shapes show through cleanly
     vec3 col = mix(blurred_color, vec3(0.10, 0.12, 0.18), 0.26);
-
-    // Subtle procedural grain prevents 8-bit color banding
-    float grain = (hash12(px + u_pos) - 0.5) * 0.018;
-    col = clamp(col + vec3(grain), 0.0, 1.0);
 
     // Crisp 1px bright border on the SDF perimeter
     float edge = (1.0 - smoothstep(0.0, 1.05, abs(d + 0.5))) * u_edge_alpha;

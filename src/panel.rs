@@ -1658,11 +1658,7 @@ pub fn render_panel_elements(
             let tx = (tray_x + tray_w / 2 - tw / 2).clamp(8, (output_geo.size.w - tw - 8).max(8));
             let ty = PANEL_HEIGHT + 6;
             let mut tcan = Canvas::new(tw, th);
-            if !state.animations.enabled || state.animations.tray_open_anim >= 0.995 {
-                tcan.fill_frosted_backdrop_panel(0, 0, tw, th, 16);
-            } else {
-                tcan.fill_glass_panel(0, 0, tw, th, 16);
-            }
+            tcan.fill_frosted_backdrop_panel(0, 0, tw, th, 16);
             tcan.draw_text_px(14, 12, "Background & Running Apps", 13.5, [244, 246, 255, 255]);
 
             if bg_rows.is_empty() {
@@ -1729,6 +1725,23 @@ pub fn render_panel_elements(
                     scale,
                 ) {
                     elements.insert(0, elem);
+                    let (bd_rect, bd_alpha) = crate::render::animated_topbar_backdrop_rect(
+                        Rectangle::new((tx, ty).into(), (tw, th).into()),
+                        anchor_local,
+                        anim_t,
+                    );
+                    if let Some(sh) = crate::render::panel_backdrop_element(
+                        state,
+                        renderer,
+                        output,
+                        scale,
+                        "tray_drawer",
+                        bd_rect,
+                        16.0,
+                        bd_alpha,
+                    ) {
+                        elements.insert(1, sh);
+                    }
                 }
             } else {
                 let tbuf = MemoryRenderBuffer::from_slice(
@@ -2181,11 +2194,7 @@ pub fn render_panel_elements(
                 let mx = anchor_x.clamp(8, (output_geo.size.w - mw - 8).max(8));
                 let my = PANEL_HEIGHT + 8;
                 let mut mcan = Canvas::new(mw, mh);
-                if !state.animations.enabled || state.animations.top_menu_open_anim >= 0.995 {
-                    mcan.fill_frosted_backdrop_panel(0, 0, mw, mh, 16);
-                } else {
-                    mcan.fill_glass_panel(0, 0, mw, mh, 16);
-                }
+                mcan.fill_frosted_backdrop_panel(0, 0, mw, mh, 16);
 
                 let mut iy = 10;
                 for (lbl, hint, act, sep_after) in rows {
@@ -2226,6 +2235,23 @@ pub fn render_panel_elements(
                         scale,
                     ) {
                         elements.insert(0, elem);
+                        let (bd_rect, bd_alpha) = crate::render::animated_topbar_backdrop_rect(
+                            Rectangle::new((mx, my).into(), (mw, mh).into()),
+                            anchor_local,
+                            anim_t,
+                        );
+                        if let Some(sh) = crate::render::panel_backdrop_element(
+                            state,
+                            renderer,
+                            output,
+                            scale,
+                            "top_menu",
+                            bd_rect,
+                            16.0,
+                            bd_alpha,
+                        ) {
+                            elements.insert(1, sh);
+                        }
                     }
                 } else {
                     let mbuf = MemoryRenderBuffer::from_slice(
@@ -2467,11 +2493,7 @@ pub fn render_panel_elements(
         let menu_y = base_y - slide_px;
 
         let mut menu_canvas = Canvas::new(menu_w, menu_h);
-        if !state.animations.enabled || state.animations.launcher_open_anim >= 0.995 {
-            menu_canvas.fill_frosted_backdrop_panel(0, 0, menu_w, menu_h, 18);
-        } else {
-            menu_canvas.fill_glass_panel(0, 0, menu_w, menu_h, 18);
-        }
+        menu_canvas.fill_frosted_backdrop_panel(0, 0, menu_w, menu_h, 18);
 
         // Header + Centered Search Bar
         menu_canvas.draw_text_px(20, 14, "Applications", 16.0, [246, 248, 255, 255]);
@@ -2684,6 +2706,22 @@ pub fn render_panel_elements(
                 scale,
             ) {
                 elements.insert(0, elem);
+                let (bd_rect, bd_alpha) = crate::render::animated_launcher_backdrop_rect(
+                    Rectangle::new((menu_x, menu_y).into(), (menu_w, menu_h).into()),
+                    launcher_t,
+                );
+                if let Some(sh) = crate::render::panel_backdrop_element(
+                    state,
+                    renderer,
+                    output,
+                    scale,
+                    "launcher",
+                    bd_rect,
+                    18.0,
+                    bd_alpha,
+                ) {
+                    elements.insert(1, sh);
+                }
             }
         } else {
             let menu_buf = MemoryRenderBuffer::from_slice(
@@ -2735,7 +2773,7 @@ pub fn render_panel_elements(
                 .clamp(PANEL_HEIGHT + 6, (output_geo.size.h - ch - 8).max(8));
 
             let mut ctx = Canvas::new(cw, ch);
-            ctx.fill_glass_panel(0, 0, cw, ch, 16);
+            ctx.fill_frosted_backdrop_panel(0, 0, cw, ch, 16);
             let label = match pin_action {
                 PinContextAction::PinApp(_) => "Pin to Dock",
                 PinContextAction::UnpinBuiltin(_) | PinContextAction::UnpinCustom(_) => {
@@ -2785,6 +2823,18 @@ pub fn render_panel_elements(
                 Kind::Unspecified,
             ) {
                 elements.insert(0, OkayRenderElements::Memory(elem));
+                if let Some(sh) = crate::render::panel_backdrop_element(
+                    state,
+                    renderer,
+                    output,
+                    scale,
+                    "pin_ctx",
+                    Rectangle::new((cx, cy).into(), (cw, ch).into()),
+                    16.0,
+                    1.0,
+                ) {
+                    elements.insert(1, sh);
+                }
             }
         }
     }
@@ -3466,29 +3516,6 @@ impl Canvas {
                 // Subtle 1px bright edge on outline (FBO shader also renders edge when has_fbo_blur)
                 if !has_fbo_blur {
                     self.stroke_rounded_rect_aa(x, y, w, h, radius, [255, 255, 255, 48]);
-                }
-            }
-        }
-        if w > 2 && h > 2 {
-            // Subtle 1.5% tonal grain noise on interior pixels to prevent flat banding
-            let x0 = (x + 2).clamp(0, self.width);
-            let y0 = (y + 2).clamp(0, self.height);
-            let x1 = (x + w - 2).clamp(0, self.width);
-            let y1 = (y + h - 2).clamp(0, self.height);
-            for py in y0..y1 {
-                for px in x0..x1 {
-                    let hval = ((px as u32).wrapping_mul(374761393)
-                        ^ (py as u32).wrapping_mul(668265263))
-                        .wrapping_mul(1274126177);
-                    let delta = ((hval >> 24) & 3) as i16 - 1;
-                    if delta != 0 {
-                        let idx = ((py * self.width + px) as usize) * 4;
-                        if self.pixels[idx + 3] > 100 {
-                            self.pixels[idx] = (self.pixels[idx] as i16 + delta).clamp(0, 255) as u8;
-                            self.pixels[idx + 1] = (self.pixels[idx + 1] as i16 + delta).clamp(0, 255) as u8;
-                            self.pixels[idx + 2] = (self.pixels[idx + 2] as i16 + delta).clamp(0, 255) as u8;
-                        }
-                    }
                 }
             }
         }
