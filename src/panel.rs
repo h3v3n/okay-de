@@ -227,6 +227,7 @@ pub struct PanelState {
     pub autostart_cmds: Vec<String>,
     pub lock_pin: String,
     pub adshield_enabled: bool,
+    pub pointer_accel_disabled: bool,
     pub adshield_whitelist: Vec<String>,
     pub adshield_blacklist: Vec<String>,
     hit_regions: Vec<(Rectangle<i32, Logical>, ClickTarget)>,
@@ -262,6 +263,7 @@ impl Default for PanelState {
             autostart_cmds: Vec::new(),
             lock_pin: String::new(),
             adshield_enabled: true,
+            pointer_accel_disabled: false,
             adshield_whitelist: Vec::new(),
             adshield_blacklist: Vec::new(),
             hit_regions: Vec::new(),
@@ -405,6 +407,7 @@ impl PanelState {
                     }
                     "minimize_effect" => cfg.minimize_effect = MinimizeEffect::from_str(val),
                     "adshield_enabled" => self.adshield_enabled = val != "false",
+                    "pointer_accel_disabled" => self.pointer_accel_disabled = val == "true",
                     "adshield_whitelist" => {
                         if !val.is_empty() && !self.adshield_whitelist.iter().any(|d| d == val) {
                             self.adshield_whitelist.push(val.to_string());
@@ -508,6 +511,7 @@ impl PanelState {
             xkb_layout,
         );
         body.push_str(&format!("adshield_enabled = {}\n", self.adshield_enabled));
+        body.push_str(&format!("pointer_accel_disabled = {}\n", self.pointer_accel_disabled));
         for d in &self.adshield_whitelist {
             body.push_str(&format!("adshield_whitelist = \"{}\"\n", d));
         }

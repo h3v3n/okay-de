@@ -139,6 +139,7 @@ enum SettingsAction {
     SelectAudioSink(String),
     AdjustPointerSpeed(f64),
     ToggleNaturalScroll,
+    TogglePointerAccel,
     CycleKeyboardLayout,
     CycleDefaultTerminal,
     CycleDefaultBrowser,
@@ -635,6 +636,12 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
             }
             SettingsAction::ToggleNaturalScroll => {
                 state.natural_scroll = !state.natural_scroll;
+                save_all_prefs(state);
+            }
+            SettingsAction::TogglePointerAccel => {
+                state.pointer_accel_disabled = !state.pointer_accel_disabled;
+                state.panel.pointer_accel_disabled = state.pointer_accel_disabled;
+                state.apply_pointer_accel_profile();
                 save_all_prefs(state);
             }
             SettingsAction::CycleKeyboardLayout => {
@@ -1573,6 +1580,28 @@ pub fn render_settings_elements(
                 .settings
                 .hit_regions
                 .push((nat_rect, SettingsAction::ToggleNaturalScroll));
+            cy += 42;
+
+            let accel_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 34).into());
+            let accel_label = if state.pointer_accel_disabled {
+                "Mouse Acceleration:   Disabled (Flat / Raw)"
+            } else {
+                "Mouse Acceleration:   Enabled (Adaptive)"
+            };
+            draw_setting_button(
+                &mut canvas,
+                content_x,
+                cy,
+                506,
+                34,
+                accel_label,
+                state.pointer_accel_disabled,
+                accent,
+            );
+            state
+                .settings
+                .hit_regions
+                .push((accel_rect, SettingsAction::TogglePointerAccel));
             cy += 42;
 
             let kb_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 34).into());

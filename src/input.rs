@@ -698,7 +698,11 @@ fn execute_key_action(state: &mut OkayState, action: KeyAction) {
 }
 
 fn handle_pointer_motion<I: InputBackend>(state: &mut OkayState, event: I::PointerMotionEvent) {
-    let raw_delta = event.delta();
+    let raw_delta = if state.pointer_accel_disabled {
+        event.delta_unaccel()
+    } else {
+        event.delta()
+    };
     let scaled_delta = Point::from((
         raw_delta.x * state.pointer_sensitivity,
         raw_delta.y * state.pointer_sensitivity,
@@ -711,15 +715,13 @@ fn handle_pointer_motion_absolute<I: InputBackend>(
     state: &mut OkayState,
     event: I::PointerMotionAbsoluteEvent,
 ) {
-    let output_size = state
-        .space
-        .outputs()
-        .next()
-        .and_then(|o| state.space.output_geometry(o))
-        .map(|g| g.size)
-        .unwrap_or_else(|| (1280, 720).into());
+    let output_geo = state
+        .output_under_pointer()
+        .or_else(|| state.space.outputs().next().cloned())
+        .and_then(|o| state.space.output_geometry(&o))
+        .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
 
-    let pos = event.position_transformed(output_size);
+    let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
     let clamped = clamp_pointer_to_outputs(state, pos);
     move_pointer_to(state, clamped, Event::time_msec(&event));
 }

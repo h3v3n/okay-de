@@ -320,6 +320,8 @@ pub struct OkayState {
     pub super_pressed: bool,
     pub pointer_sensitivity: f64,
     pub natural_scroll: bool,
+    pub pointer_accel_disabled: bool,
+    pub libinput_devices: Vec<smithay::reexports::input::Device>,
     pub active_clipboard_text: String,
     pub pending_screencopies: Vec<crate::screencopy::PendingScreencopy>,
     pub pending_native_screenshot: Option<(PathBuf, Option<Rectangle<i32, Logical>>)>,
@@ -346,6 +348,17 @@ pub struct OkayState {
 }
 
 impl OkayState {
+    pub fn apply_pointer_accel_profile(&mut self) {
+        let profile = if self.pointer_accel_disabled {
+            smithay::reexports::input::AccelProfile::Flat
+        } else {
+            smithay::reexports::input::AccelProfile::Adaptive
+        };
+        for dev in &mut self.libinput_devices {
+            let _ = dev.config_accel_set_profile(profile);
+        }
+    }
+
     pub fn new(
         display: &Display<Self>,
         loop_signal: LoopSignal,
@@ -422,6 +435,8 @@ impl OkayState {
             super_pressed: false,
             pointer_sensitivity: cfg.pointer_speed,
             natural_scroll: cfg.natural_scroll,
+            pointer_accel_disabled: panel.pointer_accel_disabled,
+            libinput_devices: Vec::new(),
             active_clipboard_text: String::new(),
             pending_screencopies: Vec::new(),
             pending_native_screenshot: None,

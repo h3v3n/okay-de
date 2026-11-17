@@ -410,7 +410,28 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
     let libinput_backend = LibinputInputBackend::new(libinput_context.clone());
     event_loop
         .handle()
-        .insert_source(libinput_backend, |event, _, state| {
+        .insert_source(libinput_backend, |mut event, _, state| {
+            match &mut event {
+                smithay::backend::input::InputEvent::DeviceAdded { device } => {
+                    tracing::info!(name = device.name(), "Libinput device added");
+                    let _ = device.config_send_events_set_mode(
+                        smithay::reexports::input::SendEventsMode::ENABLED,
+                    );
+                    let _ = device.config_tap_set_enabled(true);
+                    let profile = if state.pointer_accel_disabled {
+                        smithay::reexports::input::AccelProfile::Flat
+                    } else {
+                        smithay::reexports::input::AccelProfile::Adaptive
+                    };
+                    let _ = device.config_accel_set_profile(profile);
+                    state.libinput_devices.push(device.clone());
+                }
+                smithay::backend::input::InputEvent::DeviceRemoved { device } => {
+                    tracing::info!(name = device.name(), "Libinput device removed");
+                    state.libinput_devices.retain(|d| d != device);
+                }
+                _ => {}
+            }
             process_input_event(state, event);
         })?;
 
