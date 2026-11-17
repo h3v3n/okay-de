@@ -16,6 +16,7 @@ calloop = { version = "0.14", features = ["executor"] }
 fontdue = "0.9"
 libc = "0.2"
 png = "0.17"
+resvg = "0.45"
 smithay = { version = "0.7.0", default-features = false, features = [
     "backend_drm",
     "backend_gbm",

@@ -25,6 +25,11 @@ pub enum VectorIconKind {
     SystemMonitor,
     Screenshot,
     TextEditor,
+    Calculator,
+    Calendar,
+    Clock,
+    Camera,
+    AudioPlayer,
     Folder,
     GenericApp,
 }
@@ -45,6 +50,16 @@ impl VectorIconKind {
             Self::Settings
         } else if s.contains("monitor") || s.contains("btop") || s.contains("htop") || s.contains("system") {
             Self::SystemMonitor
+        } else if s.contains("calculator") || s.contains("kcalc") || s.contains("qalculate") || s.contains("galculator") {
+            Self::Calculator
+        } else if s.contains("calendar") || s.contains("kalendar") {
+            Self::Calendar
+        } else if s.contains("clock") || s.contains("timer") {
+            Self::Clock
+        } else if s.contains("camera") || s.contains("snapshot") || s.contains("cheese") || s.contains("kamoso") {
+            Self::Camera
+        } else if s.contains("audio") || s.contains("music") || s.contains("decibels") || s.contains("rhythmbox") || s.contains("audacious") || s.contains("spotify") || s.contains("vlc") || s.contains("mpv") {
+            Self::AudioPlayer
         } else if s.contains("screenshot") || s.contains("grim") {
             Self::Screenshot
         } else if s.contains("edit") || s.contains("code") || s.contains("vim") || s.contains("gedit") || s.contains("kate") || s.contains("mousepad") {
@@ -113,51 +128,269 @@ pub fn load_system_icon_sync(icon_name: &str, target_size: i32) {
     }
 }
 
-fn find_icon_path(icon_name: &str) -> Option<PathBuf> {
-    let direct = PathBuf::from(icon_name);
-    if direct.is_absolute() && direct.is_file() {
-        return Some(direct);
-    }
+static ICON_THEME_CHAIN: OnceLock<Vec<String>> = OnceLock::new();
 
-    let mut search_dirs: Vec<PathBuf> = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        let local = PathBuf::from(home).join(".local/share/icons");
-        search_dirs.push(local.join("hicolor/48x48/apps"));
-        search_dirs.push(local.join("hicolor/scalable/apps"));
-    }
-
-    for theme in ["Papirus", "Adwaita", "hicolor"] {
-        for sub in [
-            "48x48/apps",
-            "64x64/apps",
-            "128x128/apps",
-            "256x256/apps",
-            "scalable/apps",
-            "48x48/places",
-            "scalable/places",
-        ] {
-            search_dirs.push(PathBuf::from("/usr/share/icons").join(theme).join(sub));
-        }
-    }
-    search_dirs.push(PathBuf::from("/usr/share/pixmaps"));
-
-    let base_name = Path::new(icon_name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(icon_name);
-
-    for dir in search_dirs {
-        if !dir.is_dir() {
-            continue;
-        }
-        for ext in ["png", "svg"] {
-            let candidate = dir.join(format!("{}.{}", base_name, ext));
-            if candidate.is_file() {
-                return Some(candidate);
+fn read_ini_icon_theme(path: &Path, key: &str) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix(key) {
+            if let Some(val) = rest.trim().strip_prefix('=') {
+                let theme = val.trim().trim_matches('"').trim_matches('\'');
+                if !theme.is_empty() {
+                    return Some(theme.to_string());
+                }
             }
         }
     }
     None
+}
+
+fn read_theme_inherits(theme_name: &str, roots: &[PathBuf]) -> Vec<String> {
+    for root in roots {
+        let idx_path = root.join(theme_name).join("index.theme");
+        if let Ok(text) = fs::read_to_string(idx_path) {
+            for line in text.lines() {
+                if let Some(rest) = line.trim().strip_prefix("Inherits=") {
+                    return rest
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn icon_theme_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        let h = PathBuf::from(home);
+        roots.push(h.join(".local/share/icons"));
+        roots.push(h.join(".icons"));
+        roots.push(h.join(".local/share/flatpak/exports/share/icons"));
+    }
+    roots.push(PathBuf::from("/var/lib/flatpak/exports/share/icons"));
+    roots.push(PathBuf::from("/usr/local/share/icons"));
+    roots.push(PathBuf::from("/usr/share/icons"));
+    roots
+}
+
+fn active_icon_theme_chain() -> &'static Vec<String> {
+    ICON_THEME_CHAIN.get_or_init(|| {
+        let roots = icon_theme_roots();
+        let mut seeds: Vec<String> = Vec::new();
+        for env_key in ["OKAY_ICON_THEME", "GTK_ICON_THEME"] {
+            if let Ok(val) = std::env::var(env_key) {
+                if !val.trim().is_empty() {
+                    seeds.push(val.trim().to_string());
+                }
+            }
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let h = PathBuf::from(home);
+            for (cfg, key) in [
+                (h.join(".config/gtk-4.0/settings.ini"), "gtk-icon-theme-name"),
+                (h.join(".config/gtk-3.0/settings.ini"), "gtk-icon-theme-name"),
+                (h.join(".config/kdeglobals"), "Theme"),
+            ] {
+                if let Some(t) = read_ini_icon_theme(&cfg, key) {
+                    seeds.push(t);
+                }
+            }
+        }
+        for builtin in [
+            "Papirus",
+            "Papirus-Dark",
+            "Adwaita",
+            "breeze",
+            "breeze-dark",
+            "Tela",
+            "Colloid",
+            "WhiteSur",
+            "hicolor",
+        ] {
+            seeds.push(builtin.to_string());
+        }
+
+        let mut chain: Vec<String> = Vec::new();
+        let mut queue = seeds;
+        while let Some(theme) = queue.first().cloned() {
+            queue.remove(0);
+            if chain.iter().any(|t| t == &theme) {
+                continue;
+            }
+            let parents = read_theme_inherits(&theme, &roots);
+            chain.push(theme);
+            for p in parents {
+                if !chain.iter().any(|t| t == &p) {
+                    queue.push(p);
+                }
+            }
+        }
+
+        // Also include any other installed themes under /usr/share/icons or ~/.local/share/icons
+        for root in &roots {
+            if let Ok(entries) = fs::read_dir(root) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_dir() && p.join("index.theme").is_file() {
+                        if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                            if !chain.iter().any(|t| t == name) {
+                                chain.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        chain
+    })
+}
+
+fn strip_known_icon_ext(icon_name: &str) -> &str {
+    for ext in [".png", ".svg", ".xpm", ".ico", ".PNG", ".SVG"] {
+        if let Some(stripped) = icon_name.strip_suffix(ext) {
+            return stripped;
+        }
+    }
+    icon_name
+}
+
+fn find_icon_path(icon_name: &str) -> Option<PathBuf> {
+    let cleaned = icon_name.trim().trim_matches('"');
+    let cleaned = cleaned.strip_prefix("file://").unwrap_or(cleaned);
+    let direct = PathBuf::from(cleaned);
+    if direct.is_absolute() && direct.is_file() {
+        return Some(direct);
+    }
+
+    // Preserve reverse-DNS dots like `org.gnome.Calculator`; only strip real image extensions.
+    let base_name = strip_known_icon_ext(cleaned);
+    let lower_name = base_name.to_lowercase();
+    let roots = icon_theme_roots();
+    let themes = active_icon_theme_chain();
+
+    const SUBDIRS: &[&str] = &[
+        "scalable/apps",
+        "256x256/apps",
+        "128x128/apps",
+        "96x96/apps",
+        "64x64/apps",
+        "48x48/apps",
+        "32x32/apps",
+        "512x512/apps",
+        "apps/scalable",
+        "apps/128",
+        "apps/64",
+        "apps/48",
+        "apps/32",
+        "scalable/categories",
+        "48x48/categories",
+        "64x64/categories",
+        "scalable/places",
+        "48x48/places",
+        "64x64/places",
+        "scalable/devices",
+        "48x48/devices",
+        "64x64/devices",
+        "scalable/mimetypes",
+        "48x48/mimetypes",
+        "64x64/mimetypes",
+        "scalable/status",
+        "48x48/status",
+        "symbolic/apps",
+        "symbolic/categories",
+        "symbolic/devices",
+        "symbolic/places",
+    ];
+
+    for theme in themes {
+        for root in &roots {
+            let theme_dir = root.join(theme);
+            if !theme_dir.is_dir() {
+                continue;
+            }
+            for sub in SUBDIRS {
+                let dir = theme_dir.join(sub);
+                if !dir.is_dir() {
+                    continue;
+                }
+                for candidate_stem in [base_name, lower_name.as_str()] {
+                    for ext in ["png", "svg"] {
+                        let candidate = dir.join(format!("{}.{}", candidate_stem, ext));
+                        if candidate.is_file() {
+                            return Some(candidate);
+                        }
+                    }
+                    let sym = dir.join(format!("{}-symbolic.svg", candidate_stem));
+                    if sym.is_file() {
+                        return Some(sym);
+                    }
+                }
+            }
+        }
+    }
+
+    let pixmaps = Path::new("/usr/share/pixmaps");
+    if pixmaps.is_dir() {
+        for candidate_stem in [base_name, lower_name.as_str()] {
+            for ext in ["png", "svg"] {
+                let candidate = pixmaps.join(format!("{}.{}", candidate_stem, ext));
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn rasterize_svg_resvg(svg_bytes: &[u8], target_size: i32, is_symbolic: bool) -> Option<DecodedIcon> {
+    let opt = resvg::usvg::Options::default();
+    let tree = resvg::usvg::Tree::from_data(svg_bytes, &opt).ok()?;
+    let size = target_size.max(16) as u32;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size)?;
+    let tree_size = tree.size();
+    let sx = size as f32 / tree_size.width().max(1.0);
+    let sy = size as f32 / tree_size.height().max(1.0);
+    let scale = sx.min(sy);
+    let dx = (size as f32 - tree_size.width() * scale) * 0.5;
+    let dy = (size as f32 - tree_size.height() * scale) * 0.5;
+    let transform = resvg::tiny_skia::Transform::from_scale(scale, scale).post_translate(dx, dy);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    let raw = pixmap.data();
+    let mut rgba = Vec::with_capacity(raw.len());
+    for px in raw.chunks_exact(4) {
+        let a = px[3];
+        if a == 0 {
+            rgba.extend_from_slice(&[0, 0, 0, 0]);
+        } else {
+            let (mut r, mut g, mut b) = if a == 255 {
+                (px[0], px[1], px[2])
+            } else {
+                (
+                    ((px[0] as u16 * 255) / a as u16).min(255) as u8,
+                    ((px[1] as u16 * 255) / a as u16).min(255) as u8,
+                    ((px[2] as u16 * 255) / a as u16).min(255) as u8,
+                )
+            };
+            if is_symbolic && r.max(g).max(b) < 95 {
+                r = 238;
+                g = 242;
+                b = 252;
+            }
+            rgba.extend_from_slice(&[r, g, b, a]);
+        }
+    }
+    Some(DecodedIcon {
+        width: size as i32,
+        height: size as i32,
+        rgba,
+    })
 }
 
 fn decode_icon_file(path: &Path, target_size: i32) -> Option<DecodedIcon> {
@@ -166,8 +399,14 @@ fn decode_icon_file(path: &Path, target_size: i32) -> Option<DecodedIcon> {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
+    let is_symbolic = path.to_string_lossy().contains("-symbolic");
 
     let raw_png_bytes = if ext == "svg" {
+        if let Ok(svg_bytes) = fs::read(path) {
+            if let Some(icon) = rasterize_svg_resvg(&svg_bytes, target_size, is_symbolic) {
+                return Some(icon);
+            }
+        }
         let sz_str = target_size.max(32).to_string();
         let out = Command::new("rsvg-convert")
             .args(["-w", &sz_str, "-h", &sz_str])
@@ -335,6 +574,11 @@ pub fn draw_vector_squircle_icon(
         VectorIconKind::SystemMonitor => ([136, 104, 242], [78, 52, 186]),
         VectorIconKind::Screenshot => ([238, 112, 158], [176, 58, 116]),
         VectorIconKind::TextEditor => ([246, 186, 84], [216, 128, 38]),
+        VectorIconKind::Calculator => ([248, 152, 56], [214, 96, 28]),
+        VectorIconKind::Calendar => ([242, 88, 96], [192, 42, 56]),
+        VectorIconKind::Clock => ([54, 62, 82], [28, 32, 46]),
+        VectorIconKind::Camera => ([116, 132, 156], [62, 74, 96]),
+        VectorIconKind::AudioPlayer => ([236, 78, 138], [164, 42, 116]),
         VectorIconKind::GenericApp => ([96, 148, 246], [54, 92, 202]),
     };
 
@@ -436,6 +680,61 @@ pub fn draw_vector_squircle_icon(
             canvas.fill_rounded_rect_aa((cx - bw as f32 * 0.5).round() as i32, cy.round() as i32, bw, bh, (2.5 * sc) as i32, [248, 252, 255, 245]);
             canvas.fill_rounded_rect_aa((cx - 2.5 * sc).round() as i32, (cy + 4.0 * sc).round() as i32, (5.0 * sc).round().max(2.0) as i32, (8.0 * sc).round().max(3.0) as i32, 1, [36, 118, 224, 255]);
         }
+        VectorIconKind::Calculator => {
+            let cw = (24.0 * sc).round() as i32;
+            let ch = (28.0 * sc).round() as i32;
+            let bx = (cx - cw as f32 * 0.5).round() as i32;
+            let by = (cy - ch as f32 * 0.5).round() as i32;
+            canvas.fill_rounded_rect_aa(bx, by, cw, ch, (4.0 * sc) as i32, [28, 32, 44, 235]);
+            canvas.fill_rounded_rect_aa(bx + 3, by + 3, cw - 6, (7.0 * sc).round().max(3.0) as i32, 2, [146, 226, 180, 235]);
+            for r in 0..2 {
+                for c in 0..3 {
+                    let gx = bx + 4 + c * (6.5 * sc).round().max(3.0) as i32;
+                    let gy = by + (13.0 * sc).round() as i32 + r * (6.0 * sc).round().max(3.0) as i32;
+                    let col = if c == 2 { [248, 158, 62, 255] } else { [224, 230, 244, 235] };
+                    canvas.fill_circle_aa(gx as f32 + 2.0 * sc, gy as f32 + 2.0 * sc, 2.0 * sc, col);
+                }
+            }
+        }
+        VectorIconKind::Calendar => {
+            let cw = (26.0 * sc).round() as i32;
+            let ch = (26.0 * sc).round() as i32;
+            let bx = (cx - cw as f32 * 0.5).round() as i32;
+            let by = (cy - ch as f32 * 0.5).round() as i32;
+            canvas.fill_rounded_rect_aa(bx, by, cw, ch, (4.5 * sc) as i32, [248, 250, 255, 248]);
+            canvas.fill_rounded_rect_aa(bx, by, cw, (8.0 * sc).round().max(4.0) as i32, (4.0 * sc) as i32, [218, 52, 66, 255]);
+            for r in 0..2 {
+                for c in 0..3 {
+                    canvas.fill_circle_aa(
+                        bx as f32 + (6.5 + c as f32 * 6.5) * sc,
+                        by as f32 + (14.5 + r as f32 * 6.0) * sc,
+                        1.7 * sc,
+                        [64, 72, 92, 220],
+                    );
+                }
+            }
+        }
+        VectorIconKind::Clock => {
+            canvas.fill_circle_aa(cx, cy, 13.5 * sc, [246, 248, 255, 248]);
+            canvas.fill_circle_aa(cx, cy, 11.0 * sc, [34, 40, 56, 255]);
+            draw_thick_line(canvas, cx, cy, cx, cy - 7.5 * sc, 1.6 * sc, [248, 250, 255, 255]);
+            draw_thick_line(canvas, cx, cy, cx + 5.5 * sc, cy + 2.5 * sc, 1.5 * sc, [255, 116, 92, 255]);
+            canvas.fill_circle_aa(cx, cy, 1.8 * sc, [255, 255, 255, 255]);
+        }
+        VectorIconKind::Camera => {
+            let cw = (26.0 * sc).round() as i32;
+            let ch = (19.0 * sc).round() as i32;
+            canvas.fill_rounded_rect_aa((cx - cw as f32 * 0.5).round() as i32, (cy - ch as f32 * 0.45).round() as i32, cw, ch, (4.5 * sc) as i32, [244, 248, 255, 245]);
+            canvas.fill_circle_aa(cx, cy + 1.0 * sc, 6.2 * sc, [42, 52, 72, 255]);
+            canvas.fill_circle_aa(cx, cy + 1.0 * sc, 3.2 * sc, [96, 178, 255, 255]);
+        }
+        VectorIconKind::AudioPlayer => {
+            canvas.fill_circle_aa(cx - 4.5 * sc, cy + 6.5 * sc, 4.0 * sc, [248, 250, 255, 250]);
+            canvas.fill_circle_aa(cx + 6.5 * sc, cy + 4.0 * sc, 4.0 * sc, [248, 250, 255, 250]);
+            draw_thick_line(canvas, cx - 1.5 * sc, cy + 6.0 * sc, cx - 1.5 * sc, cy - 8.5 * sc, 1.6 * sc, [248, 250, 255, 250]);
+            draw_thick_line(canvas, cx + 9.5 * sc, cy + 3.5 * sc, cx + 9.5 * sc, cy - 10.5 * sc, 1.6 * sc, [248, 250, 255, 250]);
+            draw_thick_line(canvas, cx - 1.5 * sc, cy - 8.5 * sc, cx + 9.5 * sc, cy - 10.5 * sc, 2.0 * sc, [248, 250, 255, 250]);
+        }
         VectorIconKind::GenericApp => {
             // Layered mini app window card
             let ww = (26.0 * sc).round() as i32;
@@ -457,4 +756,87 @@ fn draw_thick_line(canvas: &mut Canvas, x0: f32, y0: f32, x1: f32, y1: f32, radi
         let t = i as f32 / steps as f32;
         canvas.fill_circle_aa(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, radius.max(0.9), color);
     }
+}
+
+fn draw_arc_aa(canvas: &mut Canvas, cx: f32, cy: f32, radius: f32, start_deg: f32, end_deg: f32, thickness: f32, color: [u8; 4]) {
+    let steps = ((end_deg - start_deg).abs() * 0.45).ceil().max(6.0) as i32;
+    for i in 0..=steps {
+        let deg = start_deg + (end_deg - start_deg) * (i as f32 / steps as f32);
+        let rad = deg.to_radians();
+        canvas.fill_circle_aa(cx + rad.cos() * radius, cy + rad.sin() * radius, thickness, color);
+    }
+}
+
+/// Crisp vector Wi-Fi signal fan centered horizontally at `cx`, base dot at `cy`.
+pub fn draw_wifi_glyph(canvas: &mut Canvas, cx: f32, cy: f32, scale: f32, color: [u8; 4]) {
+    canvas.fill_circle_aa(cx, cy, 1.5 * scale, color);
+    draw_arc_aa(canvas, cx, cy, 4.2 * scale, -135.0, -45.0, 0.95 * scale, color);
+    draw_arc_aa(canvas, cx, cy, 7.6 * scale, -135.0, -45.0, 0.95 * scale, color);
+    draw_arc_aa(canvas, cx, cy, 11.0 * scale, -135.0, -45.0, 0.95 * scale, color);
+}
+
+/// Crisp vector Bluetooth rune centered at `(cx, cy)`.
+pub fn draw_bluetooth_glyph(canvas: &mut Canvas, cx: f32, cy: f32, scale: f32, color: [u8; 4]) {
+    let r = 0.9 * scale;
+    draw_thick_line(canvas, cx, cy - 6.5 * scale, cx, cy + 6.5 * scale, r, color);
+    draw_thick_line(canvas, cx, cy - 6.5 * scale, cx + 4.2 * scale, cy - 3.0 * scale, r, color);
+    draw_thick_line(canvas, cx + 4.2 * scale, cy - 3.0 * scale, cx - 3.8 * scale, cy + 3.2 * scale, r, color);
+    draw_thick_line(canvas, cx, cy + 6.5 * scale, cx + 4.2 * scale, cy + 3.0 * scale, r, color);
+    draw_thick_line(canvas, cx + 4.2 * scale, cy + 3.0 * scale, cx - 3.8 * scale, cy - 3.2 * scale, r, color);
+}
+
+/// Crisp vector Master-Stack tiling layout glyph centered at `(cx, cy)`.
+pub fn draw_tiling_glyph(canvas: &mut Canvas, cx: f32, cy: f32, scale: f32, color: [u8; 4]) {
+    let left_x = (cx - 6.0 * scale).round() as i32;
+    let top_y = (cy - 5.5 * scale).round() as i32;
+    let mw = (5.0 * scale).round().max(3.0) as i32;
+    let mh = (11.0 * scale).round().max(6.0) as i32;
+    let rw = (5.5 * scale).round().max(3.0) as i32;
+    let rh = (4.5 * scale).round().max(2.0) as i32;
+    let rx = (cx + 1.0 * scale).round() as i32;
+    canvas.fill_rounded_rect_aa(left_x, top_y, mw, mh, 1, color);
+    canvas.fill_rounded_rect_aa(rx, top_y, rw, rh, 1, color);
+    canvas.fill_rounded_rect_aa(rx, top_y + mh - rh, rw, rh, 1, color);
+}
+
+/// Crisp vector Notification Bell centered at `(cx, cy)`.
+pub fn draw_bell_glyph(canvas: &mut Canvas, cx: f32, cy: f32, scale: f32, color: [u8; 4]) {
+    canvas.fill_circle_aa(cx, cy - 1.5 * scale, 4.0 * scale, color);
+    let bw = (9.5 * scale).round().max(5.0) as i32;
+    let bh = (4.5 * scale).round().max(3.0) as i32;
+    canvas.fill_rounded_rect_aa((cx - bw as f32 * 0.5).round() as i32, (cy - 1.0 * scale).round() as i32, bw, bh, 2, color);
+    let base_w = (12.0 * scale).round().max(7.0) as i32;
+    canvas.fill_rounded_rect_aa((cx - base_w as f32 * 0.5).round() as i32, (cy + 2.5 * scale).round() as i32, base_w, (2.2 * scale).round().max(2.0) as i32, 1, color);
+    canvas.fill_circle_aa(cx, cy + 5.2 * scale, 1.5 * scale, color);
+}
+
+/// Crisp vector Speaker icon with sound waves (or mute cross) centered vertically at `cy`.
+pub fn draw_speaker_glyph(canvas: &mut Canvas, left_x: f32, cy: f32, muted: bool, scale: f32, color: [u8; 4]) {
+    let bx = left_x.round() as i32;
+    let by = (cy - 2.5 * scale).round() as i32;
+    canvas.fill_rounded_rect_aa(bx, by, (3.8 * scale).round().max(2.0) as i32, (5.0 * scale).round().max(3.0) as i32, 1, color);
+    draw_thick_line(canvas, left_x + 3.0 * scale, cy - 2.0 * scale, left_x + 6.5 * scale, cy - 4.8 * scale, 1.0 * scale, color);
+    draw_thick_line(canvas, left_x + 6.5 * scale, cy - 4.8 * scale, left_x + 6.5 * scale, cy + 4.8 * scale, 1.0 * scale, color);
+    draw_thick_line(canvas, left_x + 3.0 * scale, cy + 2.0 * scale, left_x + 6.5 * scale, cy + 4.8 * scale, 1.0 * scale, color);
+    if muted {
+        let mut xcol = color;
+        xcol[0] = 255; xcol[1] = 108; xcol[2] = 104;
+        draw_thick_line(canvas, left_x + 9.0 * scale, cy - 2.8 * scale, left_x + 13.5 * scale, cy + 2.8 * scale, 0.9 * scale, xcol);
+        draw_thick_line(canvas, left_x + 13.5 * scale, cy - 2.8 * scale, left_x + 9.0 * scale, cy + 2.8 * scale, 0.9 * scale, xcol);
+    } else {
+        draw_arc_aa(canvas, left_x + 6.0 * scale, cy, 4.0 * scale, -48.0, 48.0, 0.85 * scale, color);
+        draw_arc_aa(canvas, left_x + 6.0 * scale, cy, 6.8 * scale, -52.0, 52.0, 0.85 * scale, color);
+    }
+}
+
+/// Crisp vector Battery icon with fill level at `(x, cy)`.
+pub fn draw_battery_glyph(canvas: &mut Canvas, x: i32, cy: i32, percent: i32, color: [u8; 4]) {
+    let bw = 15;
+    let bh = 9;
+    let by = cy - bh / 2;
+    canvas.fill_rounded_rect_aa(x, by, bw, bh, 2, [color[0], color[1], color[2], 70]);
+    canvas.fill_rounded_rect_aa(x + bw, by + 2, 2, 5, 1, [color[0], color[1], color[2], 180]);
+    let fill_w = ((bw - 4) * percent.clamp(0, 100) / 100).max(2);
+    let fill_col = if percent <= 20 { [255, 102, 96, 255] } else { [92, 224, 146, 255] };
+    canvas.fill_rounded_rect_aa(x + 2, by + 2, fill_w, bh - 4, 1, fill_col);
 }

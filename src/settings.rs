@@ -63,7 +63,7 @@ impl SettingsTab {
             Self::Displays => "2. Displays (Ekrany)",
             Self::Network => "3. Wi-Fi & Network",
             Self::Bluetooth => "4. Bluetooth",
-            Self::Sound => "5. Sound (Dzwiek)",
+            Self::Sound => "5. Sound",
             Self::MouseKeyboard => "6. Mouse & Keyboard",
             Self::DefaultApps => "7. Default Apps",
             Self::SystemInfo => "8. System Info",
@@ -671,7 +671,7 @@ pub fn render_settings_elements(
             canvas.draw_text_px(
                 content_x,
                 cy,
-                "Appearance, Dock & Animations (Wyglad i animacje)",
+                "Appearance, Dock & Animations",
                 15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
@@ -879,7 +879,7 @@ pub fn render_settings_elements(
             canvas.draw_text_px(
                 content_x,
                 cy,
-                "Wi-Fi & Network Connections (Siec bezprzewodowa)",
+                "Wi-Fi & Network Connections",
                 15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
@@ -1042,7 +1042,7 @@ pub fn render_settings_elements(
             canvas.draw_text_px(
                 content_x,
                 cy,
-                "Sound, Master Output & Microphone (Dzwiek)",
+                "Sound, Master Output & Microphone",
                 15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
@@ -1142,7 +1142,7 @@ pub fn render_settings_elements(
             canvas.draw_text_px(
                 content_x,
                 cy,
-                "Mouse, Touchpad & Keyboard (Mysz i klawiatura)",
+                "Mouse, Touchpad & Keyboard",
                 15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
@@ -1198,9 +1198,9 @@ pub fn render_settings_elements(
 
             let nat_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 34).into());
             let nat_label = if state.natural_scroll {
-                "Natural Scrolling (Przewijanie naturalne):   Enabled"
+                "Natural Scrolling:   Enabled"
             } else {
-                "Natural Scrolling (Przewijanie naturalne):   Disabled"
+                "Natural Scrolling:   Disabled"
             };
             draw_setting_button(
                 &mut canvas,
@@ -1249,7 +1249,7 @@ pub fn render_settings_elements(
             canvas.draw_text_px(
                 content_x,
                 cy,
-                "Startup & Default Applications (Domyslne aplikacje)",
+                "Startup & Default Applications",
                 15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
@@ -1327,11 +1327,11 @@ pub fn render_settings_elements(
             canvas.draw_text_px(
                 content_x,
                 cy,
-                "System Information (Informacje o systemie)",
+                "System Information",
                 15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
-            cy += 28;
+            cy += 26;
 
             let outputs_summary: String = state
                 .space
@@ -1356,23 +1356,26 @@ pub fn render_settings_elements(
             ];
 
             for (label, val) in rows {
-                canvas.fill_rounded_rect_aa(content_x, cy, 506, 32, 5, [28, 28, 42, 240]);
+                let lines = wrap_text_two_lines(&canvas, val, 12.0, 336);
+                let row_h = if lines.len() > 1 { 42 } else { 31 };
+                canvas.fill_rounded_rect_aa(content_x, cy, 506, row_h, 6, [28, 28, 42, 240]);
                 canvas.draw_text_px(
                     content_x + 12,
                     cy + 8,
                     label,
-                    12.5,
+                    12.0,
                     [160, 165, 190, 255],
                 );
-                let trimmed: String = val.chars().take(42).collect();
-                canvas.draw_text_px(
-                    content_x + 165,
-                    cy + 8,
-                    &trimmed,
-                    12.5,
-                    [238, 240, 252, 255],
-                );
-                cy += 37;
+                for (li, line_txt) in lines.iter().enumerate() {
+                    canvas.draw_text_px(
+                        content_x + 158,
+                        cy + 7 + li as i32 * 16,
+                        line_txt,
+                        12.0,
+                        [238, 240, 252, 255],
+                    );
+                }
+                cy += row_h + 4;
             }
         }
 
@@ -1380,7 +1383,7 @@ pub fn render_settings_elements(
             canvas.draw_text_px(
                 content_x,
                 cy,
-                "Keyboard & Mouse Shortcuts (Skroty klawiszowe)",
+                "Keyboard & Mouse Shortcuts",
                 15.0,
                 [accent[0], accent[1], accent[2], 255],
             );
@@ -1473,6 +1476,55 @@ pub fn render_settings_elements(
         Ok(elem) => vec![OkayRenderElements::Memory(elem)],
         Err(_) => Vec::new(),
     }
+}
+
+fn truncate_with_ellipsis(canvas: &Canvas, text: &str, px_size: f32, max_w: i32) -> String {
+    if canvas.measure_text_px(text, px_size) <= max_w {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    for ch in text.chars() {
+        let mut next = out.clone();
+        next.push(ch);
+        next.push_str("...");
+        if canvas.measure_text_px(&next, px_size) > max_w {
+            break;
+        }
+        out.push(ch);
+    }
+    out.push_str("...");
+    out
+}
+
+fn wrap_text_two_lines(canvas: &Canvas, text: &str, px_size: f32, max_w: i32) -> Vec<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return vec![String::new()];
+    }
+    if canvas.measure_text_px(trimmed, px_size) <= max_w {
+        return vec![trimmed.to_string()];
+    }
+
+    let mut line1 = String::new();
+    let mut rest_start = 0;
+    for (idx, word) in trimmed.split_inclusive(' ').enumerate() {
+        let cand = format!("{}{}", line1, word);
+        if idx > 0 && canvas.measure_text_px(cand.trim_end(), px_size) > max_w {
+            break;
+        }
+        line1.push_str(word);
+        rest_start += word.len();
+    }
+
+    let l1 = line1.trim_end();
+    let l2 = trimmed[rest_start..].trim_start();
+    if l1.is_empty() || l2.is_empty() {
+        return vec![truncate_with_ellipsis(canvas, trimmed, px_size, max_w)];
+    }
+    vec![
+        l1.to_string(),
+        truncate_with_ellipsis(canvas, l2, px_size, max_w),
+    ]
 }
 
 fn draw_setting_button(

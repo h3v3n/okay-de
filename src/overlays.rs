@@ -2186,7 +2186,11 @@ pub fn render_top_overlays(
             let pill_col = if active { [accent[0], accent[1], accent[2], 240] } else { [255, 255, 255, 30] };
             let pill_fg = if active { contrast_fg(accent) } else { [220, 224, 240, 255] };
             canvas.fill_circle_aa(34.0, (ry + 16) as f32, 12.0, pill_col);
-            canvas.draw_text_px(27, ry + 9, &lbl[..2], 11.0, pill_fg);
+            match i {
+                0 => crate::icons::draw_wifi_glyph(&mut canvas, 34.0, (ry + 21) as f32, 0.9, pill_fg),
+                1 => crate::icons::draw_bluetooth_glyph(&mut canvas, 34.0, (ry + 16) as f32, 0.95, pill_fg),
+                _ => crate::icons::draw_tiling_glyph(&mut canvas, 34.0, (ry + 16) as f32, 0.95, pill_fg),
+            }
             canvas.draw_text_px(54, ry + 3, lbl, 12.5, [244, 246, 255, 255]);
             canvas.draw_text_px(54, ry + 18, sub, 10.5, [158, 166, 192, 230]);
             state.overlays.hit_regions.push((row_rect, act));

@@ -462,9 +462,15 @@ fn config_file_path() -> Option<PathBuf> {
 
 /// Scans `/usr/share/applications` and `~/.local/share/applications` for `.desktop` files.
 pub fn scan_desktop_applications() -> Vec<DesktopAppEntry> {
-    let mut dirs = vec![PathBuf::from("/usr/share/applications")];
+    let mut dirs = vec![
+        PathBuf::from("/usr/local/share/applications"),
+        PathBuf::from("/usr/share/applications"),
+        PathBuf::from("/var/lib/flatpak/exports/share/applications"),
+    ];
     if let Ok(home) = std::env::var("HOME") {
-        dirs.insert(0, PathBuf::from(home).join(".local/share/applications"));
+        let h = PathBuf::from(home);
+        dirs.insert(0, h.join(".local/share/flatpak/exports/share/applications"));
+        dirs.insert(0, h.join(".local/share/applications"));
     }
 
     let mut apps = Vec::new();
@@ -480,23 +486,45 @@ pub fn scan_desktop_applications() -> Vec<DesktopAppEntry> {
             let Ok(text) = fs::read_to_string(&path) else {
                 continue;
             };
+            let mut in_main_section = false;
             let mut name = None;
             let mut exec = None;
             let mut icon_name = None;
             let mut categories = String::new();
             let mut no_display = false;
+            let mut non_app_type = false;
 
             for line in text.lines() {
                 let line = line.trim();
-                if line.starts_with('[') && line != "[Desktop Entry]" {
-                    break;
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if line.starts_with('[') {
+                    if line == "[Desktop Entry]" {
+                        in_main_section = true;
+                        continue;
+                    } else if in_main_section {
+                        break;
+                    } else {
+                        continue;
+                    }
+                }
+                if !in_main_section {
+                    continue;
                 }
                 if line == "NoDisplay=true" || line == "Hidden=true" {
                     no_display = true;
+                } else if let Some(t) = line.strip_prefix("Type=") {
+                    if t.trim() != "Application" {
+                        non_app_type = true;
+                    }
                 } else if name.is_none() && line.starts_with("Name=") {
                     name = line.strip_prefix("Name=").map(|s| s.trim().to_string());
                 } else if icon_name.is_none() && line.starts_with("Icon=") {
-                    icon_name = line.strip_prefix("Icon=").map(|s| s.trim().to_string());
+                    icon_name = line
+                        .strip_prefix("Icon=")
+                        .map(|s| s.trim().trim_matches('"').to_string())
+                        .filter(|s| !s.is_empty());
                 } else if exec.is_none() && line.starts_with("Exec=") {
                     if let Some(raw_exec) = line.strip_prefix("Exec=") {
                         // Strip `%u`, `%F`, etc. field codes
@@ -513,7 +541,7 @@ pub fn scan_desktop_applications() -> Vec<DesktopAppEntry> {
                 }
             }
 
-            if no_display {
+            if no_display || non_app_type {
                 continue;
             }
             if let (Some(n), Some(e)) = (name, exec) {
@@ -1115,7 +1143,7 @@ pub fn render_panel_elements(
             .hit_regions
             .push((clock_global, ClickTarget::ToggleCalendar));
 
-        // Notification Bell (`N` + unread accent badge)
+        // Notification Bell (vector glyph + unread accent badge)
         let notif_w = 28;
         let notif_x = clock_x - notif_w - 6;
         let notif_global = Rectangle::new(
@@ -1130,7 +1158,13 @@ pub fn render_panel_elements(
             [255, 255, 255, 16]
         };
         mb.fill_rounded_rect_aa(notif_x, 4, notif_w, mb_h - 8, 6, notif_bg);
-        mb.draw_text_px(notif_x + 9, 7, "N", 12.0, [232, 236, 248, 250]);
+        crate::icons::draw_bell_glyph(
+            &mut mb,
+            (notif_x + notif_w / 2) as f32,
+            (mb_h / 2) as f32,
+            0.95,
+            [234, 238, 250, 250],
+        );
         if !state.overlays.notifications.is_empty() || !state.overlays.history.is_empty() {
             mb.fill_circle_aa(
                 (notif_x + notif_w - 6) as f32,
@@ -1144,7 +1178,7 @@ pub fn render_panel_elements(
             .hit_regions
             .push((notif_global, ClickTarget::ToggleNotifDrawer));
 
-        // Control Center Icon (`CC`)
+        // Control Center Icon (vector toggle switches with knobs)
         let cc_w = 30;
         let cc_x = notif_x - cc_w - 6;
         let cc_global = Rectangle::new(
@@ -1159,23 +1193,28 @@ pub fn render_panel_elements(
             [255, 255, 255, 16]
         };
         mb.fill_rounded_rect_aa(cc_x, 4, cc_w, mb_h - 8, 6, cc_bg);
-        // Two mini pill-switch glyphs representing macOS Control Center
-        mb.fill_rounded_rect_aa(cc_x + 7, 9, 16, 4, 2, [238, 242, 252, 240]);
-        mb.fill_rounded_rect_aa(cc_x + 7, 15, 16, 4, 2, [190, 198, 224, 220]);
+        mb.fill_rounded_rect_aa(cc_x + 7, 9, 16, 4, 2, [226, 232, 248, 220]);
+        mb.fill_circle_aa((cc_x + 19) as f32, 11.0, 2.5, [252, 253, 255, 255]);
+        mb.fill_rounded_rect_aa(cc_x + 7, 16, 16, 4, 2, [178, 188, 218, 200]);
+        mb.fill_circle_aa((cc_x + 11) as f32, 18.0, 2.5, [252, 253, 255, 255]);
         state
             .panel
             .hit_regions
             .push((cc_global, ClickTarget::ToggleControlCenter));
 
-        // Volume / Battery status pill
-        let vol_lbl = if state.panel.volume_muted {
+        // Volume / Battery status pill with vector speaker + battery icons
+        let vol_txt = if state.panel.volume_muted {
             "Mute".to_string()
-        } else if let Some(bat) = state.panel.battery_percent {
-            format!("{}%  B{}", state.panel.volume_percent, bat)
         } else {
-            format!("Vol {}%", state.panel.volume_percent)
+            format!("{}%", state.panel.volume_percent)
         };
-        let vol_w = mb.measure_text_px(&vol_lbl, 11.5) + 16;
+        let vol_txt_w = mb.measure_text_px(&vol_txt, 11.5);
+        let bat_txt = state.panel.battery_percent.map(|b| format!("{}%", b));
+        let bat_extra_w = bat_txt
+            .as_ref()
+            .map(|t| 24 + mb.measure_text_px(t, 11.5))
+            .unwrap_or(0);
+        let vol_w = 24 + vol_txt_w + bat_extra_w + 10;
         let vol_x = cc_x - vol_w - 6;
         let vol_global = Rectangle::new(
             (output_geo.loc.x + vol_x, output_geo.loc.y + 3).into(),
@@ -1187,13 +1226,27 @@ pub fn render_panel_elements(
             [255, 255, 255, 16]
         };
         mb.fill_rounded_rect_aa(vol_x, 4, vol_w, mb_h - 8, 6, vol_bg);
-        mb.draw_text_px(vol_x + 8, 7, &vol_lbl, 11.5, [224, 228, 244, 248]);
+        crate::icons::draw_speaker_glyph(
+            &mut mb,
+            (vol_x + 7) as f32,
+            (mb_h / 2) as f32,
+            state.panel.volume_muted,
+            0.9,
+            [232, 236, 250, 250],
+        );
+        mb.draw_text_px(vol_x + 25, 7, &vol_txt, 11.5, [228, 232, 248, 248]);
+        if let (Some(bat_pct), Some(b_str)) = (state.panel.battery_percent, bat_txt) {
+            let bx = vol_x + 25 + vol_txt_w + 8;
+            crate::icons::draw_battery_glyph(&mut mb, bx, mb_h / 2, bat_pct, [232, 236, 250, 240]);
+            mb.draw_text_px(bx + 20, 7, &b_str, 11.5, [228, 232, 248, 248]);
+        }
         state
             .panel
             .hit_regions
             .push((vol_global, ClickTarget::ToggleMute));
 
-        let wifi_w = 40;
+        // Wi-Fi vector icon pill
+        let wifi_w = 30;
         let wifi_x = vol_x - wifi_w - 6;
         let wifi_global = Rectangle::new(
             (output_geo.loc.x + wifi_x, output_geo.loc.y + 3).into(),
@@ -1205,7 +1258,13 @@ pub fn render_panel_elements(
             [255, 255, 255, 16]
         };
         mb.fill_rounded_rect_aa(wifi_x, 4, wifi_w, mb_h - 8, 6, wifi_bg);
-        mb.draw_text_px(wifi_x + 8, 7, "WiFi", 11.5, [224, 228, 244, 248]);
+        crate::icons::draw_wifi_glyph(
+            &mut mb,
+            (wifi_x + wifi_w / 2) as f32,
+            (mb_h / 2 + 5) as f32,
+            0.9,
+            [232, 236, 250, 250],
+        );
         state
             .panel
             .hit_regions
@@ -2065,11 +2124,12 @@ pub fn render_panel_elements(
             Some((menu_w, menu_h).into()),
             Kind::Unspecified,
         ) {
-            elements.push(OkayRenderElements::Memory(elem));
+            // Front-to-back rendering order: insert at index 0 so dropdowns render above Top Bar & Dock.
+            elements.insert(0, OkayRenderElements::Memory(elem));
         }
     }
 
-    // 7. Render Pin / Unpin Context Menu for Dock & Launcher Apps
+    // 7. Render Pin / Unpin Context Menu for Dock & Launcher Apps (ALWAYS topmost above Launcher & Dock)
     if let Some((pos, ref pin_action)) = state.panel.pin_context_menu.clone() {
         if is_primary {
             let cw = 168;
@@ -2128,7 +2188,7 @@ pub fn render_panel_elements(
                 Some((cw, ch).into()),
                 Kind::Unspecified,
             ) {
-                elements.push(OkayRenderElements::Memory(elem));
+                elements.insert(0, OkayRenderElements::Memory(elem));
             }
         }
     }
