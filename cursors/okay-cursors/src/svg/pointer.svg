@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+
+  <defs>
+    <linearGradient id="darkGlass" x1="0%" y1="0%" x2="85%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B"/>
+      <stop offset="55%" stop-color="#131C2E"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="glassSheen" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.28)"/>
+      <stop offset="55%" stop-color="rgba(255,255,255,0.06)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0.0)"/>
+    </linearGradient>
+    <linearGradient id="anodizedRim" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.48)"/>
+      <stop offset="45%" stop-color="rgba(255,255,255,0.25)"/>
+      <stop offset="100%" stop-color="rgba(148,163,184,0.28)"/>
+    </linearGradient>
+    <linearGradient id="emeraldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+    <radialGradient id="emeraldGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="rgba(16,185,129,0.55)"/>
+      <stop offset="65%" stop-color="rgba(16,185,129,0.14)"/>
+      <stop offset="100%" stop-color="rgba(16,185,129,0)"/>
+    </radialGradient>
+    <linearGradient id="dangerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FB7185"/>
+      <stop offset="100%" stop-color="#E11D48"/>
+    </linearGradient>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="0.85"/>
+      <feOffset dx="0.45" dy="0.95" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.58"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <g filter="url(#softShadow)">
+    <path d="M 9.0 2.0 C 9.95 2.0 10.55 2.75 10.55 3.7 L 10.55 9.0 C 11.0 8.55 12.2 8.45 12.75 9.1 C 13.35 8.75 14.5 8.85 15.0 9.55 C 15.65 9.3 16.65 9.65 16.85 10.65 L 16.85 14.8 C 16.85 17.35 15.15 19.3 12.6 19.55 L 9.2 19.55 C 7.55 19.55 6.45 18.45 5.65 16.8 L 4.1 13.55 C 3.65 12.65 4.2 11.7 5.05 11.6 C 5.75 11.52 6.4 11.98 6.85 12.75 L 7.45 13.7 L 7.45 3.7 C 7.45 2.75 8.05 2.0 9.0 2.0 Z" fill="url(#darkGlass)" stroke="rgba(255,255,255,0.28)" stroke-width="0.95" stroke-linejoin="round"/>
+    <path d="M 9.0 2.0 C 9.95 2.0 10.55 2.75 10.55 3.7 L 10.55 9.0 C 11.0 8.55 12.2 8.45 12.75 9.1 C 13.35 8.75 14.5 8.85 15.0 9.55 C 15.65 9.3 16.65 9.65 16.85 10.65 L 16.85 14.8 C 16.85 17.35 15.15 19.3 12.6 19.55 L 9.2 19.55 C 7.55 19.55 6.45 18.45 5.65 16.8 L 4.1 13.55 C 3.65 12.65 4.2 11.7 5.05 11.6 C 5.75 11.52 6.4 11.98 6.85 12.75 L 7.45 13.7 L 7.45 3.7 C 7.45 2.75 8.05 2.0 9.0 2.0 Z" fill="url(#glassSheen)" stroke="url(#anodizedRim)" stroke-width="0.5" stroke-linejoin="round"/>
+    <line x1="10.6" y1="10.0" x2="10.6" y2="12.5" stroke="rgba(255,255,255,0.18)" stroke-width="0.65" stroke-linecap="round"/>
+    <line x1="12.8" y1="10.2" x2="12.8" y2="12.6" stroke="rgba(255,255,255,0.18)" stroke-width="0.65" stroke-linecap="round"/>
+    <line x1="14.9" y1="10.6" x2="14.9" y2="12.9" stroke="rgba(255,255,255,0.16)" stroke-width="0.65" stroke-linecap="round"/>
+    <rect x="8.6" y="17.3" width="5.4" height="1.35" rx="0.65" fill="url(#emeraldGrad)"/>
+    <circle cx="9.0" cy="3.1" r="1.9" fill="url(#emeraldGlow)"/>
+    <circle cx="9.0" cy="3.1" r="0.6" fill="#34D399"/>
+  </g>
+</svg>

@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+
+  <defs>
+    <linearGradient id="darkGlass" x1="0%" y1="0%" x2="85%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B"/>
+      <stop offset="55%" stop-color="#131C2E"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="glassSheen" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.28)"/>
+      <stop offset="55%" stop-color="rgba(255,255,255,0.06)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0.0)"/>
+    </linearGradient>
+    <linearGradient id="anodizedRim" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.48)"/>
+      <stop offset="45%" stop-color="rgba(255,255,255,0.25)"/>
+      <stop offset="100%" stop-color="rgba(148,163,184,0.28)"/>
+    </linearGradient>
+    <linearGradient id="emeraldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+    <radialGradient id="emeraldGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="rgba(16,185,129,0.55)"/>
+      <stop offset="65%" stop-color="rgba(16,185,129,0.14)"/>
+      <stop offset="100%" stop-color="rgba(16,185,129,0)"/>
+    </radialGradient>
+    <linearGradient id="dangerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FB7185"/>
+      <stop offset="100%" stop-color="#E11D48"/>
+    </linearGradient>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="0.85"/>
+      <feOffset dx="0.45" dy="0.95" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.58"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <g filter="url(#softShadow)">
+    <path d="M 12 2.2 L 14.9 5.5 L 13.15 5.5 L 13.15 10.85 L 18.5 10.85 L 18.5 9.1 L 21.8 12 L 18.5 14.9 L 18.5 13.15 L 13.15 13.15 L 13.15 18.5 L 14.9 18.5 L 12 21.8 L 9.1 18.5 L 10.85 18.5 L 10.85 13.15 L 5.5 13.15 L 5.5 14.9 L 2.2 12 L 5.5 9.1 L 5.5 10.85 L 10.85 10.85 L 10.85 5.5 L 9.1 5.5 Z" fill="url(#darkGlass)" stroke="rgba(255,255,255,0.3)" stroke-width="0.9" stroke-linejoin="round"/>
+    <path d="M 12 2.2 L 14.9 5.5 L 13.15 5.5 L 13.15 10.85 L 18.5 10.85 L 18.5 9.1 L 21.8 12 L 18.5 14.9 L 18.5 13.15 L 13.15 13.15 L 13.15 18.5 L 14.9 18.5 L 12 21.8 L 9.1 18.5 L 10.85 18.5 L 10.85 13.15 L 5.5 13.15 L 5.5 14.9 L 2.2 12 L 5.5 9.1 L 5.5 10.85 L 10.85 10.85 L 10.85 5.5 L 9.1 5.5 Z" fill="url(#glassSheen)" stroke="url(#anodizedRim)" stroke-width="0.45" stroke-linejoin="round"/>
+    <circle cx="12" cy="12" r="2.7" fill="url(#emeraldGlow)"/>
+    <polygon points="12,10.1 13.9,12 12,13.9 10.1,12" fill="url(#emeraldGrad)" stroke="rgba(255,255,255,0.35)" stroke-width="0.4"/>
+  </g>
+</svg>
