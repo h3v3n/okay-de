@@ -202,6 +202,7 @@ fn active_icon_theme_chain() -> &'static Vec<String> {
             }
         }
         for builtin in [
+            "okay-icons",
             "Papirus",
             "Papirus-Dark",
             "Adwaita",

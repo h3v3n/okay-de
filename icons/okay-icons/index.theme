@@ -1,0 +1,41 @@
+[Icon Theme]
+Name=OKay Icons
+Comment=Dark Brutalist Technical icon theme for OKay DE
+Inherits=hicolor,Adwaita
+Example=folder
+Directories=scalable/apps,scalable/places,scalable/mimetypes,scalable/devices,scalable/status
+
+[scalable/apps]
+Context=Applications
+Size=24
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[scalable/places]
+Context=Places
+Size=24
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[scalable/mimetypes]
+Context=MimeTypes
+Size=24
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[scalable/devices]
+Context=Devices
+Size=24
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[scalable/status]
+Context=Status
+Size=24
+MinSize=16
+MaxSize=512
+Type=Scalable

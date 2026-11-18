@@ -128,6 +128,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    if std::env::var_os("OKAY_ICON_THEME").is_none() {
+        std::env::set_var("OKAY_ICON_THEME", "okay-icons");
+    }
+    if std::env::var_os("GTK_ICON_THEME").is_none() {
+        std::env::set_var("GTK_ICON_THEME", "okay-icons");
+    }
+    if std::env::var_os("QT_QPA_PLATFORMTHEME").is_none() {
+        std::env::set_var("QT_QPA_PLATFORMTHEME", "gtk3");
+    }
+
     let force_winit = std::env::args().any(|a| a == "--winit");
     let force_drm = std::env::args().any(|a| a == "--drm");
     let is_nested = std::env::var_os("WAYLAND_DISPLAY").is_some()
