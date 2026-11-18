@@ -1638,11 +1638,12 @@ pub fn render_panel_elements(
             pill_bg
         };
         mb.fill_rounded_rect_aa(notif_x, 3, notif_w, mb_h - 6, 6, notif_bg);
+        let glyph_sc = (mb_h as f32 / 28.0).clamp(0.85, 1.45);
         crate::icons::draw_bell_glyph(
             &mut mb,
             (notif_x + notif_w / 2) as f32,
             (mb_h / 2) as f32,
-            0.95,
+            glyph_sc,
             fg_prim,
         );
         if !state.overlays.notifications.is_empty() || !state.overlays.history.is_empty() {
@@ -1715,7 +1716,7 @@ pub fn render_panel_elements(
             (vol_x + 7) as f32,
             (mb_h / 2) as f32,
             state.panel.volume_muted,
-            0.9,
+            glyph_sc * 0.92,
             fg_prim,
         );
         mb.draw_text_px(vol_x + 25, text_y, &vol_txt, font_sz, fg_prim);
@@ -1880,7 +1881,7 @@ pub fn render_panel_elements(
             (shield_x + 12) as f32,
             (mb_h / 2) as f32,
             state.adshield.enabled,
-            0.85,
+            glyph_sc * 0.9,
             shield_col,
         );
         mb.draw_text_px(

@@ -80,29 +80,29 @@ enum IconCacheEntry {
 }
 
 static ICON_CACHE: OnceLock<Mutex<HashMap<String, IconCacheEntry>>> = OnceLock::new();
+const CANONICAL_ICON_SIZE: i32 = 96;
 
-/// Non-blocking icon lookup: returns cached RGBA icon if ready, or schedules background
-/// decoding (PNG / SVG via `rsvg-convert`) on the worker thread and returns `None` meanwhile.
-pub fn load_system_icon(icon_name: &str, target_size: i32) -> Option<DecodedIcon> {
+/// Non-blocking icon lookup: returns cached high-res RGBA icon if ready, or schedules background
+/// decoding (PNG / SVG via `rsvg-convert`) at `CANONICAL_ICON_SIZE` so dynamic Dock zoom never misses cache.
+pub fn load_system_icon(icon_name: &str, _target_size: i32) -> Option<DecodedIcon> {
     let trimmed = icon_name.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let key = format!("{}@{}", trimmed, target_size);
     let cache = ICON_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut guard) = cache.lock() {
-        match guard.get(&key) {
+        match guard.get(trimmed) {
             Some(IconCacheEntry::Ready(icon)) => return Some(icon.clone()),
             Some(IconCacheEntry::Loading) | Some(IconCacheEntry::Missing) => return None,
             None => {
-                guard.insert(key, IconCacheEntry::Loading);
+                guard.insert(trimmed.to_string(), IconCacheEntry::Loading);
             }
         }
     }
 
     crate::worker::dispatch(crate::worker::WorkerRequest::LoadIcon {
         name: trimmed.to_string(),
-        target_size,
+        target_size: CANONICAL_ICON_SIZE,
     });
     None
 }
@@ -113,16 +113,16 @@ pub fn load_system_icon_sync(icon_name: &str, target_size: i32) {
     if trimmed.is_empty() {
         return;
     }
-    let key = format!("{}@{}", trimmed, target_size);
-    let loaded = find_icon_path(trimmed).and_then(|p| decode_icon_file(&p, target_size));
+    let decode_sz = target_size.max(CANONICAL_ICON_SIZE);
+    let loaded = find_icon_path(trimmed).and_then(|p| decode_icon_file(&p, decode_sz));
     let cache = ICON_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut guard) = cache.lock() {
         match loaded {
             Some(icon) => {
-                guard.insert(key, IconCacheEntry::Ready(icon));
+                guard.insert(trimmed.to_string(), IconCacheEntry::Ready(icon));
             }
             None => {
-                guard.insert(key, IconCacheEntry::Missing);
+                guard.insert(trimmed.to_string(), IconCacheEntry::Missing);
             }
         }
     }
@@ -837,67 +837,90 @@ pub fn draw_tiling_glyph(canvas: &mut Canvas, cx: f32, cy: f32, scale: f32, colo
     canvas.fill_rounded_rect_aa(rx, top_y + mh - rh, rw, rh, 1, color);
 }
 
-/// Crisp vector Notification Bell centered at `(cx, cy)`.
+/// Helper: blends a single subpixel-antialiased pixel onto `canvas`.
+#[inline]
+fn blend_aa_px(canvas: &mut Canvas, px: i32, py: i32, cov: f32, color: [u8; 4]) {
+    if cov <= 0.01 || px < 0 || py < 0 || px >= canvas.width || py >= canvas.height {
+        return;
+    }
+    let a = ((color[3] as f32) * cov.clamp(0.0, 1.0)).round() as u8;
+    if a > 0 {
+        canvas.fill_rect_blend(px, py, 1, 1, [color[0], color[1], color[2], a]);
+    }
+}
+
+/// Crisp anti-aliased vector Notification Bell centered at `(cx, cy)`.
 pub fn draw_bell_glyph(canvas: &mut Canvas, cx: f32, cy: f32, scale: f32, color: [u8; 4]) {
     let s = scale.clamp(0.7, 2.0);
-    let cxi = cx.round() as i32;
-    let cyi = cy.round() as i32;
     // Top knob
-    canvas.fill_circle_aa(cxi as f32, (cyi as f32) - 5.2 * s, 1.3 * s, color);
-    // Bell dome + flared skirt using non-overlapping scanlines
-    let top_y = (cyi as f32 - 4.2 * s).round() as i32;
-    let bot_y = (cyi as f32 + 2.8 * s).round() as i32;
-    for py in top_y..=bot_y {
-        let t = ((py - top_y) as f32 / ((bot_y - top_y).max(1) as f32)).clamp(0.0, 1.0);
+    canvas.fill_circle_aa(cx, cy - 5.2 * s, 1.3 * s, color);
+    // Bell dome + flared skirt with smooth subpixel AA coverage
+    let top_f = cy - 4.3 * s;
+    let bot_f = cy + 2.9 * s;
+    let y0 = (top_f - 1.0).floor() as i32;
+    let y1 = (bot_f + 1.0).ceil() as i32;
+    let x0 = (cx - 6.8 * s - 1.0).floor() as i32;
+    let x1 = (cx + 6.8 * s + 1.0).ceil() as i32;
+    let h = (bot_f - top_f).max(1.0);
+    for py in y0..=y1 {
+        let fy = py as f32 + 0.5;
+        let v_cov = (fy - top_f + 0.5).clamp(0.0, 1.0).min((bot_f - fy + 0.5).clamp(0.0, 1.0));
+        if v_cov <= 0.0 {
+            continue;
+        }
+        let t = ((fy - top_f) / h).clamp(0.0, 1.0);
         let half_w = if t < 0.55 {
-            // Dome curve
             (4.2 * s) * (1.0 - (1.0 - t / 0.55).powi(2)).sqrt()
         } else if t < 0.82 {
-            // Body
             4.2 * s
         } else {
-            // Flared rim
             4.2 * s + ((t - 0.82) / 0.18) * 1.8 * s
         };
-        let x0 = (cx - half_w).round() as i32;
-        let x1 = (cx + half_w).round() as i32;
-        if x1 > x0 {
-            canvas.fill_rect_blend(x0, py, x1 - x0, 1, color);
+        for px in x0..=x1 {
+            let fx = px as f32 + 0.5;
+            let h_cov = (half_w - (fx - cx).abs() + 0.5).clamp(0.0, 1.0);
+            blend_aa_px(canvas, px, py, h_cov * v_cov, color);
         }
     }
     // Bottom clapper
-    canvas.fill_circle_aa(cxi as f32, (cyi as f32) + 4.4 * s, 1.45 * s, color);
+    canvas.fill_circle_aa(cx, cy + 4.4 * s, 1.45 * s, color);
 }
 
-/// Crisp vector Speaker icon with sound waves (or mute cross) centered vertically at `cy`.
+/// Crisp anti-aliased vector Speaker icon with sound waves (or mute cross) centered vertically at `cy`.
 pub fn draw_speaker_glyph(canvas: &mut Canvas, left_x: f32, cy: f32, muted: bool, scale: f32, color: [u8; 4]) {
     let s = scale.clamp(0.7, 2.0);
-    let lx = left_x.round();
-    let cyi = cy.round();
-    // Solid single-pass speaker body + cone (no overlapping alpha)
-    let x_start = lx as i32;
-    let x_mid = (lx + 3.2 * s).round() as i32;
-    let x_end = (lx + 7.2 * s).round() as i32;
-    for px in x_start..=x_end {
-        let half_h = if px <= x_mid {
+    let x_start = left_x;
+    let x_mid = left_x + 3.2 * s;
+    let x_end = left_x + 7.2 * s;
+    let px0 = (x_start - 1.0).floor() as i32;
+    let px1 = (x_end + 1.0).ceil() as i32;
+    let py0 = (cy - 5.6 * s - 1.0).floor() as i32;
+    let py1 = (cy + 5.6 * s + 1.0).ceil() as i32;
+    for px in px0..=px1 {
+        let fx = px as f32 + 0.5;
+        let h_cov = (fx - x_start + 0.5).clamp(0.0, 1.0).min((x_end - fx + 0.5).clamp(0.0, 1.0));
+        if h_cov <= 0.0 {
+            continue;
+        }
+        let half_h = if fx <= x_mid {
             2.2 * s
         } else {
-            let t = (px - x_mid) as f32 / (x_end - x_mid).max(1) as f32;
+            let t = ((fx - x_mid) / (x_end - x_mid).max(0.5)).clamp(0.0, 1.0);
             2.2 * s + t * 3.0 * s
         };
-        let y0 = (cyi - half_h).round() as i32;
-        let y1 = (cyi + half_h).round() as i32;
-        if y1 > y0 {
-            canvas.fill_rect_blend(px, y0, 1, y1 - y0, color);
+        for py in py0..=py1 {
+            let fy = py as f32 + 0.5;
+            let v_cov = (half_h - (fy - cy).abs() + 0.5).clamp(0.0, 1.0);
+            blend_aa_px(canvas, px, py, h_cov * v_cov, color);
         }
     }
     if muted {
         let xcol = [255, 108, 104, color[3]];
-        draw_thick_line(canvas, lx + 9.2 * s, cyi - 2.8 * s, lx + 13.4 * s, cyi + 2.8 * s, 0.9 * s, xcol);
-        draw_thick_line(canvas, lx + 13.4 * s, cyi - 2.8 * s, lx + 9.2 * s, cyi + 2.8 * s, 0.9 * s, xcol);
+        draw_thick_line(canvas, left_x + 9.2 * s, cy - 2.8 * s, left_x + 13.4 * s, cy + 2.8 * s, 0.9 * s, xcol);
+        draw_thick_line(canvas, left_x + 13.4 * s, cy - 2.8 * s, left_x + 9.2 * s, cy + 2.8 * s, 0.9 * s, xcol);
     } else {
-        draw_arc_aa(canvas, lx + 6.4 * s, cyi, 3.8 * s, -44.0, 44.0, 0.8 * s, color);
-        draw_arc_aa(canvas, lx + 6.4 * s, cyi, 6.4 * s, -48.0, 48.0, 0.8 * s, color);
+        draw_arc_aa(canvas, left_x + 6.4 * s, cy, 3.8 * s, -44.0, 44.0, 0.8 * s, color);
+        draw_arc_aa(canvas, left_x + 6.4 * s, cy, 6.4 * s, -48.0, 48.0, 0.8 * s, color);
     }
 }
 
@@ -906,21 +929,30 @@ pub fn draw_battery_glyph(canvas: &mut Canvas, x: i32, cy: i32, percent: i32, co
     let bw = 16;
     let bh = 10;
     let by = cy - bh / 2;
-    canvas.fill_rounded_rect_aa(x, by, bw, bh, 2, [color[0], color[1], color[2], 64]);
+    canvas.fill_rounded_rect_aa(x, by, bw, bh, 3, [color[0], color[1], color[2], 64]);
     canvas.fill_rounded_rect_aa(x + bw, by + 3, 2, 4, 1, [color[0], color[1], color[2], 185]);
     let fill_w = ((bw - 4) * percent.clamp(0, 100) / 100).max(2);
     let fill_col = if percent <= 20 { [255, 102, 96, 255] } else { [92, 224, 146, 255] };
-    canvas.fill_rounded_rect_aa(x + 2, by + 2, fill_w, bh - 4, 1, fill_col);
+    canvas.fill_rounded_rect_aa(x + 2, by + 2, fill_w, bh - 4, 2, fill_col);
 }
 
-/// Crisp Material 3 vector Shield icon centered at `(cx, cy)`.
+/// Crisp anti-aliased Material 3 vector Shield icon centered at `(cx, cy)`.
 pub fn draw_shield_glyph(canvas: &mut Canvas, cx: f32, cy: f32, active: bool, scale: f32, color: [u8; 4]) {
     let s = scale.clamp(0.7, 2.0);
-    let top_y = (cy - 6.0 * s).round() as i32;
-    let bot_y = (cy + 6.5 * s).round() as i32;
-    let h = (bot_y - top_y).max(1) as f32;
-    for py in top_y..=bot_y {
-        let t = ((py - top_y) as f32 / h).clamp(0.0, 1.0);
+    let top_f = cy - 6.0 * s;
+    let bot_f = cy + 6.5 * s;
+    let h = (bot_f - top_f).max(1.0);
+    let y0 = (top_f - 1.0).floor() as i32;
+    let y1 = (bot_f + 1.0).ceil() as i32;
+    let x0 = (cx - 5.2 * s - 1.0).floor() as i32;
+    let x1 = (cx + 5.2 * s + 1.0).ceil() as i32;
+    for py in y0..=y1 {
+        let fy = py as f32 + 0.5;
+        let v_cov = (fy - top_f + 0.5).clamp(0.0, 1.0).min((bot_f - fy + 0.5).clamp(0.0, 1.0));
+        if v_cov <= 0.0 {
+            continue;
+        }
+        let t = ((fy - top_f) / h).clamp(0.0, 1.0);
         let half_w = if t < 0.15 {
             (4.8 * s) * (0.65 + 0.35 * (t / 0.15))
         } else if t < 0.45 {
@@ -929,10 +961,10 @@ pub fn draw_shield_glyph(canvas: &mut Canvas, cx: f32, cy: f32, active: bool, sc
             let k = (t - 0.45) / 0.55;
             (4.8 * s) * (1.0 - k * k)
         };
-        let x0 = (cx - half_w).round() as i32;
-        let x1 = (cx + half_w).round() as i32;
-        if x1 > x0 {
-            canvas.fill_rect_blend(x0, py, x1 - x0, 1, color);
+        for px in x0..=x1 {
+            let fx = px as f32 + 0.5;
+            let h_cov = (half_w - (fx - cx).abs() + 0.5).clamp(0.0, 1.0);
+            blend_aa_px(canvas, px, py, h_cov * v_cov, color);
         }
     }
     if active {
