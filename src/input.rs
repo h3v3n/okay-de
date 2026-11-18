@@ -698,16 +698,41 @@ fn execute_key_action(state: &mut OkayState, action: KeyAction) {
 }
 
 fn handle_pointer_motion<I: InputBackend>(state: &mut OkayState, event: I::PointerMotionEvent) {
+    let accel_delta = event.delta();
+    let unaccel_delta = event.delta_unaccel();
+    // High-polling (2000Hz+) or jitter-filtered mice can produce NaN/0 in libinput adaptive accel
+    // when two HID reports share close timestamps; fall back to unaccelerated deltas cleanly.
     let raw_delta = if state.pointer_accel_disabled {
-        event.delta_unaccel()
+        if unaccel_delta.x.is_finite() && unaccel_delta.y.is_finite() {
+            unaccel_delta
+        } else {
+            accel_delta
+        }
+    } else if accel_delta.x.is_finite()
+        && accel_delta.y.is_finite()
+        && (accel_delta.x != 0.0
+            || accel_delta.y != 0.0
+            || (unaccel_delta.x == 0.0 && unaccel_delta.y == 0.0))
+    {
+        accel_delta
     } else {
-        event.delta()
+        unaccel_delta
     };
-    let scaled_delta = Point::from((
-        raw_delta.x * state.pointer_sensitivity,
-        raw_delta.y * state.pointer_sensitivity,
-    ));
-    let new_pos = clamp_pointer_to_outputs(state, state.pointer_location + scaled_delta);
+
+    let dx = if raw_delta.x.is_finite() { raw_delta.x } else { 0.0 };
+    let dy = if raw_delta.y.is_finite() { raw_delta.y } else { 0.0 };
+    let sens = if state.pointer_sensitivity.is_finite() {
+        state.pointer_sensitivity.clamp(0.1, 5.0)
+    } else {
+        1.0
+    };
+    let base_loc = if state.pointer_location.x.is_finite() && state.pointer_location.y.is_finite() {
+        state.pointer_location
+    } else {
+        Point::from((0.0, 0.0))
+    };
+    let scaled_delta = Point::from((dx * sens, dy * sens));
+    let new_pos = clamp_pointer_to_outputs(state, base_loc + scaled_delta);
     move_pointer_to(state, new_pos, Event::time_msec(&event));
 }
 
@@ -722,7 +747,15 @@ fn handle_pointer_motion_absolute<I: InputBackend>(
         .unwrap_or_else(|| smithay::utils::Rectangle::from_size((1280, 720).into()));
 
     let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
-    let clamped = clamp_pointer_to_outputs(state, pos);
+    let safe_pos = if pos.x.is_finite() && pos.y.is_finite() {
+        pos
+    } else {
+        Point::from((
+            output_geo.loc.x as f64 + output_geo.size.w as f64 * 0.5,
+            output_geo.loc.y as f64 + output_geo.size.h as f64 * 0.5,
+        ))
+    };
+    let clamped = clamp_pointer_to_outputs(state, safe_pos);
     move_pointer_to(state, clamped, Event::time_msec(&event));
 }
 
@@ -730,9 +763,11 @@ fn move_pointer_to(state: &mut OkayState, pos: Point<f64, Logical>, time_msec: u
     state.pointer_location = pos;
 
     if crate::settings::handle_settings_motion(state, pos) {
+        state.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
         return;
     }
     if crate::overlays::handle_overlays_motion(state, pos) {
+        state.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
         return;
     }
 
@@ -870,6 +905,20 @@ fn clamp_pointer_to_outputs(
     state: &OkayState,
     pos: Point<f64, Logical>,
 ) -> Point<f64, Logical> {
+    if !pos.x.is_finite() || !pos.y.is_finite() {
+        if let Some(geo) = state
+            .space
+            .outputs()
+            .next()
+            .and_then(|o| state.space.output_geometry(o))
+        {
+            return Point::from((
+                geo.loc.x as f64 + geo.size.w as f64 * 0.5,
+                geo.loc.y as f64 + geo.size.h as f64 * 0.5,
+            ));
+        }
+        return Point::from((0.0, 0.0));
+    }
     let mut best_clamped: Option<(f64, Point<f64, Logical>)> = None;
 
     for output in state.space.outputs() {

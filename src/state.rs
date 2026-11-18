@@ -356,7 +356,16 @@ impl OkayState {
             smithay::reexports::input::AccelProfile::Adaptive
         };
         for dev in &mut self.libinput_devices {
-            let _ = dev.config_accel_set_profile(profile);
+            if dev.has_capability(smithay::reexports::input::DeviceCapability::Pointer) {
+                let _ = dev.config_send_events_set_mode(
+                    smithay::reexports::input::SendEventsMode::ENABLED,
+                );
+                let _ = dev.config_accel_set_speed(0.0);
+                let supported = dev.config_accel_profiles();
+                if supported.contains(&profile) {
+                    let _ = dev.config_accel_set_profile(profile);
+                }
+            }
         }
     }
 

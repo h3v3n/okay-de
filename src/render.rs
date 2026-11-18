@@ -85,9 +85,11 @@ pub fn collect_output_elements(
     // 0. Pointer cursor (topmost element on whichever output contains the pointer)
     if output_geo.to_f64().contains(state.pointer_location) {
         let local_cursor = state.pointer_location - output_geo.loc.to_f64();
+        let elapsed_ms = state.start_time.elapsed().as_millis() as u64;
         elements.extend(collect_cursor_elements(
             &state.cursor_status,
             local_cursor,
+            elapsed_ms,
             renderer,
             scale,
         ));
@@ -377,13 +379,198 @@ pub fn collect_output_elements(
     elements
 }
 
-/// Renders either the client-provided cursor surface or a crisp software pointer arrow.
+struct LoadedXcursorFrame {
+    buffer: MemoryRenderBuffer,
+    logical_size: Size<i32, Logical>,
+    xhot: i32,
+    yhot: i32,
+    delay_ms: u64,
+}
+
+fn load_xcursor_frames(cursor_name: &str, target_size: u32) -> Option<Vec<LoadedXcursorFrame>> {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        let h = std::path::PathBuf::from(home);
+        dirs.push(h.join(".local/share/icons/okay-cursors/cursors"));
+        dirs.push(h.join(".icons/okay-cursors/cursors"));
+    }
+    dirs.push(std::path::PathBuf::from("cursors/okay-cursors/cursors"));
+    dirs.push(std::path::PathBuf::from("/usr/share/icons/okay-cursors/cursors"));
+
+    let path = dirs
+        .into_iter()
+        .map(|d| d.join(cursor_name))
+        .find(|p| p.exists())?;
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 16 || &data[0..4] != b"Xcur" {
+        return None;
+    }
+
+    let read_u32 = |off: usize| -> Option<u32> {
+        let slice = data.get(off..off + 4)?;
+        Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+    };
+
+    let header_size = read_u32(4)? as usize;
+    let ntoc = read_u32(12)? as usize;
+    if header_size < 16 || ntoc == 0 {
+        return None;
+    }
+
+    const XCURSOR_IMAGE_TYPE: u32 = 0xfffd_0002;
+    let mut best_nominal: Option<u32> = None;
+    let mut best_diff: u32 = u32::MAX;
+    let mut positions: Vec<(u32, usize)> = Vec::new();
+
+    for i in 0..ntoc {
+        let entry_off = header_size + i * 12;
+        let Some(chunk_type) = read_u32(entry_off) else {
+            break;
+        };
+        if chunk_type != XCURSOR_IMAGE_TYPE {
+            continue;
+        }
+        let nominal = read_u32(entry_off + 4)?;
+        let pos = read_u32(entry_off + 8)? as usize;
+        let diff = nominal.abs_diff(target_size);
+        if diff < best_diff {
+            best_diff = diff;
+            best_nominal = Some(nominal);
+        }
+        positions.push((nominal, pos));
+    }
+
+    let chosen_nominal = best_nominal?;
+    let mut frames = Vec::new();
+    for (nominal, pos) in positions {
+        if nominal != chosen_nominal {
+            continue;
+        }
+        let w = read_u32(pos + 16)? as i32;
+        let h = read_u32(pos + 20)? as i32;
+        let xhot = read_u32(pos + 24)? as i32;
+        let yhot = read_u32(pos + 28)? as i32;
+        let delay_ms = read_u32(pos + 32)? as u64;
+        if w <= 0 || h <= 0 || w > 256 || h > 256 {
+            continue;
+        }
+        let px_off = pos + 36;
+        let byte_len = (w as usize) * (h as usize) * 4;
+        let raw_px = data.get(px_off..px_off + byte_len)?;
+        let mut rgba = Vec::with_capacity(byte_len);
+        for chunk in raw_px.chunks_exact(4) {
+            // Xcursor little-endian ARGB -> [B, G, R, A] => RGBA for Fourcc::Abgr8888
+            rgba.extend_from_slice(&[chunk[2], chunk[1], chunk[0], chunk[3]]);
+        }
+        let buffer = MemoryRenderBuffer::from_slice(
+            &rgba,
+            Fourcc::Abgr8888,
+            (w, h),
+            1,
+            Transform::Normal,
+            None,
+        );
+        frames.push(LoadedXcursorFrame {
+            buffer,
+            logical_size: Size::from((24, 24)),
+            xhot: (xhot * 24 + w / 2) / w,
+            yhot: (yhot * 24 + h / 2) / h,
+            delay_ms: delay_ms.max(16),
+        });
+    }
+
+    if frames.is_empty() {
+        None
+    } else {
+        Some(frames)
+    }
+}
+
+fn themed_cursor_frame(name: &str, elapsed_ms: u64) -> Option<(MemoryRenderBuffer, Size<i32, Logical>, Point<f64, Logical>)> {
+    thread_local! {
+        static XCURSOR_CACHE: RefCell<HashMap<String, Option<Vec<LoadedXcursorFrame>>>> =
+            RefCell::new(HashMap::new());
+    }
+
+    XCURSOR_CACHE.with(|cache| {
+        let mut map = cache.borrow_mut();
+        let entry = map.entry(name.to_string()).or_insert_with(|| {
+            load_xcursor_frames(name, 24).or_else(|| {
+                if name != "default" {
+                    load_xcursor_frames("default", 24)
+                } else {
+                    None
+                }
+            })
+        });
+        let frames = entry.as_ref()?;
+        let frame = if frames.len() == 1 {
+            &frames[0]
+        } else {
+            let total_ms: u64 = frames.iter().map(|f| f.delay_ms).sum();
+            let mut rem = if total_ms > 0 { elapsed_ms % total_ms } else { 0 };
+            let mut picked = &frames[0];
+            for f in frames {
+                if rem < f.delay_ms {
+                    picked = f;
+                    break;
+                }
+                rem -= f.delay_ms;
+            }
+            picked
+        };
+        Some((
+            frame.buffer.clone(),
+            frame.logical_size,
+            Point::from((frame.xhot as f64, frame.yhot as f64)),
+        ))
+    })
+}
+
+/// Renders either the client-provided cursor surface or a crisp `okay-cursors` pointer.
 fn collect_cursor_elements(
     cursor_status: &CursorImageStatus,
     local_cursor: Point<f64, Logical>,
+    elapsed_ms: u64,
     renderer: &mut GlesRenderer,
     scale: Scale<f64>,
 ) -> Vec<OkayRenderElements> {
+    let render_named = |name: &str, renderer: &mut GlesRenderer| -> Vec<OkayRenderElements> {
+        if let Some((buf, logical_size, hotspot)) = themed_cursor_frame(name, elapsed_ms) {
+            let phys_loc: Point<f64, Physical> = (local_cursor - hotspot)
+                .to_physical_precise_round::<f64, i32>(scale)
+                .to_f64();
+            if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                phys_loc,
+                &buf,
+                None,
+                None,
+                Some(logical_size),
+                Kind::Cursor,
+            ) {
+                return vec![OkayRenderElements::Memory(elem)];
+            }
+        }
+        let buf = default_cursor_buffer();
+        let phys_loc: Point<f64, Physical> = local_cursor.to_physical_precise_round::<f64, i32>(scale).to_f64();
+        match MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            phys_loc,
+            buf,
+            None,
+            None,
+            Some((16, 22).into()),
+            Kind::Cursor,
+        ) {
+            Ok(elem) => vec![OkayRenderElements::Memory(elem)],
+            Err(err) => {
+                tracing::warn!(?err, "Failed to create software cursor render element");
+                Vec::new()
+            }
+        }
+    };
+
     match cursor_status {
         CursorImageStatus::Hidden => Vec::new(),
         CursorImageStatus::Surface(surface) if surface.alive() => {
@@ -395,27 +582,15 @@ fn collect_cursor_elements(
                     .unwrap_or_default()
             });
             let pos = (local_cursor - hotspot.to_f64()).to_physical_precise_round(scale);
-            render_elements_from_surface_tree(renderer, surface, pos, scale, 1.0, Kind::Cursor)
-        }
-        _ => {
-            let buf = default_cursor_buffer();
-            let phys_loc: Point<f64, Physical> = local_cursor.to_physical_precise_round::<f64, i32>(scale).to_f64();
-            match MemoryRenderBufferRenderElement::from_buffer(
-                renderer,
-                phys_loc,
-                buf,
-                None,
-                None,
-                Some((16, 22).into()),
-                Kind::Cursor,
-            ) {
-                Ok(elem) => vec![OkayRenderElements::Memory(elem)],
-                Err(err) => {
-                    tracing::warn!(?err, "Failed to create software cursor render element");
-                    Vec::new()
-                }
+            let elems = render_elements_from_surface_tree(renderer, surface, pos, scale, 1.0, Kind::Cursor);
+            if elems.is_empty() {
+                render_named("default", renderer)
+            } else {
+                elems
             }
         }
+        CursorImageStatus::Named(icon) => render_named(icon.name(), renderer),
+        _ => render_named("default", renderer),
     }
 }
 

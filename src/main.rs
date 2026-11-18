@@ -266,6 +266,16 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
     );
     output.set_preferred(mode);
     state.space.map_output(&output, (0, 0));
+    let logical_winit = state
+        .space
+        .output_geometry(&output)
+        .map(|g| g.size)
+        .unwrap_or(mode.size.to_f64().to_logical(1.0).to_i32_round());
+    state.pointer_location = (
+        (logical_winit.w as f64) * 0.5,
+        (logical_winit.h as f64) * 0.5,
+    )
+        .into();
 
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
 
@@ -392,6 +402,8 @@ struct DrmOutputState {
     compositor: OkayDrmCompositor,
     #[allow(dead_code)]
     damage_tracker: OutputDamageTracker,
+    frame_pending: bool,
+    pending_since: Option<Instant>,
 }
 
 struct DrmBackendData {
@@ -430,17 +442,36 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
         .insert_source(libinput_backend, |mut event, _, state| {
             match &mut event {
                 smithay::backend::input::InputEvent::DeviceAdded { device } => {
-                    tracing::info!(name = device.name(), "Libinput device added");
+                    let is_pointer = device.has_capability(
+                        smithay::reexports::input::DeviceCapability::Pointer,
+                    );
+                    tracing::info!(
+                        name = device.name(),
+                        sysname = device.sysname(),
+                        is_pointer,
+                        "Libinput device added"
+                    );
                     let _ = device.config_send_events_set_mode(
                         smithay::reexports::input::SendEventsMode::ENABLED,
                     );
-                    let _ = device.config_tap_set_enabled(true);
-                    let profile = if state.pointer_accel_disabled {
-                        smithay::reexports::input::AccelProfile::Flat
-                    } else {
-                        smithay::reexports::input::AccelProfile::Adaptive
-                    };
-                    let _ = device.config_accel_set_profile(profile);
+                    if is_pointer {
+                        let _ = device.config_tap_set_enabled(true);
+                        let _ = device.config_accel_set_speed(0.0);
+                        let desired_profile = if state.pointer_accel_disabled {
+                            smithay::reexports::input::AccelProfile::Flat
+                        } else {
+                            smithay::reexports::input::AccelProfile::Adaptive
+                        };
+                        let supported = device.config_accel_profiles();
+                        if supported.contains(&desired_profile) {
+                            let _ = device.config_accel_set_profile(desired_profile);
+                        } else if supported.contains(&smithay::reexports::input::AccelProfile::Flat)
+                        {
+                            let _ = device.config_accel_set_profile(
+                                smithay::reexports::input::AccelProfile::Flat,
+                            );
+                        }
+                    }
                     state.libinput_devices.push(device.clone());
                 }
                 smithay::backend::input::InputEvent::DeviceRemoved { device } => {
@@ -466,7 +497,9 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
     let loop_handle = event_loop.handle();
     for (dev_id, path) in udev_backend.device_list() {
         let mut data = drm_data.borrow_mut();
-        if let Err(err) = on_drm_device_added(&loop_handle, &mut state, &mut data, dev_id, path) {
+        if let Err(err) =
+            on_drm_device_added(&loop_handle, &mut state, &drm_data, &mut data, dev_id, path)
+        {
             tracing::warn!(?err, ?path, "Failed to initialize DRM device");
         }
     }
@@ -482,9 +515,14 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
             match event {
                 UdevEvent::Added { device_id, path } => {
                     tracing::info!(?path, "Udev DRM device added");
-                    if let Err(err) =
-                        on_drm_device_added(&udev_loop_handle, state, &mut data, device_id, &path)
-                    {
+                    if let Err(err) = on_drm_device_added(
+                        &udev_loop_handle,
+                        state,
+                        &drm_data_udev,
+                        &mut data,
+                        device_id,
+                        &path,
+                    ) {
                         tracing::warn!(?err, ?path, "Failed to hotplug-add DRM device");
                     } else {
                         rearrange_drm_outputs(state, &data);
@@ -510,9 +548,10 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
         })?;
 
     // Monitor VT switching via libseat
+    let drm_data_vt = Rc::clone(&drm_data);
     event_loop
         .handle()
-        .insert_source(notifier, move |event, _, _state| match event {
+        .insert_source(notifier, move |event, _, state| match event {
             SessionEvent::PauseSession => {
                 libinput_context.suspend();
                 tracing::info!("Session paused (VT switch)");
@@ -521,6 +560,17 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(err) = libinput_context.resume() {
                     tracing::error!(?err, "Failed to resume libinput after VT switch");
                 }
+                if let Ok(mut data) = drm_data_vt.try_borrow_mut() {
+                    for dev in data.devices.values_mut() {
+                        for out_state in dev.outputs.values_mut() {
+                            let _ = out_state.compositor.reset_state();
+                            out_state.compositor.reset_buffers();
+                            out_state.frame_pending = false;
+                            out_state.pending_since = None;
+                        }
+                    }
+                }
+                state.blur_dirty = true;
                 tracing::info!("Session resumed");
             }
         })?;
@@ -528,13 +578,27 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
     // Main DRM frame & Wayland event loop
     while state.running {
         event_loop.dispatch(Some(target_frame_duration(&state.space)), &mut state)?;
+        // Drain any burst of high-polling-rate (e.g. 2000Hz) input events before rendering
+        for _ in 0..2 {
+            if event_loop.dispatch(Some(Duration::ZERO), &mut state).is_err() {
+                break;
+            }
+        }
         state.adshield.poll_updates();
 
-        // Render active DRM outputs
+        // Render active DRM outputs when not waiting for a VBlank flip
         {
             let mut data = drm_data.borrow_mut();
+            let frame_flags = FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT
+                | FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT;
             for dev in data.devices.values_mut() {
                 for out_state in dev.outputs.values_mut() {
+                    let vblank_timed_out = out_state
+                        .pending_since
+                        .is_some_and(|t| t.elapsed() > Duration::from_millis(150));
+                    if out_state.frame_pending && !vblank_timed_out {
+                        continue;
+                    }
                     let scale = Scale::from(out_state.output.current_scale().fractional_scale());
                     let frame_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let elements = crate::render::collect_output_elements(
@@ -551,11 +615,21 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
                             &mut dev.renderer,
                             &elements,
                             clear_color,
-                            FrameFlags::DEFAULT,
+                            frame_flags,
                         ) {
                             Ok(res) => {
                                 if !res.is_empty {
-                                    let _ = out_state.compositor.queue_frame(());
+                                    match out_state.compositor.queue_frame(()) {
+                                        Ok(()) => {
+                                            out_state.frame_pending = true;
+                                            out_state.pending_since = Some(Instant::now());
+                                        }
+                                        Err(err) => {
+                                            tracing::debug!(?err, "DRM queue_frame skipped/failed");
+                                            out_state.frame_pending = false;
+                                            out_state.pending_since = None;
+                                        }
+                                    }
                                 }
                                 send_frame_callbacks(&state, &out_state.output);
                             }
@@ -723,6 +797,8 @@ fn init_drm_connector_output(
             output,
             compositor,
             damage_tracker,
+            frame_pending: false,
+            pending_since: None,
         },
     )))
 }
@@ -750,13 +826,22 @@ fn rearrange_drm_outputs(state: &mut OkayState, drm_data: &DrmBackendData) {
         }
     }
 
-    state.pointer_location.x = state.pointer_location.x.clamp(0.0, (max_w - 1) as f64);
-    state.pointer_location.y = state.pointer_location.y.clamp(0.0, (max_h - 1) as f64);
+    if !state.pointer_location.x.is_finite()
+        || !state.pointer_location.y.is_finite()
+        || (state.pointer_location.x == 0.0 && state.pointer_location.y == 0.0)
+    {
+        state.pointer_location.x = (max_w as f64) * 0.5;
+        state.pointer_location.y = (max_h as f64) * 0.5;
+    } else {
+        state.pointer_location.x = state.pointer_location.x.clamp(0.0, (max_w - 1) as f64);
+        state.pointer_location.y = state.pointer_location.y.clamp(0.0, (max_h - 1) as f64);
+    }
 }
 
 fn on_drm_device_added(
     loop_handle: &LoopHandle<'static, OkayState>,
     state: &mut OkayState,
+    drm_data_rc: &Rc<RefCell<DrmBackendData>>,
     drm_data: &mut DrmBackendData,
     dev_id: smithay::reexports::rustix::fs::Dev,
     path: &Path,
@@ -806,8 +891,21 @@ fn on_drm_device_added(
         }
     }
 
-    loop_handle.insert_source(drm_notifier, |event, _meta, _state| match event {
-        DrmEvent::VBlank(_crtc) => {}
+    let drm_data_vblank = Rc::clone(drm_data_rc);
+    loop_handle.insert_source(drm_notifier, move |event, _meta, _state| match event {
+        DrmEvent::VBlank(crtc) => {
+            if let Ok(mut data) = drm_data_vblank.try_borrow_mut() {
+                if let Some(dev) = data.devices.get_mut(&node) {
+                    if let Some(out_state) = dev.outputs.get_mut(&crtc) {
+                        if let Err(err) = out_state.compositor.frame_submitted() {
+                            tracing::debug!(?err, ?crtc, "DRM frame_submitted warning");
+                        }
+                        out_state.frame_pending = false;
+                        out_state.pending_since = None;
+                    }
+                }
+            }
+        }
         DrmEvent::Error(err) => {
             tracing::error!(?err, "DRM error event");
         }
