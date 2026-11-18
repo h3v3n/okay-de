@@ -84,6 +84,8 @@ enum KeyAction {
     AdShieldTypeChar(char),
     AdShieldBackspace,
     AdShieldUnfocus,
+    ClipboardTypeChar(char),
+    ClipboardBackspace,
     CloseAnyOverlay,
     ExitCompositor,
 }
@@ -439,6 +441,18 @@ fn handle_keyboard_event<I: InputBackend>(state: &mut OkayState, event: I::Keybo
                 }
             }
 
+            // Clipboard search typing when Super+V popup is open
+            if state.overlays.clipboard_open && !modifiers.logo && !modifiers.ctrl && !modifiers.alt {
+                if raw_u32 == keysyms::KEY_BackSpace {
+                    return FilterResult::Intercept(KeyAction::ClipboardBackspace);
+                }
+                if (0x20..=0x7e).contains(&raw_u32) {
+                    if let Some(ch) = char::from_u32(raw_u32) {
+                        return FilterResult::Intercept(KeyAction::ClipboardTypeChar(ch));
+                    }
+                }
+            }
+
             // Escape closes active compositor overlays / popovers
             if raw_u32 == keysyms::KEY_Escape
                 && (state.overlays.overview_open
@@ -676,9 +690,20 @@ fn execute_key_action(state: &mut OkayState, action: KeyAction) {
         KeyAction::AdShieldUnfocus => {
             state.settings.adshield_input_focused = false;
         }
+        KeyAction::ClipboardTypeChar(ch) => {
+            if ch != '\0' && state.overlays.clipboard_search.chars().count() < 64 {
+                state.overlays.clipboard_search.push(ch);
+            }
+        }
+        KeyAction::ClipboardBackspace => {
+            state.overlays.clipboard_search.pop();
+        }
         KeyAction::CloseAnyOverlay => {
             state.overlays.overview_open = false;
             state.overlays.clipboard_open = false;
+            state.overlays.clipboard_search.clear();
+            state.overlays.sysmon_popup_open = false;
+            state.overlays.color_picker_active = false;
             state.overlays.window_context_menu = None;
             state.overlays.context_menu_pos = None;
             state.overlays.icon_context_menu = None;
@@ -792,7 +817,7 @@ fn move_pointer_to(state: &mut OkayState, pos: Point<f64, Logical>, time_msec: u
                 if !state.workspaces.is_fullscreen(&window) {
                     let win_geo = window.geometry();
                     let top_bar_h = if state.panel.dock_mode || state.panel.panel_top {
-                        crate::panel::PANEL_HEIGHT
+                        state.panel.topbar_h()
                     } else {
                         0
                     };
@@ -850,7 +875,7 @@ fn move_pointer_to(state: &mut OkayState, pos: Point<f64, Logical>, time_msec: u
                     if !state.workspaces.is_fullscreen(&window) {
                         let win_geo = window.geometry();
                         let top_bar_h = if state.panel.dock_mode || state.panel.panel_top {
-                            crate::panel::PANEL_HEIGHT
+                            state.panel.topbar_h()
                         } else {
                             0
                         };
@@ -966,6 +991,53 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
                 .get_keyboard()
                 .map(|k| k.modifier_state().logo)
                 .unwrap_or(false);
+
+        // Color Picker mode takes priority on click
+        if state.overlays.color_picker_active {
+            if button == 0x110 {
+                state.pending_color_pick = Some(Point::from((pos.x.round() as i32, pos.y.round() as i32)));
+                state.overlays.color_picker_active = false;
+                return;
+            } else if button == 0x111 {
+                state.overlays.color_picker_active = false;
+                return;
+            }
+        }
+
+        // Middle-click (0x112) Pro-User Topbar shortcuts:
+        // - Volume icon -> toggle Mute
+        // - Clock -> toggle Do Not Disturb (DND)
+        if button == 0x112 {
+            let px = pos.x.round() as i32;
+            let py = pos.y.round() as i32;
+            if let Some(vr) = state.panel.topbar_volume_rect {
+                if crate::panel::rect_contains(vr, px, py) {
+                    state.panel.toggle_mute();
+                    let val = if state.panel.volume_muted {
+                        "Muted".to_string()
+                    } else {
+                        format!("{}%", state.panel.volume_percent)
+                    };
+                    state.overlays.show_osd(
+                        "Volume",
+                        &val,
+                        if state.panel.volume_muted { Some(0) } else { Some(state.panel.volume_percent) },
+                    );
+                    return;
+                }
+            }
+            if let Some(cr) = state.panel.topbar_clock_rect {
+                if crate::panel::rect_contains(cr, px, py) {
+                    state.overlays.dnd_enabled = !state.overlays.dnd_enabled;
+                    state.overlays.show_osd(
+                        "Do Not Disturb",
+                        if state.overlays.dnd_enabled { "Enabled" } else { "Disabled" },
+                        None,
+                    );
+                    return;
+                }
+            }
+        }
 
         // Interactive Area Screenshot mode takes priority over all clicks
         if state.overlays.screenshot_selecting {
@@ -1157,6 +1229,65 @@ fn handle_pointer_axis<I: InputBackend>(state: &mut OkayState, event: I::Pointer
     let vertical_amount = event.amount(Axis::Vertical).unwrap_or_else(|| {
         event.amount_v120(Axis::Vertical).unwrap_or(0.0) * 15.0 / 120.0
     }) * dir;
+
+    // Pro-User Scroll Gestures on Topbar & Dock
+    let raw_v = event.amount(Axis::Vertical).unwrap_or_else(|| {
+        event.amount_v120(Axis::Vertical).unwrap_or(0.0) * 15.0 / 120.0
+    });
+    if raw_v.abs() > 0.01 {
+        let step_sign = if raw_v < 0.0 { 1 } else { -1 };
+        let px = state.pointer_location.x.round() as i32;
+        let py = state.pointer_location.y.round() as i32;
+        let ctrl_held = state
+            .seat
+            .get_keyboard()
+            .map(|k| k.modifier_state().ctrl)
+            .unwrap_or(false);
+
+        if ctrl_held {
+            if let Some(dr) = state.panel.dock_area_rect {
+                if crate::panel::rect_contains(dr, px, py) {
+                    state.panel.dock_icon_size = (state.panel.dock_icon_size + step_sign * 2).clamp(28, 64);
+                    state.retile_workspace();
+                    state.blur_dirty = true;
+                    state.panel.save_full_config(
+                        state.pointer_sensitivity,
+                        state.natural_scroll,
+                        state.animations.enabled,
+                        state.animations.speed,
+                        state.animations.minimize_effect,
+                        &state.settings.xkb_layout,
+                    );
+                    state.overlays.show_osd(
+                        "Dock Size",
+                        &format!("{} px", state.panel.dock_icon_size),
+                        None,
+                    );
+                    return;
+                }
+            }
+        }
+
+        if let Some(vr) = state.panel.topbar_volume_rect {
+            if crate::panel::rect_contains(vr, px, py) {
+                let next_v = (state.panel.volume_percent + step_sign * 5).clamp(0, 100);
+                state.panel.set_volume(next_v);
+                state.overlays.show_osd("Volume", &format!("{}%", next_v), Some(next_v));
+                return;
+            }
+        }
+        if let Some(br) = state.panel.topbar_brightness_rect {
+            if crate::panel::rect_contains(br, px, py) {
+                state.panel.adjust_brightness(step_sign * 5);
+                state.overlays.show_osd(
+                    "Brightness",
+                    &format!("{}%", state.panel.brightness_percent),
+                    Some(state.panel.brightness_percent),
+                );
+                return;
+            }
+        }
+    }
     let horizontal_discrete = event.amount_v120(Axis::Horizontal).map(|v| v * dir);
     let vertical_discrete = event.amount_v120(Axis::Vertical).map(|v| v * dir);
 

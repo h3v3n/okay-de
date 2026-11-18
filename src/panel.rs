@@ -298,6 +298,9 @@ enum ClickTarget {
     PowerShutdown,
     PowerExit,
     OpenAdShieldSettings,
+    ToggleCaffeine,
+    StartColorPicker,
+    ToggleSysMonPopup,
 }
 
 #[derive(Debug)]
@@ -306,6 +309,11 @@ pub struct PanelState {
     pub show_workspaces: bool,
     pub dock_mode: bool,
     pub panel_top: bool,
+    pub topbar_height: i32,
+    pub dock_icon_size: i32,
+    pub dock_padding: i32,
+    pub dock_autohide: bool,
+    pub target_refresh_hz: u32,
     pub accent_preset: usize,
     pub dynamic_accent: bool,
     pub m3_expressive: bool,
@@ -326,6 +334,10 @@ pub struct PanelState {
     pub default_file_manager: String,
     pub volume_percent: i32,
     pub volume_muted: bool,
+    pub brightness_percent: i32,
+    pub caffeine_enabled: bool,
+    pub cpu_usage_pct: u32,
+    pub ram_usage_pct: u32,
     pub battery_percent: Option<i32>,
     pub autostart_cmds: Vec<String>,
     pub lock_pin: String,
@@ -333,6 +345,11 @@ pub struct PanelState {
     pub pointer_accel_disabled: bool,
     pub adshield_whitelist: Vec<String>,
     pub adshield_blacklist: Vec<String>,
+    pub topbar_volume_rect: Option<Rectangle<i32, Logical>>,
+    pub topbar_brightness_rect: Option<Rectangle<i32, Logical>>,
+    pub topbar_clock_rect: Option<Rectangle<i32, Logical>>,
+    pub topbar_sysmon_rect: Option<Rectangle<i32, Logical>>,
+    pub dock_area_rect: Option<Rectangle<i32, Logical>>,
     hit_regions: Vec<(Rectangle<i32, Logical>, ClickTarget)>,
     right_hit_regions: Vec<(Rectangle<i32, Logical>, PinContextAction)>,
 }
@@ -344,6 +361,11 @@ impl Default for PanelState {
             show_workspaces: true,
             dock_mode: true,
             panel_top: true,
+            topbar_height: 32,
+            dock_icon_size: 44,
+            dock_padding: 8,
+            dock_autohide: false,
+            target_refresh_hz: 0,
             accent_preset: 1,
             dynamic_accent: false,
             m3_expressive: false,
@@ -364,6 +386,10 @@ impl Default for PanelState {
             default_file_manager: "thunar".to_string(),
             volume_percent: 75,
             volume_muted: false,
+            brightness_percent: 80,
+            caffeine_enabled: false,
+            cpu_usage_pct: 0,
+            ram_usage_pct: 0,
             battery_percent: None,
             autostart_cmds: Vec::new(),
             lock_pin: String::new(),
@@ -371,6 +397,11 @@ impl Default for PanelState {
             pointer_accel_disabled: false,
             adshield_whitelist: Vec::new(),
             adshield_blacklist: Vec::new(),
+            topbar_volume_rect: None,
+            topbar_brightness_rect: None,
+            topbar_clock_rect: None,
+            topbar_sysmon_rect: None,
+            dock_area_rect: None,
             hit_regions: Vec::new(),
             right_hit_regions: Vec::new(),
         }
@@ -389,6 +420,28 @@ pub struct LoadedUserConfig {
 }
 
 impl PanelState {
+    pub fn topbar_h(&self) -> i32 {
+        self.topbar_height.clamp(24, 48)
+    }
+
+    pub fn dock_icon_sz(&self) -> i32 {
+        self.dock_icon_size.clamp(28, 64)
+    }
+
+    pub fn dock_pad(&self) -> i32 {
+        self.dock_padding.clamp(4, 16)
+    }
+
+    pub fn dock_h(&self) -> i32 {
+        self.dock_icon_sz() + self.dock_pad() * 2
+    }
+
+    pub fn adjust_brightness(&mut self, delta: i32) {
+        self.brightness_percent = (self.brightness_percent + delta).clamp(5, 100);
+        crate::worker::dispatch(crate::worker::WorkerRequest::SetBrightness {
+            percent: self.brightness_percent,
+        });
+    }
     pub fn new() -> Self {
         let mut s = Self::default();
         let _ = s.load_config_file();
@@ -512,6 +565,27 @@ impl PanelState {
                 match key {
                     "dock_mode" => self.dock_mode = true,
                     "panel_top" => self.panel_top = val == "true",
+                    "topbar_height" => {
+                        if let Ok(h) = val.parse::<i32>() {
+                            self.topbar_height = h.clamp(24, 48);
+                        }
+                    }
+                    "dock_icon_size" => {
+                        if let Ok(s) = val.parse::<i32>() {
+                            self.dock_icon_size = s.clamp(28, 64);
+                        }
+                    }
+                    "dock_padding" => {
+                        if let Ok(p) = val.parse::<i32>() {
+                            self.dock_padding = p.clamp(4, 16);
+                        }
+                    }
+                    "dock_autohide" => self.dock_autohide = val == "true",
+                    "target_refresh_hz" => {
+                        if let Ok(hz) = val.parse::<u32>() {
+                            self.target_refresh_hz = hz;
+                        }
+                    }
                     "show_workspaces" => self.show_workspaces = val != "false",
                     "accent_preset" => {
                         if let Ok(idx) = val.parse::<usize>() {
@@ -655,6 +729,11 @@ impl PanelState {
         );
         body.push_str(&format!("appearance_mode = \"{}\"\n", self.appearance_mode.as_config_str()));
         body.push_str(&format!("light_mode = {}\n", self.light_mode));
+        body.push_str(&format!("topbar_height = {}\n", self.topbar_h()));
+        body.push_str(&format!("dock_icon_size = {}\n", self.dock_icon_sz()));
+        body.push_str(&format!("dock_padding = {}\n", self.dock_pad()));
+        body.push_str(&format!("dock_autohide = {}\n", self.dock_autohide));
+        body.push_str(&format!("target_refresh_hz = {}\n", self.target_refresh_hz));
         body.push_str(&format!("adshield_enabled = {}\n", self.adshield_enabled));
         body.push_str(&format!("pointer_accel_disabled = {}\n", self.pointer_accel_disabled));
         for d in &self.adshield_whitelist {
@@ -1076,6 +1155,22 @@ pub fn handle_panel_click(state: &mut OkayState, global_pos: Point<f64, Logical>
                     if state.panel.volume_muted { Some(0) } else { Some(state.panel.volume_percent) },
                 );
             }
+            ClickTarget::ToggleCaffeine => {
+                state.toggle_caffeine();
+            }
+            ClickTarget::StartColorPicker => {
+                state.panel.launcher_open = false;
+                state.panel.top_bar_menu = None;
+                state.panel.tray_open = false;
+                state.overlays.color_picker_active = true;
+                state.overlays.show_osd("Color Picker", "Click any pixel to copy #RRGGBB", None);
+            }
+            ClickTarget::ToggleSysMonPopup => {
+                state.overlays.sysmon_popup_open = !state.overlays.sysmon_popup_open;
+                if state.overlays.sysmon_popup_open {
+                    crate::worker::dispatch(crate::worker::WorkerRequest::RefreshTopProcesses);
+                }
+            }
             ClickTarget::ToggleTiling => {
                 state.panel.launcher_open = false;
                 state.toggle_tiling();
@@ -1264,7 +1359,8 @@ pub fn render_panel_elements(
     let Some(output_geo) = state.space.output_geometry(output) else {
         return Vec::new();
     };
-    if output_geo.size.w <= 0 || output_geo.size.h <= PANEL_HEIGHT + 12 {
+    let topbar_h = state.panel.topbar_h();
+    if output_geo.size.w <= 0 || output_geo.size.h <= topbar_h + 12 {
         return Vec::new();
     }
 
@@ -1277,6 +1373,11 @@ pub fn render_panel_elements(
     if is_primary {
         state.panel.hit_regions.clear();
         state.panel.right_hit_regions.clear();
+        state.panel.topbar_volume_rect = None;
+        state.panel.topbar_brightness_rect = None;
+        state.panel.topbar_clock_rect = None;
+        state.panel.topbar_sysmon_rect = None;
+        state.panel.dock_area_rect = None;
     }
 
     let accent = state.panel.accent_rgb();
@@ -1336,7 +1437,9 @@ pub fn render_panel_elements(
         //   B. Bottom Floating Dock (18px rounded glass pill + squircles + parabolic zoom)
         // ====================================================================
         let mb_w = output_geo.size.w;
-        let mb_h = PANEL_HEIGHT;
+        let mb_h = topbar_h;
+        let font_sz = (mb_h as f32 * 0.39).clamp(10.5, 14.5);
+        let text_y = (mb_h - 14) / 2;
         let mut mb = Canvas::new(mb_w, mb_h);
 
         match pal.appearance_mode {
@@ -1485,22 +1588,36 @@ pub fn render_panel_elements(
         }
 
         // Right-side macOS Status Pills & Live Clock (`Day DD Mon HH:MM`)
-        let clock_str = current_macos_clock();
-        let clock_w = (mb.measure_text_px(&clock_str, 12.0) + 20).max(120);
+        let clock_str = if state.overlays.dnd_enabled {
+            format!("{} · DND", current_macos_clock())
+        } else {
+            current_macos_clock()
+        };
+        let clock_w = (mb.measure_text_px(&clock_str, font_sz) + 20).max(120);
         let clock_x = (mb_w - clock_w - 10).max(mx + 8);
         let clock_global = Rectangle::new(
             (output_geo.loc.x + clock_x, output_geo.loc.y + 3).into(),
             (clock_w, mb_h - 6).into(),
         );
+        if is_primary {
+            state.panel.topbar_clock_rect = Some(clock_global);
+        }
         let clock_bg = if state.overlays.calendar_open {
             [accent[0], accent[1], accent[2], 74]
+        } else if state.overlays.dnd_enabled {
+            [16, 185, 129, 78]
         } else if rect_contains(clock_global, pointer_x, pointer_y) {
             pill_hov
         } else {
             pill_bg
         };
-        mb.fill_rounded_rect_aa(clock_x, 4, clock_w, mb_h - 8, 6, clock_bg);
-        mb.draw_text_px(clock_x + 10, 7, &clock_str, 12.0, fg_prim);
+        mb.fill_rounded_rect_aa(clock_x, 3, clock_w, mb_h - 6, 6, clock_bg);
+        let clock_fg = if state.overlays.dnd_enabled {
+            if pal.light_mode { [6, 120, 82, 255] } else { [110, 231, 183, 255] }
+        } else {
+            fg_prim
+        };
+        mb.draw_text_px(clock_x + 10, text_y, &clock_str, font_sz, clock_fg);
         state
             .panel
             .hit_regions
@@ -1520,7 +1637,7 @@ pub fn render_panel_elements(
         } else {
             pill_bg
         };
-        mb.fill_rounded_rect_aa(notif_x, 4, notif_w, mb_h - 8, 6, notif_bg);
+        mb.fill_rounded_rect_aa(notif_x, 3, notif_w, mb_h - 6, 6, notif_bg);
         crate::icons::draw_bell_glyph(
             &mut mb,
             (notif_x + notif_w / 2) as f32,
@@ -1555,27 +1672,28 @@ pub fn render_panel_elements(
         } else {
             pill_bg
         };
-        mb.fill_rounded_rect_aa(cc_x, 4, cc_w, mb_h - 8, 6, cc_bg);
-        mb.fill_rounded_rect_aa(cc_x + 7, 9, 16, 4, 2, fg_prim);
-        mb.fill_circle_aa((cc_x + 19) as f32, 11.0, 2.5, fg_prim);
-        mb.fill_rounded_rect_aa(cc_x + 7, 16, 16, 4, 2, fg_sec);
-        mb.fill_circle_aa((cc_x + 11) as f32, 18.0, 2.5, fg_prim);
+        mb.fill_rounded_rect_aa(cc_x, 3, cc_w, mb_h - 6, 6, cc_bg);
+        let cc_cy = mb_h / 2;
+        mb.fill_rounded_rect_aa(cc_x + 7, cc_cy - 5, 16, 4, 2, fg_prim);
+        mb.fill_circle_aa((cc_x + 19) as f32, (cc_cy - 3) as f32, 2.5, fg_prim);
+        mb.fill_rounded_rect_aa(cc_x + 7, cc_cy + 2, 16, 4, 2, fg_sec);
+        mb.fill_circle_aa((cc_x + 11) as f32, (cc_cy + 4) as f32, 2.5, fg_prim);
         state
             .panel
             .hit_regions
             .push((cc_global, ClickTarget::ToggleControlCenter));
 
-        // Volume / Battery status pill with vector speaker + battery icons
+        // Volume / Battery status pill with vector speaker + battery icons (Scroll = +/-5%, MidClick = Mute)
         let vol_txt = if state.panel.volume_muted {
             "Mute".to_string()
         } else {
             format!("{}%", state.panel.volume_percent)
         };
-        let vol_txt_w = mb.measure_text_px(&vol_txt, 11.5);
+        let vol_txt_w = mb.measure_text_px(&vol_txt, font_sz);
         let bat_txt = state.panel.battery_percent.map(|b| format!("{}%", b));
         let bat_extra_w = bat_txt
             .as_ref()
-            .map(|t| 24 + mb.measure_text_px(t, 11.5))
+            .map(|t| 24 + mb.measure_text_px(t, font_sz))
             .unwrap_or(0);
         let vol_w = 24 + vol_txt_w + bat_extra_w + 10;
         let vol_x = cc_x - vol_w - 6;
@@ -1583,12 +1701,15 @@ pub fn render_panel_elements(
             (output_geo.loc.x + vol_x, output_geo.loc.y + 3).into(),
             (vol_w, mb_h - 6).into(),
         );
+        if is_primary {
+            state.panel.topbar_volume_rect = Some(vol_global);
+        }
         let vol_bg = if rect_contains(vol_global, pointer_x, pointer_y) {
             pill_hov
         } else {
             pill_bg
         };
-        mb.fill_rounded_rect_aa(vol_x, 4, vol_w, mb_h - 8, 6, vol_bg);
+        mb.fill_rounded_rect_aa(vol_x, 3, vol_w, mb_h - 6, 6, vol_bg);
         crate::icons::draw_speaker_glyph(
             &mut mb,
             (vol_x + 7) as f32,
@@ -1597,20 +1718,111 @@ pub fn render_panel_elements(
             0.9,
             fg_prim,
         );
-        mb.draw_text_px(vol_x + 25, 7, &vol_txt, 11.5, fg_prim);
+        mb.draw_text_px(vol_x + 25, text_y, &vol_txt, font_sz, fg_prim);
         if let (Some(bat_pct), Some(b_str)) = (state.panel.battery_percent, bat_txt) {
             let bx = vol_x + 25 + vol_txt_w + 8;
             crate::icons::draw_battery_glyph(&mut mb, bx, mb_h / 2, bat_pct, fg_prim);
-            mb.draw_text_px(bx + 20, 7, &b_str, 11.5, fg_prim);
+            mb.draw_text_px(bx + 20, text_y, &b_str, font_sz, fg_prim);
         }
         state
             .panel
             .hit_regions
             .push((vol_global, ClickTarget::ToggleMute));
 
+        // Brightness pill (Scroll over icon adjusts screen brightness +/-5%)
+        let bri_txt = format!("B:{}%", state.panel.brightness_percent);
+        let bri_w = (mb.measure_text_px(&bri_txt, font_sz) + 14).max(48);
+        let bri_x = vol_x - bri_w - 6;
+        let bri_global = Rectangle::new(
+            (output_geo.loc.x + bri_x, output_geo.loc.y + 3).into(),
+            (bri_w, mb_h - 6).into(),
+        );
+        if is_primary {
+            state.panel.topbar_brightness_rect = Some(bri_global);
+        }
+        let bri_bg = if rect_contains(bri_global, pointer_x, pointer_y) {
+            pill_hov
+        } else {
+            pill_bg
+        };
+        mb.fill_rounded_rect_aa(bri_x, 3, bri_w, mb_h - 6, 6, bri_bg);
+        mb.draw_text_px(bri_x + 7, text_y, &bri_txt, font_sz, fg_prim);
+
+        // Caffeine / Presentation Mode toggle pill
+        let caf_w = 34;
+        let caf_x = bri_x - caf_w - 6;
+        let caf_global = Rectangle::new(
+            (output_geo.loc.x + caf_x, output_geo.loc.y + 3).into(),
+            (caf_w, mb_h - 6).into(),
+        );
+        let caf_bg = if state.panel.caffeine_enabled {
+            [16, 185, 129, 110]
+        } else if rect_contains(caf_global, pointer_x, pointer_y) {
+            pill_hov
+        } else {
+            pill_bg
+        };
+        mb.fill_rounded_rect_aa(caf_x, 3, caf_w, mb_h - 6, 6, caf_bg);
+        let caf_fg = if state.panel.caffeine_enabled {
+            if pal.light_mode { [6, 120, 82, 255] } else { [167, 243, 208, 255] }
+        } else {
+            fg_sec
+        };
+        mb.draw_text_px(caf_x + 7, text_y, "Caf", font_sz, caf_fg);
+        state
+            .panel
+            .hit_regions
+            .push((caf_global, ClickTarget::ToggleCaffeine));
+
+        // Color Picker (Pipette HEX) button
+        let pick_w = 34;
+        let pick_x = caf_x - pick_w - 6;
+        let pick_global = Rectangle::new(
+            (output_geo.loc.x + pick_x, output_geo.loc.y + 3).into(),
+            (pick_w, mb_h - 6).into(),
+        );
+        let pick_bg = if state.overlays.color_picker_active {
+            [16, 185, 129, 130]
+        } else if rect_contains(pick_global, pointer_x, pointer_y) {
+            pill_hov
+        } else {
+            pill_bg
+        };
+        mb.fill_rounded_rect_aa(pick_x, 3, pick_w, mb_h - 6, 6, pick_bg);
+        mb.draw_text_px(pick_x + 6, text_y, "Hex", font_sz, fg_prim);
+        state
+            .panel
+            .hit_regions
+            .push((pick_global, ClickTarget::StartColorPicker));
+
+        // Interactive CPU / RAM pill (Click opens Top 5 Processes + Kill)
+        let sys_txt = format!("C:{}% R:{}%", state.panel.cpu_usage_pct, state.panel.ram_usage_pct);
+        let sys_w = (mb.measure_text_px(&sys_txt, font_sz) + 14).max(76);
+        let sys_x = pick_x - sys_w - 6;
+        let sys_global = Rectangle::new(
+            (output_geo.loc.x + sys_x, output_geo.loc.y + 3).into(),
+            (sys_w, mb_h - 6).into(),
+        );
+        if is_primary {
+            state.panel.topbar_sysmon_rect = Some(sys_global);
+        }
+        let sys_bg = if state.overlays.sysmon_popup_open {
+            [accent[0], accent[1], accent[2], 78]
+        } else if rect_contains(sys_global, pointer_x, pointer_y) {
+            pill_hov
+        } else {
+            pill_bg
+        };
+        mb.fill_rounded_rect_aa(sys_x, 3, sys_w, mb_h - 6, 6, sys_bg);
+        mb.draw_text_px(sys_x + 7, text_y, &sys_txt, font_sz, fg_prim);
+        state
+            .panel
+            .hit_regions
+            .push((sys_global, ClickTarget::ToggleSysMonPopup));
+
         // Background Apps / Tray Chevron Arrow (`^` / `v`)
         let tray_w = 28;
-        let tray_x = vol_x - tray_w - 6;
+        let tray_x = sys_x - tray_w - 6;
         let tray_global = Rectangle::new(
             (output_geo.loc.x + tray_x, output_geo.loc.y + 3).into(),
             (tray_w, mb_h - 6).into(),
@@ -1742,7 +1954,7 @@ pub fn render_panel_elements(
             let visible_rows = bg_rows.len().clamp(1, 7);
             let th = 50 + visible_rows as i32 * 36;
             let tx = (tray_x + tray_w / 2 - tw / 2).clamp(8, (output_geo.size.w - tw - 8).max(8));
-            let ty = PANEL_HEIGHT + 6;
+            let ty = topbar_h + 6;
             let mut tcan = Canvas::new(tw, th);
             tcan.fill_frosted_backdrop_panel(0, 0, tw, th, 16);
             tcan.draw_text_px(14, 12, "Background & Running Apps", 13.5, fg_prim);
@@ -1881,8 +2093,11 @@ pub fn render_panel_elements(
         .collect();
 
         let custom_pinned = state.panel.custom_pinned.clone();
-        let base_icon = 42;
-        let icon_gap = 10;
+        let base_icon = state.panel.dock_icon_sz();
+        let dock_pad_y = state.panel.dock_pad();
+        let dock_h = state.panel.dock_h();
+        let dock_radius = (dock_h / 3).clamp(12, 24);
+        let icon_gap = (base_icon / 5).clamp(6, 14);
         let divider_w = if ws_windows.is_empty() { 0 } else { 18 };
         let dock_pad_x = 16;
         let total_icons = pinned_apps.len() + custom_pinned.len() + ws_windows.len();
@@ -1894,9 +2109,9 @@ pub fn render_panel_elements(
             + (total_icons as i32 - 1).max(0) * icon_gap
             + divider_w)
             .clamp(min_dock_w, max_dock_w);
-        let dock_headroom = 26;
+        let dock_headroom = (base_icon / 2).clamp(20, 34);
         let base_canvas_x_local = (output_geo.size.w - (base_pill_w + 40)) / 2;
-        let dock_pill_y_local = output_geo.size.h - DOCK_HEIGHT - DOCK_MARGIN;
+        let dock_pill_y_local = output_geo.size.h - dock_h - DOCK_MARGIN;
         let dock_canvas_y_local = dock_pill_y_local - dock_headroom;
 
         let dock_zone_y = output_geo.loc.y + dock_pill_y_local - 24;
@@ -1908,7 +2123,8 @@ pub fn render_panel_elements(
             .space
             .elements()
             .any(|w| state.workspaces.is_visible(w) && state.workspaces.is_maximized(w));
-        if has_maximized {
+        let should_autohide = has_maximized || state.panel.dock_autohide;
+        if should_autohide {
             if pointer_y >= output_geo.loc.y + output_geo.size.h - 4 {
                 state.panel.dock_auto_revealed = true;
             } else if !pointer_near_dock
@@ -1920,7 +2136,7 @@ pub fn render_panel_elements(
         } else {
             state.panel.dock_auto_revealed = false;
         }
-        let dock_visible = !has_maximized || state.panel.dock_auto_revealed;
+        let dock_visible = !should_autohide || state.panel.dock_auto_revealed;
 
         if dock_visible {
 
@@ -1966,19 +2182,27 @@ pub fn render_panel_elements(
 
         // Extra canvas headroom above the pill so parabolic hover magnification & bounce never clip
         let dock_canvas_w = dock_pill_w + 40;
-        let dock_canvas_h = DOCK_HEIGHT + dock_headroom;
+        let dock_canvas_h = dock_h + dock_headroom;
         let dock_pill_x_in_canvas = 20;
         let dock_pill_y_in_canvas = dock_headroom;
         let dock_canvas_x_local = (output_geo.size.w - dock_canvas_w) / 2;
 
         if is_primary {
-            state.animations.dock_center_rect = Some(Rectangle::new(
+            state.panel.dock_area_rect = Some(Rectangle::new(
                 (
-                    output_geo.loc.x + dock_canvas_x_local + dock_canvas_w / 2 - 21,
-                    output_geo.loc.y + dock_pill_y_local + 8,
+                    output_geo.loc.x + dock_canvas_x_local + dock_pill_x_in_canvas,
+                    output_geo.loc.y + dock_pill_y_local,
                 )
                     .into(),
-                (42, 42).into(),
+                (dock_pill_w, dock_h).into(),
+            ));
+            state.animations.dock_center_rect = Some(Rectangle::new(
+                (
+                    output_geo.loc.x + dock_canvas_x_local + dock_canvas_w / 2 - base_icon / 2,
+                    output_geo.loc.y + dock_pill_y_local + dock_pad_y,
+                )
+                    .into(),
+                (base_icon, base_icon).into(),
             ));
         }
 
@@ -1987,8 +2211,8 @@ pub fn render_panel_elements(
             dock_pill_x_in_canvas,
             dock_pill_y_in_canvas,
             dock_pill_w,
-            DOCK_HEIGHT,
-            18,
+            dock_h,
+            dock_radius,
         );
 
         let mut dx = dock_pill_x_in_canvas + dock_pad_x;
@@ -1999,7 +2223,7 @@ pub fn render_panel_elements(
             let bounce_key = format!("pin_{}", glyph);
             let bounce_y = state.animations.dock_bounce_offset(&bounce_key);
             let draw_x = dx;
-            let draw_y = dock_pill_y_in_canvas + 8 - (sz - base_icon) - bounce_y;
+            let draw_y = dock_pill_y_in_canvas + dock_pad_y - (sz - base_icon) - bounce_y;
 
             let sys_icon_hint = match item {
                 LauncherItem::FileManager => Some(state.panel.default_file_manager.as_str()),
@@ -2013,7 +2237,7 @@ pub fn render_panel_elements(
             if item == LauncherItem::OkaySettings && state.settings.open {
                 dock.fill_circle_aa(
                     (dx + sz / 2) as f32,
-                    (dock_pill_y_in_canvas + DOCK_HEIGHT - 6) as f32,
+                    (dock_pill_y_in_canvas + dock_h - 5) as f32,
                     2.5,
                     [235, 240, 255, 235],
                 );
@@ -2050,7 +2274,7 @@ pub fn render_panel_elements(
         for (i, app) in custom_pinned.iter().enumerate() {
             let sz = custom_sizes[i];
             let draw_x = dx;
-            let draw_y = dock_pill_y_in_canvas + 8 - (sz - base_icon);
+            let draw_y = dock_pill_y_in_canvas + dock_pad_y - (sz - base_icon);
             let kind = crate::icons::VectorIconKind::from_hint(&app.name, &app.exec, false);
             crate::icons::draw_app_icon(&mut dock, draw_x, draw_y, sz, app.icon_name.as_deref(), kind);
 
@@ -2086,7 +2310,7 @@ pub fn render_panel_elements(
                 dx + 2,
                 dock_pill_y_in_canvas + 12,
                 1,
-                DOCK_HEIGHT - 24,
+                dock_h - 24,
                 [255, 255, 255, 42],
             );
             dx += divider_w;
@@ -2094,7 +2318,7 @@ pub fn render_panel_elements(
             for (idx, (win_id, title, is_focused, is_min)) in ws_windows.iter().enumerate() {
                 let sz = win_sizes[idx];
                 let draw_x = dx;
-                let draw_y = dock_pill_y_in_canvas + 8 - (sz - base_icon);
+                let draw_y = dock_pill_y_in_canvas + dock_pad_y - (sz - base_icon);
 
                 // Always record resting dock icon rect so minimize/unminimize animations
                 // land directly on this app's Dock icon regardless of window position.
@@ -2154,7 +2378,7 @@ pub fn render_panel_elements(
                 };
                 dock.fill_circle_aa(
                     (dx + sz / 2) as f32,
-                    (dock_pill_y_in_canvas + DOCK_HEIGHT - 6) as f32,
+                    (dock_pill_y_in_canvas + dock_h - 5) as f32,
                     if *is_focused { 2.8 } else { 2.2 },
                     dot_col,
                 );
@@ -2200,9 +2424,9 @@ pub fn render_panel_elements(
                 "dock",
                 Rectangle::new(
                     (dock_pill_x_local, dock_pill_y_local).into(),
-                    (dock_pill_w, DOCK_HEIGHT).into(),
+                    (dock_pill_w, dock_h).into(),
                 ),
-                18.0,
+                dock_radius as f32,
                 1.0,
             ) {
                 elements.push(bd_el);
@@ -2214,7 +2438,7 @@ pub fn render_panel_elements(
             let tw = (tmp.measure_text_px(&short_tip, 11.5) + 22).clamp(56, 240);
             let th = 26;
             let tx = (tip_cx - tw / 2).clamp(8, (output_geo.size.w - tw - 8).max(8));
-            let ty = tip_y.max(PANEL_HEIGHT + 8);
+            let ty = tip_y.max(topbar_h + 8);
             let mut tip_canvas = Canvas::new(tw, th);
             tip_canvas.fill_glass_panel(0, 0, tw, th, 8);
             let lw = tip_canvas.measure_text_px(&short_tip, 11.5);
@@ -2278,7 +2502,7 @@ pub fn render_panel_elements(
                 let seps = rows.iter().filter(|(_, _, _, s)| *s).count() as i32;
                 let mh = 20 + rows.len() as i32 * 35 + seps * 10;
                 let mx = anchor_x.clamp(8, (output_geo.size.w - mw - 8).max(8));
-                let my = PANEL_HEIGHT + 8;
+                let my = topbar_h + 8;
                 let mut mcan = Canvas::new(mw, mh);
                 mcan.fill_frosted_backdrop_panel(0, 0, mw, mh, 16);
 
@@ -2575,7 +2799,7 @@ pub fn render_panel_elements(
         let menu_h = MENU_HEADER_HEIGHT + MENU_PADDING + grid_h + MENU_PADDING + MENU_FOOTER_HEIGHT;
         let menu_x = ((output_geo.size.w - menu_w) / 2).max(12);
         let slide_px = ((1.0 - menu_anim) * 18.0).round() as i32;
-        let base_y = ((output_geo.size.h - menu_h) / 2).max(PANEL_HEIGHT + 14);
+        let base_y = ((output_geo.size.h - menu_h) / 2).max(topbar_h + 14);
         let menu_y = base_y - slide_px;
 
         let mut menu_canvas = Canvas::new(menu_w, menu_h);
@@ -2861,7 +3085,7 @@ pub fn render_panel_elements(
             let ch = 46;
             let cx = (pos.x - output_geo.loc.x).clamp(8, (output_geo.size.w - cw - 8).max(8));
             let cy = (pos.y - output_geo.loc.y - ch - 6)
-                .clamp(PANEL_HEIGHT + 6, (output_geo.size.h - ch - 8).max(8));
+                .clamp(topbar_h + 6, (output_geo.size.h - ch - 8).max(8));
 
             let mut ctx = Canvas::new(cw, ch);
             ctx.fill_frosted_backdrop_panel(0, 0, cw, ch, 16);

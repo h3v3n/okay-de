@@ -17,6 +17,14 @@ use crate::{
     state::OkayState,
 };
 
+#[derive(Debug, Clone)]
+pub struct TopProcessEntry {
+    pub pid: i32,
+    pub cpu: String,
+    pub mem: String,
+    pub name: String,
+}
+
 #[derive(Debug)]
 pub enum WorkerRequest {
     LoadIcon {
@@ -71,6 +79,14 @@ pub enum WorkerRequest {
         rgba: Vec<u8>,
     },
     PollPanelStatus,
+    RefreshTopProcesses,
+    KillProcess {
+        pid: i32,
+    },
+    SetBrightness {
+        percent: i32,
+    },
+    RebuildIconCache,
     RunCommand {
         program: String,
         args: Vec<String>,
@@ -105,6 +121,13 @@ pub enum WorkerResponse {
         volume_percent: Option<i32>,
         volume_muted: Option<bool>,
         active_wifi_ssid: Option<String>,
+        cpu_pct: Option<u32>,
+        ram_pct: Option<u32>,
+        brightness_percent: Option<i32>,
+    },
+    TopProcessesRefreshed(Vec<TopProcessEntry>),
+    IconCacheRebuilt {
+        ok: bool,
     },
     ScreenshotDone {
         path: PathBuf,
@@ -187,6 +210,9 @@ pub fn handle_response(state: &mut OkayState, resp: WorkerResponse) {
             volume_percent,
             volume_muted,
             active_wifi_ssid,
+            cpu_pct,
+            ram_pct,
+            brightness_percent,
         } => {
             state.panel.battery_percent = battery_percent;
             if let Some(v) = volume_percent {
@@ -200,6 +226,28 @@ pub fn handle_response(state: &mut OkayState, resp: WorkerResponse) {
             if let Some(ssid) = active_wifi_ssid {
                 state.settings.wifi_status = format!("Connected to {}", ssid);
             }
+            if let Some(cpu) = cpu_pct {
+                state.panel.cpu_usage_pct = cpu;
+            }
+            if let Some(ram) = ram_pct {
+                state.panel.ram_usage_pct = ram;
+            }
+            if let Some(br) = brightness_percent {
+                state.panel.brightness_percent = br.clamp(5, 100);
+            }
+        }
+        WorkerResponse::TopProcessesRefreshed(procs) => {
+            state.overlays.top_processes = procs;
+        }
+        WorkerResponse::IconCacheRebuilt { ok } => {
+            state.overlays.push_notification(
+                "Icon Cache & DE",
+                if ok {
+                    "Rebuilt okay-icons cache & reloaded DE"
+                } else {
+                    "Reloaded DE (gtk-update-icon-cache not found)"
+                },
+            );
         }
         WorkerResponse::ScreenshotDone { path, ok, via_grim } => {
             if ok {
@@ -388,14 +436,47 @@ fn worker_loop(req_rx: mpsc::Receiver<WorkerRequest>, resp_tx: CalloopSender<Wor
                 });
             }
             WorkerRequest::PollPanelStatus => {
-                let (battery_percent, volume_percent, volume_muted, active_wifi_ssid) =
+                let (battery_percent, volume_percent, volume_muted, active_wifi_ssid, cpu_pct, ram_pct, brightness_percent) =
                     poll_panel_status_sync();
                 let _ = resp_tx.send(WorkerResponse::PanelStatusPolled {
                     battery_percent,
                     volume_percent,
                     volume_muted,
                     active_wifi_ssid,
+                    cpu_pct,
+                    ram_pct,
+                    brightness_percent,
                 });
+            }
+            WorkerRequest::RefreshTopProcesses => {
+                let procs = fetch_top_processes_sync();
+                let _ = resp_tx.send(WorkerResponse::TopProcessesRefreshed(procs));
+            }
+            WorkerRequest::KillProcess { pid } => {
+                if pid > 1 {
+                    let _ = Command::new("kill")
+                        .args(["-TERM", &pid.to_string()])
+                        .status();
+                }
+                let procs = fetch_top_processes_sync();
+                let _ = resp_tx.send(WorkerResponse::TopProcessesRefreshed(procs));
+            }
+            WorkerRequest::SetBrightness { percent } => {
+                set_brightness_sync(percent);
+            }
+            WorkerRequest::RebuildIconCache => {
+                let mut ok = false;
+                if let Some(home) = std::env::var_os("HOME") {
+                    let icon_dir = PathBuf::from(home).join(".local/share/icons/okay-icons");
+                    if let Ok(st) = Command::new("gtk-update-icon-cache")
+                        .args(["-f", "-t"])
+                        .arg(&icon_dir)
+                        .status()
+                    {
+                        ok = st.success();
+                    }
+                }
+                let _ = resp_tx.send(WorkerResponse::IconCacheRebuilt { ok });
             }
             WorkerRequest::RunCommand { program, args } => {
                 let _ = Command::new(&program).args(&args).status();
@@ -418,7 +499,15 @@ fn save_rgba_png(path: &PathBuf, width: u32, height: u32, rgba: &[u8]) -> bool {
     writer.write_image_data(rgba).is_ok()
 }
 
-fn poll_panel_status_sync() -> (Option<i32>, Option<i32>, Option<bool>, Option<String>) {
+fn poll_panel_status_sync() -> (
+    Option<i32>,
+    Option<i32>,
+    Option<bool>,
+    Option<String>,
+    Option<u32>,
+    Option<u32>,
+    Option<i32>,
+) {
     let battery_percent = fs::read_dir("/sys/class/power_supply").ok().and_then(|entries| {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -469,5 +558,137 @@ fn poll_panel_status_sync() -> (Option<i32>, Option<i32>, Option<bool>, Option<S
         }
     }
 
-    (battery_percent, volume_percent, volume_muted, active_wifi_ssid)
+    let (cpu_pct, ram_pct) = poll_cpu_ram_sync();
+    let brightness_percent = read_brightness_sync();
+    (
+        battery_percent,
+        volume_percent,
+        volume_muted,
+        active_wifi_ssid,
+        cpu_pct,
+        ram_pct,
+        brightness_percent,
+    )
+}
+
+fn poll_cpu_ram_sync() -> (Option<u32>, Option<u32>) {
+    static PREV_CPU: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
+    let mut cpu_pct = None;
+    if let Ok(stat) = fs::read_to_string("/proc/stat") {
+        if let Some(line) = stat.lines().next() {
+            let nums: Vec<u64> = line
+                .split_whitespace()
+                .skip(1)
+                .filter_map(|s| s.parse::<u64>().ok())
+                .collect();
+            if nums.len() >= 4 {
+                let idle = nums[3] + nums.get(4).copied().unwrap_or(0);
+                let total: u64 = nums.iter().sum();
+                if let Ok(mut prev) = PREV_CPU.lock() {
+                    if let Some((pt, pi)) = *prev {
+                        let dt = total.saturating_sub(pt);
+                        let di = idle.saturating_sub(pi);
+                        if dt > 0 {
+                            cpu_pct = Some((((dt.saturating_sub(di)) * 100) / dt).min(100) as u32);
+                        }
+                    }
+                    *prev = Some((total, idle));
+                }
+            }
+        }
+    }
+
+    let mut ram_pct = None;
+    if let Ok(mem) = fs::read_to_string("/proc/meminfo") {
+        let mut total_kb = 0u64;
+        let mut avail_kb = 0u64;
+        for line in mem.lines() {
+            if let Some(rest) = line.strip_prefix("MemTotal:") {
+                total_kb = rest.split_whitespace().next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            } else if let Some(rest) = line.strip_prefix("MemAvailable:") {
+                avail_kb = rest.split_whitespace().next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            }
+        }
+        if total_kb > 0 {
+            let used = total_kb.saturating_sub(avail_kb);
+            ram_pct = Some(((used * 100) / total_kb).min(100) as u32);
+        }
+    }
+
+    (cpu_pct, ram_pct)
+}
+
+fn read_brightness_sync() -> Option<i32> {
+    let entries = fs::read_dir("/sys/class/backlight").ok()?;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let cur = fs::read_to_string(p.join("brightness"))
+            .ok()
+            .and_then(|s| s.trim().parse::<f64>().ok());
+        let max = fs::read_to_string(p.join("max_brightness"))
+            .ok()
+            .and_then(|s| s.trim().parse::<f64>().ok());
+        if let (Some(c), Some(m)) = (cur, max) {
+            if m > 0.0 {
+                return Some(((c / m) * 100.0).round() as i32);
+            }
+        }
+    }
+    None
+}
+
+fn set_brightness_sync(percent: i32) {
+    let pct = percent.clamp(5, 100);
+    let arg = format!("{}%", pct);
+    if Command::new("brightnessctl")
+        .args(["set", &arg])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    if let Ok(entries) = fs::read_dir("/sys/class/backlight") {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if let Some(max) = fs::read_to_string(p.join("max_brightness"))
+                .ok()
+                .and_then(|s| s.trim().parse::<f64>().ok())
+            {
+                let target = ((max * pct as f64) / 100.0).round().max(1.0) as u64;
+                let _ = fs::write(p.join("brightness"), target.to_string());
+            }
+        }
+    }
+}
+
+fn fetch_top_processes_sync() -> Vec<TopProcessEntry> {
+    let Ok(out) = Command::new("ps")
+        .args(["-eo", "pid,pcpu,pmem,comm", "--sort=-%cpu"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let txt = String::from_utf8_lossy(&out.stdout);
+    let mut list = Vec::new();
+    for line in txt.lines().skip(1) {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 4 {
+            if let Ok(pid) = parts[0].parse::<i32>() {
+                list.push(TopProcessEntry {
+                    pid,
+                    cpu: parts[1].to_string(),
+                    mem: parts[2].to_string(),
+                    name: parts[3..].join(" "),
+                });
+                if list.len() >= 5 {
+                    break;
+                }
+            }
+        }
+    }
+    list
 }

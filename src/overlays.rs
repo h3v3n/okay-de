@@ -22,7 +22,7 @@ use smithay::{
 };
 
 use crate::{
-    panel::{contrast_fg, rect_contains, window_title_str, Canvas, PANEL_HEIGHT},
+    panel::{contrast_fg, rect_contains, window_title_str, Canvas},
     render::OkayRenderElements,
     settings::SettingsTab,
     state::OkayState,
@@ -119,6 +119,11 @@ pub struct OverlaysState {
     pub drag_offset: Point<i32, Logical>,
     pub creating_folder: Option<CreatingFolderState>,
     pub renaming_icon: Option<(usize, String)>,
+    pub dnd_enabled: bool,
+    pub sysmon_popup_open: bool,
+    pub top_processes: Vec<crate::worker::TopProcessEntry>,
+    pub color_picker_active: bool,
+    pub clipboard_search: String,
     hit_regions: Vec<(Rectangle<i32, Logical>, OverlayClick)>,
 }
 
@@ -129,6 +134,8 @@ enum OverlayClick {
     SelectClipboard(usize),
     DeleteClipboard(usize),
     ClearClipboard,
+    KillProcess(i32),
+    CloseSysMon,
     CloseCalendar,
     CalPrevMonth,
     CalNextMonth,
@@ -212,6 +219,11 @@ impl Default for OverlaysState {
             drag_offset: Point::from((0, 0)),
             creating_folder: None,
             renaming_icon: None,
+            dnd_enabled: false,
+            sysmon_popup_open: false,
+            top_processes: Vec::new(),
+            color_picker_active: false,
+            clipboard_search: String::new(),
             hit_regions: Vec::new(),
         };
         s.refresh_desktop_icons();
@@ -381,12 +393,14 @@ impl OverlaysState {
         if self.history.len() > 20 {
             self.history.truncate(20);
         }
-        self.notifications.push(NotificationToast {
-            title: t,
-            body: b,
-            created_at: Instant::now(),
-            timeout: Duration::from_secs(5),
-        });
+        if !self.dnd_enabled {
+            self.notifications.push(NotificationToast {
+                title: t,
+                body: b,
+                created_at: Instant::now(),
+                timeout: Duration::from_secs(5),
+            });
+        }
     }
 
     pub fn refresh_desktop_icons(&mut self) {
@@ -564,8 +578,8 @@ impl OverlaysState {
         if !trimmed.is_empty() && self.clipboard_items.first() != Some(&trimmed) {
             self.clipboard_items.retain(|x| x != &trimmed);
             self.clipboard_items.insert(0, trimmed);
-            if self.clipboard_items.len() > 20 {
-                self.clipboard_items.truncate(20);
+            if self.clipboard_items.len() > 15 {
+                self.clipboard_items.truncate(15);
             }
         }
     }
@@ -898,6 +912,14 @@ pub fn handle_overlays_click(state: &mut OkayState, pos: Point<f64, Logical>) ->
             }
             OverlayClick::ClearClipboard => {
                 state.overlays.clipboard_items.clear();
+                state.overlays.clipboard_search.clear();
+            }
+            OverlayClick::KillProcess(pid) => {
+                crate::worker::dispatch(crate::worker::WorkerRequest::KillProcess { pid });
+                state.overlays.show_osd("Process Killed", &format!("SIGTERM -> PID {}", pid), None);
+            }
+            OverlayClick::CloseSysMon => {
+                state.overlays.sysmon_popup_open = false;
             }
             OverlayClick::CloseCalendar => {
                 state.overlays.calendar_open = false;
@@ -1499,7 +1521,7 @@ pub fn render_top_overlays(
 
         let header = format!("Window Overview  ({} open)  •  Click to focus or Esc to close", wins.len());
         let hw = canvas.measure_text_px(&header, 15.0);
-        canvas.draw_text_px((w - hw) / 2, PANEL_HEIGHT + 24, &header, 15.0, [244, 246, 255, 255]);
+        canvas.draw_text_px((w - hw) / 2, state.panel.topbar_h() + 24, &header, 15.0, [244, 246, 255, 255]);
 
         if wins.is_empty() {
             let empty_msg = "No windows currently open";
@@ -1514,7 +1536,7 @@ pub fn render_top_overlays(
             let total_w = cols * card_w + (cols - 1) * gap;
             let total_h = rows * card_h + (rows - 1) * gap;
             let x0 = (w - total_w) / 2;
-            let y0 = ((h - total_h) / 2).max(PANEL_HEIGHT + 64);
+            let y0 = ((h - total_h) / 2).max(state.panel.topbar_h() + 64);
 
             for (i, (wid, title, ws, is_focused, is_min)) in wins.into_iter().enumerate() {
                 let c = i as i32 % cols;
@@ -1760,7 +1782,7 @@ pub fn render_top_overlays(
         let mw = 236;
         let mh = 224;
         let mx = (menu_pos.x - output_geo.loc.x).clamp(8, (output_geo.size.w - mw - 8).max(8));
-        let my = (menu_pos.y - output_geo.loc.y).clamp(PANEL_HEIGHT + 4, (output_geo.size.h - mh - 8).max(PANEL_HEIGHT + 4));
+        let my = (menu_pos.y - output_geo.loc.y).clamp(state.panel.topbar_h() + 4, (output_geo.size.h - mh - 8).max(state.panel.topbar_h() + 4));
 
         let mut canvas = Canvas::new(mw, mh);
         canvas.fill_frosted_backdrop_panel(0, 0, mw, mh, 16);
@@ -1977,10 +1999,18 @@ pub fn render_top_overlays(
         }
     }
 
-    // 4. Clipboard History Manager (`Super + V`) with Delete & Clear All
+    // 4. Clipboard History Manager (`Super + V`) with Search, Delete & Clear All (last 15 items)
     if state.overlays.clipboard_open {
-        let cw = 400;
-        let ch = 72 + (state.overlays.clipboard_items.len().max(1) as i32 * 36);
+        let q = state.overlays.clipboard_search.trim().to_lowercase();
+        let filtered: Vec<(usize, &String)> = state
+            .overlays
+            .clipboard_items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| q.is_empty() || item.to_lowercase().contains(&q))
+            .collect();
+        let cw = 420;
+        let ch = 108 + (filtered.len().max(1) as i32 * 36).min(15 * 36);
         let cx = (output_geo.size.w - cw) / 2;
         let cy = (output_geo.size.h - ch) / 2;
         let ptr_x = state.pointer_location.x.round() as i32;
@@ -1991,7 +2021,7 @@ pub fn render_top_overlays(
         canvas.draw_text_px(
             16,
             14,
-            "Clipboard History",
+            "Clipboard History (Super+V)",
             14.5,
             fg_prim,
         );
@@ -2012,11 +2042,25 @@ pub fn render_top_overlays(
             .hit_regions
             .push((clear_rect, OverlayClick::ClearClipboard));
 
-        if state.overlays.clipboard_items.is_empty() {
-            canvas.draw_text_px(18, 56, "Clipboard history is empty", 12.5, fg_sec);
+        // Search input box
+        canvas.fill_rounded_rect_aa(12, 42, cw - 24, 28, 8, pill_bg);
+        let search_txt = if state.overlays.clipboard_search.is_empty() {
+            "Type to filter clipboard...".to_string()
         } else {
-            for (idx, item) in state.overlays.clipboard_items.iter().enumerate() {
-                let iy = 48 + idx as i32 * 36;
+            format!("Search: {}", state.overlays.clipboard_search)
+        };
+        let search_col = if state.overlays.clipboard_search.is_empty() {
+            fg_sec
+        } else {
+            fg_prim
+        };
+        canvas.draw_text_px(22, 49, &search_txt, 12.0, search_col);
+
+        if filtered.is_empty() {
+            canvas.draw_text_px(18, 84, "No matching clipboard entries", 12.5, fg_sec);
+        } else {
+            for (row_i, (orig_idx, item)) in filtered.into_iter().take(15).enumerate() {
+                let iy = 78 + row_i as i32 * 36;
                 let row_rect = Rectangle::new(
                     (output_geo.loc.x + cx + 12, output_geo.loc.y + cy + iy).into(),
                     (cw - 52, 30).into(),
@@ -2032,10 +2076,10 @@ pub fn render_top_overlays(
                     pill_bg
                 };
                 canvas.fill_rounded_rect_aa(12, iy, cw - 24, 30, 8, row_bg);
-                if hovered || idx == 0 {
+                if hovered || orig_idx == 0 {
                     canvas.fill_rounded_rect_aa(14, iy + 5, 3, 20, 2, [accent[0], accent[1], accent[2], 235]);
                 }
-                let short: String = item.chars().take(38).collect();
+                let short: String = item.chars().take(40).collect();
                 canvas.draw_text_px(24, iy + 7, &short, 12.5, fg_prim);
 
                 let del_hovered = rect_contains(del_rect, ptr_x, ptr_y);
@@ -2050,11 +2094,11 @@ pub fn render_top_overlays(
                 state
                     .overlays
                     .hit_regions
-                    .push((row_rect, OverlayClick::SelectClipboard(idx)));
+                    .push((row_rect, OverlayClick::SelectClipboard(orig_idx)));
                 state
                     .overlays
                     .hit_regions
-                    .push((del_rect, OverlayClick::DeleteClipboard(idx)));
+                    .push((del_rect, OverlayClick::DeleteClipboard(orig_idx)));
             }
         }
 
@@ -2075,13 +2119,81 @@ pub fn render_top_overlays(
         }
     }
 
+    // 4b. Topbar CPU / RAM Top-5 Processes Popup with Quick Kill
+    if state.overlays.sysmon_popup_open {
+        let sw = 360;
+        let rows = state.overlays.top_processes.len().max(1) as i32;
+        let sh_h = 62 + rows * 34;
+        let sx = (output_geo.size.w - sw - 120).max(16);
+        let sy = state.panel.topbar_h() + 8;
+        let ptr_x = state.pointer_location.x.round() as i32;
+        let ptr_y = state.pointer_location.y.round() as i32;
+
+        let mut canvas = Canvas::new(sw, sh_h);
+        canvas.fill_frosted_backdrop_panel(0, 0, sw, sh_h, 16);
+        let hdr = format!(
+            "Top Processes (CPU {}% · RAM {}%)",
+            state.panel.cpu_usage_pct, state.panel.ram_usage_pct
+        );
+        canvas.draw_text_px(14, 14, &hdr, 13.5, fg_prim);
+
+        let close_r = Rectangle::new(
+            (output_geo.loc.x + sx + sw - 34, output_geo.loc.y + sy + 10).into(),
+            (22, 22).into(),
+        );
+        canvas.fill_rounded_rect_aa(sw - 34, 10, 22, 22, 6, pill_bg);
+        canvas.draw_text_px(sw - 27, 14, "x", 11.5, fg_prim);
+        state.overlays.hit_regions.push((close_r, OverlayClick::CloseSysMon));
+
+        if state.overlays.top_processes.is_empty() {
+            canvas.draw_text_px(16, 48, "Loading top processes...", 12.0, fg_sec);
+        } else {
+            for (idx, p) in state.overlays.top_processes.iter().take(5).enumerate() {
+                let ry = 46 + idx as i32 * 34;
+                canvas.fill_rounded_rect_aa(12, ry, sw - 24, 28, 7, pill_bg);
+                let line = format!("{}  CPU:{}%  MEM:{}%", p.name, p.cpu, p.mem);
+                let short: String = line.chars().take(34).collect();
+                canvas.draw_text_px(18, ry + 7, &short, 11.5, fg_prim);
+
+                let kill_r = Rectangle::new(
+                    (output_geo.loc.x + sx + sw - 58, output_geo.loc.y + sy + ry + 3).into(),
+                    (40, 22).into(),
+                );
+                let kbg = if rect_contains(kill_r, ptr_x, ptr_y) {
+                    [225, 76, 92, 220]
+                } else {
+                    [225, 76, 92, 135]
+                };
+                canvas.fill_rounded_rect_aa(sw - 58, ry + 3, 40, 22, 6, kbg);
+                canvas.draw_text_px(sw - 49, ry + 7, "Kill", 11.0, [255, 255, 255, 255]);
+                state.overlays.hit_regions.push((kill_r, OverlayClick::KillProcess(p.pid)));
+            }
+        }
+
+        if let Some(elem) = upload_canvas(&canvas, (sx, sy), renderer, scale) {
+            elements.push(elem);
+            if let Some(sh) = crate::render::panel_backdrop_element(
+                state,
+                renderer,
+                output,
+                scale,
+                "sysmon_popup",
+                Rectangle::new((sx, sy).into(), (sw, sh_h).into()),
+                16.0,
+                1.0,
+            ) {
+                elements.push(sh);
+            }
+        }
+    }
+
     // 5. Real Calendar Popup (leap-year accurate weekday layout + month navigation)
     if state.overlays.calendar_open {
         let cal_w = 286;
         let cal_h = 282;
         let cal_x = (output_geo.size.w - cal_w - 12).max(8);
         let cal_y = if state.panel.dock_mode || state.panel.panel_top {
-            PANEL_HEIGHT + 8
+            state.panel.topbar_h() + 8
         } else {
             (output_geo.size.h - 36 - cal_h - 8).max(8)
         };
@@ -2249,7 +2361,7 @@ pub fn render_top_overlays(
         };
         let nx = (output_geo.size.w - nw - 12).max(8);
         let ny = if state.panel.dock_mode || state.panel.panel_top {
-            PANEL_HEIGHT + 8
+            state.panel.topbar_h() + 8
         } else {
             (output_geo.size.h - 36 - nh - 8).max(8)
         };
@@ -2370,7 +2482,7 @@ pub fn render_top_overlays(
         let cc_h = 301 + extra_h;
         let cc_x = (output_geo.size.w - cc_w - 12).max(8);
         let cc_y = if state.panel.dock_mode || state.panel.panel_top {
-            PANEL_HEIGHT + 8
+            state.panel.topbar_h() + 8
         } else {
             (output_geo.size.h - 36 - cc_h - 8).max(8)
         };
@@ -2666,7 +2778,7 @@ pub fn render_top_overlays(
         let th = 64;
         let tx = (output_geo.size.w - tw - 14).max(8);
         let top_offset = if state.panel.dock_mode || state.panel.panel_top {
-            PANEL_HEIGHT + 12
+            state.panel.topbar_h() + 12
         } else {
             14
         };
@@ -2710,7 +2822,7 @@ pub fn render_top_overlays(
         let ow = 240;
         let oh = if osd.progress.is_some() { 58 } else { 44 };
         let ox = (output_geo.size.w - ow) / 2;
-        let oy = (output_geo.size.h - 140).max(PANEL_HEIGHT + 24);
+        let oy = (output_geo.size.h - 140).max(state.panel.topbar_h() + 24);
         let mut canvas = Canvas::new(ow, oh);
         canvas.fill_frosted_backdrop_panel(0, 0, ow, oh, 14);
         canvas.draw_text_px(16, 12, &osd.title, 12.5, fg_sec);
@@ -2805,7 +2917,7 @@ pub fn render_desktop_icons(
 
     let mut elements = Vec::new();
     let top_margin = if state.panel.dock_mode || state.panel.panel_top {
-        PANEL_HEIGHT + 18
+        state.panel.topbar_h() + 18
     } else {
         20
     };

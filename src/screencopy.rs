@@ -494,3 +494,79 @@ fn copy_region_to_shm(
         Err(_) => false,
     }
 }
+
+/// Captures a single pixel at `state.pending_color_pick` and copies its `#RRGGBB` hex code to clipboard.
+pub fn capture_pixel_color(
+    state: &mut OkayState,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+    scale: Scale<f64>,
+) {
+    let Some(global_pt) = state.pending_color_pick.take() else {
+        return;
+    };
+    let Some(out_geo) = state.space.output_geometry(output) else {
+        return;
+    };
+    let Some(mode) = output.current_mode() else {
+        return;
+    };
+    let out_size = mode.size;
+    if out_size.w <= 0 || out_size.h <= 0 {
+        return;
+    }
+
+    let local_x = ((global_pt.x - out_geo.loc.x) as f64 * scale.x)
+        .round()
+        .clamp(0.0, (out_size.w - 1) as f64) as i32;
+    let local_y = ((global_pt.y - out_geo.loc.y) as f64 * scale.y)
+        .round()
+        .clamp(0.0, (out_size.h - 1) as f64) as i32;
+
+    let elements: Vec<OkayRenderElements> =
+        crate::render::collect_output_elements(state, renderer, output, scale);
+    let clear_color = Color32F::from(state.theme.background_color);
+    let buf_size: Size<i32, BufferCoords> = (out_size.w, out_size.h).into();
+    let Ok(mut tex) = <GlesRenderer as Offscreen<
+        smithay::backend::renderer::gles::GlesTexture,
+    >>::create_buffer(renderer, Fourcc::Abgr8888, buf_size) else {
+        return;
+    };
+
+    {
+        let Ok(mut target) = renderer.bind(&mut tex) else {
+            return;
+        };
+        let Ok(mut frame) = renderer.render(&mut target, out_size, Transform::Normal) else {
+            return;
+        };
+        let dmg = Rectangle::from_size(out_size);
+        let _ = frame.clear(clear_color, &[dmg]);
+        let _ = draw_render_elements(&mut frame, scale, &elements, &[dmg]);
+        if frame.finish().is_err() {
+            return;
+        }
+    }
+
+    let Ok(target) = renderer.bind(&mut tex) else {
+        return;
+    };
+    let region_buf: Rectangle<i32, BufferCoords> =
+        Rectangle::new((local_x, local_y).into(), (1, 1).into());
+    let Ok(mapping) = renderer.copy_framebuffer(&target, region_buf, Fourcc::Abgr8888) else {
+        return;
+    };
+    let Ok(px) = renderer.map_texture(&mapping) else {
+        return;
+    };
+    if px.len() >= 4 {
+        let hex = format!("#{:02X}{:02X}{:02X}", px[0], px[1], px[2]);
+        state.overlays.push_clipboard_text(hex.clone());
+        state.set_compositor_clipboard(hex.clone());
+        state.overlays.push_notification(
+            "Color Picker",
+            &format!("Copied {} to clipboard", hex),
+        );
+        state.overlays.show_osd("Color Picked", &hex, None);
+    }
+}

@@ -325,6 +325,8 @@ pub struct OkayState {
     pub active_clipboard_text: String,
     pub pending_screencopies: Vec<crate::screencopy::PendingScreencopy>,
     pub pending_native_screenshot: Option<(PathBuf, Option<Rectangle<i32, Logical>>)>,
+    pub pending_color_pick: Option<Point<i32, Logical>>,
+    pub caffeine_child: Option<std::process::Child>,
     pub last_titlebar_click: Option<(ObjectId, Instant)>,
     pub last_status_poll: Instant,
 
@@ -450,6 +452,8 @@ impl OkayState {
             active_clipboard_text: String::new(),
             pending_screencopies: Vec::new(),
             pending_native_screenshot: None,
+            pending_color_pick: None,
+            caffeine_child: None,
             last_titlebar_click: None,
             last_status_poll: Instant::now(),
             space: Space::default(),
@@ -663,7 +667,7 @@ impl OkayState {
                 .remove(&id)
                 .unwrap_or_else(|| Rectangle::new((output_geo.loc.x + 80, output_geo.loc.y + 60).into(), (800, 600).into()));
             let top_pad = if self.panel.dock_mode || self.panel.panel_top {
-                crate::panel::PANEL_HEIGHT
+                self.panel.topbar_h()
             } else {
                 0
             };
@@ -686,7 +690,7 @@ impl OkayState {
             }
             self.workspaces.maximized.insert(id);
             let top_pad = if self.panel.dock_mode || self.panel.panel_top {
-                crate::panel::PANEL_HEIGHT
+                self.panel.topbar_h()
             } else {
                 0
             };
@@ -796,13 +800,13 @@ impl OkayState {
     ) -> Rectangle<i32, Logical> {
         let gap = self.panel.window_gaps;
         let top_bar_pad = if self.panel.dock_mode || self.panel.panel_top {
-            crate::panel::PANEL_HEIGHT
+            self.panel.topbar_h()
         } else {
             0
         };
-        let bot_bar_pad = if self.panel.dock_mode {
-            crate::panel::DOCK_HEIGHT + crate::panel::DOCK_MARGIN + 4
-        } else if !self.panel.panel_top {
+        let bot_bar_pad = if self.panel.dock_mode && !self.panel.dock_autohide {
+            self.panel.dock_h() + crate::panel::DOCK_MARGIN + 4
+        } else if !self.panel.dock_mode && !self.panel.panel_top {
             36
         } else {
             0
@@ -849,7 +853,7 @@ impl OkayState {
         let geo = self.space.output_geometry(&out)?;
         let px = pos.x.round() as i32;
         let py = pos.y.round() as i32;
-        let top_thresh = geo.loc.y + crate::panel::PANEL_HEIGHT + 12;
+        let top_thresh = geo.loc.y + self.panel.topbar_h() + 12;
         let left = px <= geo.loc.x + 14;
         let right = px >= geo.loc.x + geo.size.w - 16;
         let top = py <= top_thresh;
@@ -1027,13 +1031,13 @@ impl OkayState {
 
         let gap = self.panel.window_gaps;
         let top_bar_pad = if self.panel.dock_mode || self.panel.panel_top {
-            crate::panel::PANEL_HEIGHT
+            self.panel.topbar_h()
         } else {
             0
         };
-        let bot_bar_pad = if self.panel.dock_mode {
-            crate::panel::DOCK_HEIGHT + crate::panel::DOCK_MARGIN + 4
-        } else if !self.panel.panel_top {
+        let bot_bar_pad = if self.panel.dock_mode && !self.panel.dock_autohide {
+            self.panel.dock_h() + crate::panel::DOCK_MARGIN + 4
+        } else if !self.panel.dock_mode && !self.panel.panel_top {
             36
         } else {
             0
@@ -1260,11 +1264,15 @@ impl OkayState {
             .map(|o| self.effective_work_area(&o))
             .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
         let top_pad = if self.panel.dock_mode || self.panel.panel_top {
-            crate::panel::PANEL_HEIGHT
+            self.panel.topbar_h()
         } else {
             0
         };
-        let bot_pad = crate::panel::DOCK_HEIGHT + crate::panel::DOCK_MARGIN + 4;
+        let bot_pad = if self.panel.dock_mode && !self.panel.dock_autohide {
+            self.panel.dock_h() + crate::panel::DOCK_MARGIN + 4
+        } else {
+            0
+        };
         let win_geo = win.geometry();
         let usable_h = (output_geo.size.h - top_pad - bot_pad).max(160);
         let nx = output_geo.loc.x + (output_geo.size.w - win_geo.size.w) / 2;
@@ -1436,7 +1444,7 @@ impl OkayState {
         let mut y1 = y0 + non_excl.size.h.max(120);
 
         let top_bar = if self.panel.dock_mode || self.panel.panel_top {
-            crate::panel::PANEL_HEIGHT
+            self.panel.topbar_h()
         } else {
             0
         };
@@ -1790,17 +1798,17 @@ impl OkayState {
             .map(|o| self.effective_work_area(&o))
             .unwrap_or_else(|| Rectangle::from_size((1280, 720).into()));
 
-        let usable_h = (output_geo.size.h - crate::panel::PANEL_HEIGHT).max(200);
+        let top_bar_h = if self.panel.dock_mode || self.panel.panel_top {
+            self.panel.topbar_h()
+        } else {
+            0
+        };
+        let usable_h = (output_geo.size.h - top_bar_h).max(200);
         let offset = self.next_spawn_offset;
         self.next_spawn_offset = (self.next_spawn_offset + 32) % 192;
 
         let x = output_geo.loc.x + ((output_geo.size.w - win_size.w) / 2).max(24) + offset - 64;
         let y = output_geo.loc.y + ((usable_h - win_size.h) / 2).max(24 + TITLEBAR_HEIGHT) + offset - 64;
-        let top_bar_h = if self.panel.dock_mode || self.panel.panel_top {
-            crate::panel::PANEL_HEIGHT
-        } else {
-            0
-        };
         let min_y = output_geo.loc.y + top_bar_h + 8 + TITLEBAR_HEIGHT;
         let max_y = (output_geo.loc.y + usable_h - win_size.h - 8).max(min_y);
 
@@ -1808,5 +1816,48 @@ impl OkayState {
             x.max(output_geo.loc.x + 16),
             y.clamp(min_y, max_y),
         ))
+    }
+
+    pub fn toggle_caffeine(&mut self) {
+        if let Some(mut child) = self.caffeine_child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+            self.panel.caffeine_enabled = false;
+            self.overlays.show_osd("Caffeine Mode", "Disabled (Normal Sleep)", None);
+        } else {
+            match std::process::Command::new("systemd-inhibit")
+                .args([
+                    "--what=idle:sleep",
+                    "--who=okay-de",
+                    "--why=Caffeine Presentation Mode",
+                    "sleep",
+                    "infinity",
+                ])
+                .spawn()
+            {
+                Ok(child) => {
+                    self.caffeine_child = Some(child);
+                    self.panel.caffeine_enabled = true;
+                    self.overlays.show_osd("Caffeine Mode", "Enabled (Screen Stay Awake)", None);
+                }
+                Err(_) => {
+                    self.panel.caffeine_enabled = !self.panel.caffeine_enabled;
+                    self.overlays.show_osd(
+                        "Caffeine Mode",
+                        if self.panel.caffeine_enabled { "Enabled" } else { "Disabled" },
+                        None,
+                    );
+                }
+            }
+        }
+    }
+}
+
+impl Drop for OkayState {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.caffeine_child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }

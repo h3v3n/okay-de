@@ -43,10 +43,11 @@ pub enum SettingsTab {
     SystemInfo,
     Shortcuts,
     AdShield,
+    Tweaks,
 }
 
 impl SettingsTab {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Appearance,
         Self::Displays,
         Self::Network,
@@ -57,6 +58,7 @@ impl SettingsTab {
         Self::SystemInfo,
         Self::Shortcuts,
         Self::AdShield,
+        Self::Tweaks,
     ];
 
     fn title(self) -> &'static str {
@@ -71,6 +73,7 @@ impl SettingsTab {
             Self::SystemInfo => "8. System Info",
             Self::Shortcuts => "9. Keybindings",
             Self::AdShield => "10. AdShield & Privacy",
+            Self::Tweaks => "11. Tweaks / Experim.",
         }
     }
 }
@@ -107,6 +110,8 @@ enum SliderKind {
     OutputVol,
     MicVol,
     PointerSpeed,
+    TopbarHeight,
+    DockIconSize,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +126,13 @@ enum SettingsAction {
     ToggleM3Expressive,
     SetAppearanceMode(crate::panel::AppearanceMode),
     SetLightMode(bool),
+    AdjustTopbarHeight(i32),
+    AdjustDockIconSize(i32),
+    ToggleDockAutohide,
+    ResetPanelDefaults,
+    SetAnimPreset(bool, f32),
+    SetTargetRefreshHz(u32),
+    RebuildIconCacheAndReload,
     ToggleAnimations,
     AdjustAnimSpeed(f32),
     CycleMinimizeEffect,
@@ -326,6 +338,18 @@ fn apply_slider_value(state: &mut OkayState, kind: SliderKind, track: Rectangle<
         SliderKind::PointerSpeed => {
             state.pointer_sensitivity = (0.25 + ratio * 2.25).clamp(0.25, 2.50);
         }
+        SliderKind::TopbarHeight => {
+            let h = (24.0 + ratio * 24.0).round() as i32;
+            state.panel.topbar_height = h.clamp(24, 48);
+            state.retile_workspace();
+            state.blur_dirty = true;
+        }
+        SliderKind::DockIconSize => {
+            let sz = (28.0 + ratio * 36.0).round() as i32;
+            state.panel.dock_icon_size = sz.clamp(28, 64);
+            state.retile_workspace();
+            state.blur_dirty = true;
+        }
     }
 }
 
@@ -338,7 +362,7 @@ pub fn handle_settings_motion(state: &mut OkayState, pos: Point<f64, Logical>) -
     if let Some(offset) = state.settings.dragging {
         let nx = (pos.x - offset.x).round() as i32;
         let ny = (pos.y - offset.y).round() as i32;
-        let min_y = crate::panel::PANEL_HEIGHT + 4;
+        let min_y = state.panel.topbar_h() + 4;
         state.settings.position = Point::from((nx.max(8), ny.max(min_y)));
         return true;
     }
@@ -348,7 +372,10 @@ pub fn handle_settings_motion(state: &mut OkayState, pos: Point<f64, Logical>) -
 /// Releases any active settings window or slider drag on mouse button release.
 pub fn handle_settings_release(state: &mut OkayState) -> bool {
     if let Some((kind, _)) = state.settings.dragging_slider.take() {
-        if kind == SliderKind::PointerSpeed {
+        if matches!(
+            kind,
+            SliderKind::PointerSpeed | SliderKind::TopbarHeight | SliderKind::DockIconSize
+        ) {
             save_all_prefs(state);
         }
         return true;
@@ -472,6 +499,55 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                 state.panel.light_mode = light;
                 state.blur_dirty = true;
                 save_all_prefs(state);
+            }
+            SettingsAction::AdjustTopbarHeight(delta) => {
+                state.panel.topbar_height = (state.panel.topbar_height + delta).clamp(24, 48);
+                state.retile_workspace();
+                state.blur_dirty = true;
+                save_all_prefs(state);
+            }
+            SettingsAction::AdjustDockIconSize(delta) => {
+                state.panel.dock_icon_size = (state.panel.dock_icon_size + delta).clamp(28, 64);
+                state.retile_workspace();
+                state.blur_dirty = true;
+                save_all_prefs(state);
+            }
+            SettingsAction::ToggleDockAutohide => {
+                state.panel.dock_autohide = !state.panel.dock_autohide;
+                state.retile_workspace();
+                save_all_prefs(state);
+            }
+            SettingsAction::ResetPanelDefaults => {
+                state.panel.topbar_height = 32;
+                state.panel.dock_icon_size = 44;
+                state.panel.dock_padding = 8;
+                state.panel.dock_autohide = false;
+                state.retile_workspace();
+                state.blur_dirty = true;
+                save_all_prefs(state);
+                state.overlays.show_osd("Panels", "Reset to 32px / 44px defaults", None);
+            }
+            SettingsAction::SetAnimPreset(enabled, speed) => {
+                state.animations.enabled = enabled;
+                state.animations.speed = speed;
+                save_all_prefs(state);
+            }
+            SettingsAction::SetTargetRefreshHz(hz) => {
+                state.panel.target_refresh_hz = hz;
+                save_all_prefs(state);
+            }
+            SettingsAction::RebuildIconCacheAndReload => {
+                let cfg = state.panel.load_config_file();
+                state.pointer_sensitivity = cfg.pointer_speed;
+                state.natural_scroll = cfg.natural_scroll;
+                state.animations.enabled = cfg.anim_enabled;
+                state.animations.speed = cfg.anim_speed;
+                state.animations.minimize_effect = cfg.minimize_effect;
+                state.theme.active_border_color = state.panel.accent_f32();
+                state.desktop.reload();
+                state.retile_workspace();
+                state.blur_dirty = true;
+                crate::worker::dispatch(crate::worker::WorkerRequest::RebuildIconCache);
             }
             SettingsAction::ToggleAnimations => {
                 state.animations.enabled = !state.animations.enabled;
@@ -1124,21 +1200,77 @@ pub fn render_settings_elements(
             }
             cy += 38;
 
-            // Row 7: Reload Wallpaper + Font Info
-            let wp_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 28).into());
-            canvas.fill_rounded_rect_aa(content_x, cy, 506, 28, 6, [38, 38, 58, 255]);
-            canvas.draw_text_px(
-                content_x + 14,
-                cy + 6,
-                "Reload Wallpaper (~/.config/okay-de/wallpaper.png)",
-                12.5,
-                [235, 238, 250, 255],
-            );
-            state.settings.hit_regions.push((wp_rect, SettingsAction::ReloadWallpaper));
-            cy += 32;
+            // Row 7: Topbar Height & Dock Icon Size Live Sliders + Reset Defaults
+            let tb_h = state.panel.topbar_h();
+            let tb_lbl = format!("Topbar Height: {} px", tb_h);
+            canvas.draw_text_px(content_x, cy, &tb_lbl, 12.0, [215, 220, 238, 255]);
+            let tb_dec = Rectangle::new((wx + content_x + 150, wy + cy - 2).into(), (24, 20).into());
+            canvas.fill_rounded_rect_aa(content_x + 150, cy - 2, 24, 20, 5, [44, 46, 68, 255]);
+            canvas.draw_text_px(content_x + 158, cy, "-", 12.5, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((tb_dec, SettingsAction::AdjustTopbarHeight(-2)));
 
-            let font_info = format!("Active Font: {} (TrueType anti-aliased)", active_font_name());
-            canvas.draw_text_px(content_x, cy, &font_info, 12.0, [155, 160, 185, 255]);
+            let tb_track_x = content_x + 180;
+            let tb_track_w = 292;
+            canvas.fill_rounded_rect_aa(tb_track_x, cy + 4, tb_track_w, 8, 4, [28, 30, 44, 255]);
+            let tb_norm = ((tb_h - 24) as f64 / 24.0).clamp(0.0, 1.0);
+            let tb_fill = (tb_norm * tb_track_w as f64).round() as i32;
+            if tb_fill > 2 {
+                canvas.fill_rounded_rect_aa(tb_track_x, cy + 4, tb_fill.max(6), 8, 4, [accent[0], accent[1], accent[2], 255]);
+            }
+            let tb_knob = (tb_track_x + tb_fill.clamp(5, tb_track_w - 5)) as f32;
+            canvas.fill_circle_aa(tb_knob, (cy + 8) as f32, 6.5, [248, 250, 255, 255]);
+            state.settings.slider_tracks.push((
+                Rectangle::new((wx + tb_track_x, wy + cy - 2).into(), (tb_track_w, 22).into()),
+                SliderKind::TopbarHeight,
+            ));
+
+            let tb_inc = Rectangle::new((wx + content_x + 480, wy + cy - 2).into(), (24, 20).into());
+            canvas.fill_rounded_rect_aa(content_x + 480, cy - 2, 24, 20, 5, [44, 46, 68, 255]);
+            canvas.draw_text_px(content_x + 487, cy, "+", 12.5, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((tb_inc, SettingsAction::AdjustTopbarHeight(2)));
+            cy += 26;
+
+            let dk_sz = state.panel.dock_icon_sz();
+            let dk_lbl = format!("Dock Icons: {} px", dk_sz);
+            canvas.draw_text_px(content_x, cy, &dk_lbl, 12.0, [215, 220, 238, 255]);
+            let dk_dec = Rectangle::new((wx + content_x + 150, wy + cy - 2).into(), (24, 20).into());
+            canvas.fill_rounded_rect_aa(content_x + 150, cy - 2, 24, 20, 5, [44, 46, 68, 255]);
+            canvas.draw_text_px(content_x + 158, cy, "-", 12.5, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((dk_dec, SettingsAction::AdjustDockIconSize(-2)));
+
+            canvas.fill_rounded_rect_aa(tb_track_x, cy + 4, tb_track_w, 8, 4, [28, 30, 44, 255]);
+            let dk_norm = ((dk_sz - 28) as f64 / 36.0).clamp(0.0, 1.0);
+            let dk_fill = (dk_norm * tb_track_w as f64).round() as i32;
+            if dk_fill > 2 {
+                canvas.fill_rounded_rect_aa(tb_track_x, cy + 4, dk_fill.max(6), 8, 4, [accent[0], accent[1], accent[2], 255]);
+            }
+            let dk_knob = (tb_track_x + dk_fill.clamp(5, tb_track_w - 5)) as f32;
+            canvas.fill_circle_aa(dk_knob, (cy + 8) as f32, 6.5, [248, 250, 255, 255]);
+            state.settings.slider_tracks.push((
+                Rectangle::new((wx + tb_track_x, wy + cy - 2).into(), (tb_track_w, 22).into()),
+                SliderKind::DockIconSize,
+            ));
+
+            let dk_inc = Rectangle::new((wx + content_x + 480, wy + cy - 2).into(), (24, 20).into());
+            canvas.fill_rounded_rect_aa(content_x + 480, cy - 2, 24, 20, 5, [44, 46, 68, 255]);
+            canvas.draw_text_px(content_x + 487, cy, "+", 12.5, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((dk_inc, SettingsAction::AdjustDockIconSize(2)));
+            cy += 26;
+
+            // Row 8: Dock Autohide + Reset Panel Defaults + Reload Wallpaper
+            let ah_rect = Rectangle::new((wx + content_x, wy + cy).into(), (160, 26).into());
+            draw_setting_button(&mut canvas, content_x, cy, 160, 26, "Dock Autohide", state.panel.dock_autohide, accent);
+            state.settings.hit_regions.push((ah_rect, SettingsAction::ToggleDockAutohide));
+
+            let rst_rect = Rectangle::new((wx + content_x + 168, wy + cy).into(), (165, 26).into());
+            canvas.fill_rounded_rect_aa(content_x + 168, cy, 165, 26, 6, [44, 46, 68, 255]);
+            canvas.draw_text_px(content_x + 180, cy + 6, "Reset Defaults (32/44)", 11.5, [235, 238, 250, 255]);
+            state.settings.hit_regions.push((rst_rect, SettingsAction::ResetPanelDefaults));
+
+            let wp_rect = Rectangle::new((wx + content_x + 341, wy + cy).into(), (165, 26).into());
+            canvas.fill_rounded_rect_aa(content_x + 341, cy, 165, 26, 6, [38, 38, 58, 255]);
+            canvas.draw_text_px(content_x + 356, cy + 6, "Reload Wallpaper", 11.5, [235, 238, 250, 255]);
+            state.settings.hit_regions.push((wp_rect, SettingsAction::ReloadWallpaper));
         }
 
         SettingsTab::Displays => {
@@ -2123,6 +2255,78 @@ pub fn render_settings_elements(
                     cy += 26;
                 }
             }
+        }
+        SettingsTab::Tweaks => {
+            canvas.draw_text_bold_px(
+                content_x,
+                cy,
+                "Tweaks & Experimental Pro-User Controls",
+                16.0,
+                [accent[0], accent[1], accent[2], 255],
+            );
+            cy += 32;
+
+            canvas.draw_text_px(content_x, cy, "UI Animation Speed Preset", 13.0, [215, 220, 238, 255]);
+            cy += 22;
+            let presets: [(&str, bool, f32); 3] = [
+                ("Instant (Off)", false, 1.0),
+                ("Fast (0.5x dur)", true, 2.0),
+                ("Normal (1.0x)", true, 1.0),
+            ];
+            for (idx, (lbl, en, spd)) in presets.iter().enumerate() {
+                let bx = content_x + idx as i32 * 172;
+                let active = state.animations.enabled == *en
+                    && (!*en || (state.animations.speed - *spd).abs() < 0.15);
+                let r = Rectangle::new((wx + bx, wy + cy).into(), (162, 34).into());
+                draw_setting_button(&mut canvas, bx, cy, 162, 34, lbl, active, accent);
+                state.settings.hit_regions.push((r, SettingsAction::SetAnimPreset(*en, *spd)));
+            }
+            cy += 48;
+
+            canvas.draw_text_px(content_x, cy, "Force Compositor Refresh Rate Target", 13.0, [215, 220, 238, 255]);
+            cy += 22;
+            let hz_opts: [(&str, u32); 4] = [
+                ("Auto", 0),
+                ("60 Hz", 60),
+                ("144 Hz", 144),
+                ("240 Hz", 240),
+            ];
+            for (idx, (lbl, hz)) in hz_opts.iter().enumerate() {
+                let bx = content_x + idx as i32 * 128;
+                let active = state.panel.target_refresh_hz == *hz;
+                let r = Rectangle::new((wx + bx, wy + cy).into(), (120, 34).into());
+                draw_setting_button(&mut canvas, bx, cy, 120, 34, lbl, active, accent);
+                state.settings.hit_regions.push((r, SettingsAction::SetTargetRefreshHz(*hz)));
+            }
+            cy += 52;
+
+            let rebuild_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 38).into());
+            draw_setting_button(
+                &mut canvas,
+                content_x,
+                cy,
+                506,
+                38,
+                "Rebuild Icon Cache (gtk-update-icon-cache) & Reload DE",
+                true,
+                accent,
+            );
+            state
+                .settings
+                .hit_regions
+                .push((rebuild_rect, SettingsAction::RebuildIconCacheAndReload));
+            cy += 52;
+
+            canvas.draw_text_px(
+                content_x,
+                cy,
+                "Pro-User Shortcuts: Scroll Vol/Bri · MidClick Vol=Mute / Clock=DND · Ctrl+Scroll Dock · Super+V Clipboard",
+                11.0,
+                [160, 168, 194, 235],
+            );
+            cy += 22;
+            let font_info = format!("Active Font: {} (TrueType anti-aliased)", active_font_name());
+            canvas.draw_text_px(content_x, cy, &font_info, 11.5, [155, 160, 185, 255]);
         }
     }
 

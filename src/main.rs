@@ -220,8 +220,12 @@ fn init_wayland_loop() -> Result<
 // Winit Nested Backend (Development & Debugging inside Wayland/X11)
 // ============================================================================
 
-fn target_frame_duration(space: &smithay::desktop::Space<smithay::desktop::Window>) -> Duration {
-    let max_refresh_mhz = space
+fn target_frame_duration(state: &OkayState) -> Duration {
+    if state.panel.target_refresh_hz >= 30 {
+        return Duration::from_micros(1_000_000 / state.panel.target_refresh_hz as u64);
+    }
+    let max_refresh_mhz = state
+        .space
         .outputs()
         .filter_map(|o| o.current_mode())
         .map(|m| m.refresh)
@@ -352,6 +356,15 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
                             scale,
                         );
                     }
+                    if state.pending_color_pick.is_some() {
+                        let scale = Scale::from(output.current_scale().fractional_scale());
+                        crate::screencopy::capture_pixel_color(
+                            state,
+                            renderer,
+                            &output,
+                            scale,
+                        );
+                    }
                 }));
                 if frame_ok.is_err() {
                     tracing::error!("Recovered from panic during Winit frame render");
@@ -370,7 +383,7 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
         })?;
 
     while state.running {
-        event_loop.dispatch(Some(target_frame_duration(&state.space)), &mut state)?;
+        event_loop.dispatch(Some(target_frame_duration(&state)), &mut state)?;
         state.adshield.poll_updates();
         if state.last_status_poll.elapsed() >= Duration::from_secs(5) {
             state.last_status_poll = Instant::now();
@@ -577,7 +590,7 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main DRM frame & Wayland event loop
     while state.running {
-        event_loop.dispatch(Some(target_frame_duration(&state.space)), &mut state)?;
+        event_loop.dispatch(Some(target_frame_duration(&state)), &mut state)?;
         // Drain any burst of high-polling-rate (e.g. 2000Hz) input events before rendering
         for _ in 0..2 {
             if event_loop.dispatch(Some(Duration::ZERO), &mut state).is_err() {
@@ -662,6 +675,21 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
                             };
                             if matches_out {
                                 crate::screencopy::capture_native_screenshot(
+                                    &mut state,
+                                    &mut dev.renderer,
+                                    &out_state.output,
+                                    scale,
+                                );
+                            }
+                        }
+                        if let Some(pick_pt) = state.pending_color_pick {
+                            let matches_out = state
+                                .space
+                                .output_geometry(&out_state.output)
+                                .map(|g| g.contains(pick_pt))
+                                .unwrap_or(true);
+                            if matches_out {
+                                crate::screencopy::capture_pixel_color(
                                     &mut state,
                                     &mut dev.renderer,
                                     &out_state.output,
