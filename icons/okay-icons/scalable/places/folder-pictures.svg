@@ -1,1 +1,74 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="miter"><path d="M2.5 5.5C2.5 4.4 3.4 3.5 4.5 3.5H9.5L11.5 6H19.5C20.6 6 21.5 6.9 21.5 8V18.5C21.5 19.6 20.6 20.5 19.5 20.5H4.5C3.4 20.5 2.5 19.6 2.5 18.5V5.5Z" fill="#111827" stroke="#E2E8F0"/><path d="M7.5 17L10.5 13.5L13 16L14.5 14L17 17" stroke="#22C55E"/><rect x="14.5" y="9.5" width="2" height="2" fill="#22C55E" stroke="none"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+
+  <defs>
+    <linearGradient id="squircleBg" x1="24" y1="4" x2="24" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1A202C"/>
+      <stop offset="52%" stop-color="#131823"/>
+      <stop offset="100%" stop-color="#0D1117"/>
+    </linearGradient>
+    <linearGradient id="topRim" x1="24" y1="4" x2="24" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="38%" stop-color="#FFFFFF" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.35"/>
+    </linearGradient>
+    <linearGradient id="metalLight" x1="24" y1="10" x2="24" y2="38" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F8FAFC"/>
+      <stop offset="55%" stop-color="#CBD5E1"/>
+      <stop offset="100%" stop-color="#64748B"/>
+    </linearGradient>
+    <linearGradient id="glassPane" x1="24" y1="10" x2="24" y2="38" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#94A3B8" stop-opacity="0.05"/>
+    </linearGradient>
+    <linearGradient id="oksavi" x1="12" y1="10" x2="36" y2="38" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+    <linearGradient id="oksaviSoft" x1="24" y1="10" x2="24" y2="38" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34D399" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#10B981" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="amberGrad" x1="24" y1="10" x2="24" y2="38" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FBBF24"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </linearGradient>
+    <linearGradient id="dangerGrad" x1="24" y1="10" x2="24" y2="38" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FB7185"/>
+      <stop offset="100%" stop-color="#E11D48"/>
+    </linearGradient>
+    <linearGradient id="folderBack" x1="24" y1="8" x2="24" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1E293B"/>
+      <stop offset="100%" stop-color="#0B0F17"/>
+    </linearGradient>
+    <linearGradient id="folderPaper" x1="24" y1="12" x2="24" y2="26" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F8FAFC" stop-opacity="0.92"/>
+      <stop offset="100%" stop-color="#CBD5E1" stop-opacity="0.72"/>
+    </linearGradient>
+    <linearGradient id="folderFront" x1="24" y1="16" x2="24" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#283548"/>
+      <stop offset="48%" stop-color="#182130"/>
+      <stop offset="100%" stop-color="#0E131D"/>
+    </linearGradient>
+    <linearGradient id="docBody" x1="24" y1="5" x2="24" y2="43" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#222B3A"/>
+      <stop offset="100%" stop-color="#0E131C"/>
+    </linearGradient>
+    <linearGradient id="docFold" x1="30" y1="5" x2="39" y2="14" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#475569"/>
+      <stop offset="100%" stop-color="#1E293B"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="5" y="13" width="38" height="30" rx="5.5" fill="rgba(0,0,0,0.45)"/>
+  <path d="M5 13C5 10.2 7.2 8 10 8H18.2C19.6 8 20.9 8.7 21.7 9.8L23.5 12.2C24.1 13 25 13.5 26 13.5H38C40.8 13.5 43 15.7 43 18.5V35C43 37.8 40.8 40 38 40H10C7.2 40 5 37.8 5 35V13Z" fill="url(#folderBack)" stroke="rgba(255,255,255,0.14)" stroke-width="1"/>
+  <rect x="9" y="14" width="30" height="14" rx="2.5" fill="url(#folderPaper)" stroke="rgba(255,255,255,0.55)" stroke-width="0.8"/>
+  <rect x="5" y="17" width="38" height="24" rx="5" fill="rgba(0,0,0,0.35)"/>
+  <path d="M5 20.5C5 18 7 16 9.5 16H38.5C41 16 43 18 43 20.5V36C43 38.8 40.8 41 38 41H10C7.2 41 5 38.8 5 36V20.5Z" fill="url(#folderFront)"/>
+  <path d="M9.5 16.5H38.5C40.7 16.5 42.5 18.3 42.5 20.5V21C42.5 18.8 40.7 17.2 38.5 17.2H9.5C7.3 17.2 5.5 18.8 5.5 21V20.5C5.5 18.3 7.3 16.5 9.5 16.5Z" fill="rgba(255,255,255,0.18)"/>
+  <path d="M9.5 16.5H38.5C40.7 16.5 42.5 18.3 42.5 20.5V36C42.5 38.5 40.5 40.5 38 40.5H10C7.5 40.5 5.5 38.5 5.5 36V20.5C5.5 18.3 7.3 16.5 9.5 16.5Z" stroke="url(#topRim)" stroke-width="1"/>
+  
+  <path d="M16 34.5L21 28L25 32L27.5 29L32 34.5H16Z" fill="url(#metalLight)" opacity="0.9"/>
+  <circle cx="28.5" cy="24.5" r="2" fill="url(#oksavi)"/>
+
+
+</svg>

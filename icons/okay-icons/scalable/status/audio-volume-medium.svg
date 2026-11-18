@@ -1,1 +1,65 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="miter"><polygon points="3.5,9.5 8,9.5 13,5 13,19 8,14.5 3.5,14.5" fill="#1E293B" stroke="#E2E8F0"/><path d="M16 9A4 4 0 0 1 16 15" stroke="#22C55E"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+
+  <defs>
+    <linearGradient id="squircleBg" x1="24" y1="4" x2="24" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1A202C"/>
+      <stop offset="52%" stop-color="#131823"/>
+      <stop offset="100%" stop-color="#0D1117"/>
+    </linearGradient>
+    <linearGradient id="topRim" x1="24" y1="4" x2="24" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="38%" stop-color="#FFFFFF" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.35"/>
+    </linearGradient>
+    <linearGradient id="metalLight" x1="24" y1="10" x2="24" y2="38" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F8FAFC"/>
+      <stop offset="55%" stop-color="#CBD5E1"/>
+      <stop offset="100%" stop-color="#64748B"/>
+    </linearGradient>
+    <linearGradient id="glassPane" x1="24" y1="10" x2="24" y2="38" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#94A3B8" stop-opacity="0.05"/>
+    </linearGradient>
+    <linearGradient id="oksavi" x1="12" y1="10" x2="36" y2="38" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+    <linearGradient id="oksaviSoft" x1="24" y1="10" x2="24" y2="38" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34D399" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#10B981" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="amberGrad" x1="24" y1="10" x2="24" y2="38" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FBBF24"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </linearGradient>
+    <linearGradient id="dangerGrad" x1="24" y1="10" x2="24" y2="38" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FB7185"/>
+      <stop offset="100%" stop-color="#E11D48"/>
+    </linearGradient>
+    <linearGradient id="folderBack" x1="24" y1="8" x2="24" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1E293B"/>
+      <stop offset="100%" stop-color="#0B0F17"/>
+    </linearGradient>
+    <linearGradient id="folderPaper" x1="24" y1="12" x2="24" y2="26" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F8FAFC" stop-opacity="0.92"/>
+      <stop offset="100%" stop-color="#CBD5E1" stop-opacity="0.72"/>
+    </linearGradient>
+    <linearGradient id="folderFront" x1="24" y1="16" x2="24" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#283548"/>
+      <stop offset="48%" stop-color="#182130"/>
+      <stop offset="100%" stop-color="#0E131D"/>
+    </linearGradient>
+    <linearGradient id="docBody" x1="24" y1="5" x2="24" y2="43" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#222B3A"/>
+      <stop offset="100%" stop-color="#0E131C"/>
+    </linearGradient>
+    <linearGradient id="docFold" x1="30" y1="5" x2="39" y2="14" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#475569"/>
+      <stop offset="100%" stop-color="#1E293B"/>
+    </linearGradient>
+  </defs>
+
+  <path d="M8 19H15L24 11V37L15 29H8V19Z" fill="#E2E8F0" stroke="#E2E8F0" stroke-width="2.4" stroke-linejoin="round"/>
+  <path d="M30 17.5C33.5 21 33.5 27 30 30.5" stroke="#34D399" stroke-width="3.4" stroke-linecap="round"/>
+
+</svg>
