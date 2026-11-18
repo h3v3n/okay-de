@@ -82,6 +82,23 @@ pub fn collect_output_elements(
         state.panel.tray_open,
     );
 
+    // Night Light warm color-temperature overlay (2700K..6500K)
+    if state.panel.night_light_enabled {
+        let warmth = ((6500 - state.panel.night_light_temp.clamp(2700, 6500)) as f32 / 3800.0).clamp(0.0, 1.0);
+        if warmth > 0.01 {
+            let nl_alpha = warmth * 0.24;
+            let nl_rect = Rectangle::new((0, 0).into(), output_geo.size).to_physical_precise_round(scale);
+            let nl_elem = SolidColorRenderElement::new(
+                Id::new(),
+                nl_rect,
+                0,
+                Color32F::new(1.0 * nl_alpha, 0.56 * nl_alpha, 0.16 * nl_alpha, nl_alpha),
+                Kind::Unspecified,
+            );
+            elements.insert(0, OkayRenderElements::Solid(nl_elem));
+        }
+    }
+
     // 0. Pointer cursor (topmost element on whichever output contains the pointer)
     if output_geo.to_f64().contains(state.pointer_location) {
         let local_cursor = state.pointer_location - output_geo.loc.to_f64();
@@ -193,11 +210,39 @@ pub fn collect_output_elements(
             let win_elements: Vec<OkayRenderElements> =
                 window.render_elements(renderer, phys_loc, scale, alpha);
             bg_elements.extend(win_elements);
+        } else if state.workspaces.is_shaded(window) {
+            let is_focused = win_id.as_ref() == focused_id.as_ref();
+            let is_pinned = state.workspaces.is_pinned(window);
+            let is_maximized = state.workspaces.is_maximized(window);
+            let pointer_local = state.pointer_location - output_geo.loc.to_f64();
+            let stack_tabs = win_id
+                .as_ref()
+                .and_then(|id| state.stack_tabs_for(id))
+                .map(|(_, tabs, act)| (tabs, act));
+            if let Some(tb_elem) = crate::panel::render_titlebar_element(
+                window,
+                local_loc,
+                pointer_local,
+                is_focused,
+                is_pinned,
+                is_maximized,
+                accent,
+                stack_tabs.as_ref().map(|(t, a)| (t.as_slice(), *a)),
+                renderer,
+                scale,
+            ) {
+                bg_elements.push(tb_elem);
+            }
         } else {
             let is_focused = win_id.as_ref() == focused_id.as_ref();
             let is_pinned = state.workspaces.is_pinned(window);
             let is_maximized = state.workspaces.is_maximized(window);
-            let corner_radius = if is_maximized { 0.0f32 } else { 18.0f32 };
+            let corner_radius = if is_maximized {
+                0.0f32
+            } else {
+                state.panel.window_corner_radius.clamp(0, 24) as f32
+            };
+            let alpha = (alpha * state.panel.window_opacity.clamp(0.5, 1.0)).clamp(0.15, 1.0);
             let pointer_local = state.pointer_location - output_geo.loc.to_f64();
             let win_geo = window.geometry();
             let tb_h = crate::state::TITLEBAR_HEIGHT;

@@ -303,6 +303,92 @@ enum ClickTarget {
     ToggleSysMonPopup,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitlebarDblClick {
+    Maximize,
+    Shade,
+    Minimize,
+}
+
+impl TitlebarDblClick {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Maximize => "maximize",
+            Self::Shade => "shade",
+            Self::Minimize => "minimize",
+        }
+    }
+    pub fn from_str(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "shade" => Self::Shade,
+            "minimize" => Self::Minimize,
+            _ => Self::Maximize,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Maximize => "Maximize",
+            Self::Shade => "Window Shade",
+            Self::Minimize => "Minimize",
+        }
+    }
+    pub fn next(self) -> Self {
+        match self {
+            Self::Maximize => Self::Shade,
+            Self::Shade => Self::Minimize,
+            Self::Minimize => Self::Maximize,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotCornerAction {
+    None,
+    Overview,
+    Launcher,
+    LockScreen,
+    ColorPicker,
+}
+
+impl HotCornerAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Overview => "overview",
+            Self::Launcher => "launcher",
+            Self::LockScreen => "lock",
+            Self::ColorPicker => "picker",
+        }
+    }
+    pub fn from_str(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "overview" => Self::Overview,
+            "launcher" => Self::Launcher,
+            "lock" => Self::LockScreen,
+            "picker" => Self::ColorPicker,
+            _ => Self::None,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "Off",
+            Self::Overview => "Overview",
+            Self::Launcher => "Launcher",
+            Self::LockScreen => "Lock",
+            Self::ColorPicker => "Color Pick",
+        }
+    }
+    pub fn next(self) -> Self {
+        match self {
+            Self::None => Self::Overview,
+            Self::Overview => Self::Launcher,
+            Self::Launcher => Self::LockScreen,
+            Self::LockScreen => Self::ColorPicker,
+            Self::ColorPicker => Self::None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct PanelState {
     pub launcher_open: bool,
@@ -314,6 +400,19 @@ pub struct PanelState {
     pub dock_padding: i32,
     pub dock_autohide: bool,
     pub target_refresh_hz: u32,
+    pub window_corner_radius: i32,
+    pub window_opacity: f32,
+    pub scroll_speed: f64,
+    pub kb_repeat_delay: i32,
+    pub kb_repeat_rate: i32,
+    pub focus_follows_mouse: bool,
+    pub titlebar_dblclick_action: TitlebarDblClick,
+    pub night_light_enabled: bool,
+    pub night_light_temp: i32,
+    pub game_mode: bool,
+    pub hot_corners: [HotCornerAction; 4],
+    pub hot_corner_delay_ms: u32,
+    pub audio_overamp: bool,
     pub accent_preset: usize,
     pub dynamic_accent: bool,
     pub m3_expressive: bool,
@@ -366,6 +465,24 @@ impl Default for PanelState {
             dock_padding: 8,
             dock_autohide: false,
             target_refresh_hz: 0,
+            window_corner_radius: 18,
+            window_opacity: 1.0,
+            scroll_speed: 1.0,
+            kb_repeat_delay: 250,
+            kb_repeat_rate: 35,
+            focus_follows_mouse: false,
+            titlebar_dblclick_action: TitlebarDblClick::Maximize,
+            night_light_enabled: false,
+            night_light_temp: 4200,
+            game_mode: false,
+            hot_corners: [
+                HotCornerAction::Overview,
+                HotCornerAction::None,
+                HotCornerAction::None,
+                HotCornerAction::None,
+            ],
+            hot_corner_delay_ms: 150,
+            audio_overamp: false,
             accent_preset: 1,
             dynamic_accent: false,
             m3_expressive: false,
@@ -586,6 +703,52 @@ impl PanelState {
                             self.target_refresh_hz = hz;
                         }
                     }
+                    "window_corner_radius" => {
+                        if let Ok(r) = val.parse::<i32>() {
+                            self.window_corner_radius = r.clamp(0, 24);
+                        }
+                    }
+                    "window_opacity" => {
+                        if let Ok(o) = val.parse::<f32>() {
+                            self.window_opacity = o.clamp(0.5, 1.0);
+                        }
+                    }
+                    "scroll_speed" => {
+                        if let Ok(s) = val.parse::<f64>() {
+                            self.scroll_speed = s.clamp(0.25, 3.0);
+                        }
+                    }
+                    "kb_repeat_delay" => {
+                        if let Ok(d) = val.parse::<i32>() {
+                            self.kb_repeat_delay = d.clamp(150, 600);
+                        }
+                    }
+                    "kb_repeat_rate" => {
+                        if let Ok(r) = val.parse::<i32>() {
+                            self.kb_repeat_rate = r.clamp(15, 60);
+                        }
+                    }
+                    "focus_follows_mouse" => self.focus_follows_mouse = val == "true",
+                    "titlebar_dblclick_action" => {
+                        self.titlebar_dblclick_action = TitlebarDblClick::from_str(val);
+                    }
+                    "night_light_enabled" => self.night_light_enabled = val == "true",
+                    "night_light_temp" => {
+                        if let Ok(t) = val.parse::<i32>() {
+                            self.night_light_temp = t.clamp(2700, 6500);
+                        }
+                    }
+                    "game_mode" => self.game_mode = val == "true",
+                    "hot_corner_tl" => self.hot_corners[0] = HotCornerAction::from_str(val),
+                    "hot_corner_tr" => self.hot_corners[1] = HotCornerAction::from_str(val),
+                    "hot_corner_bl" => self.hot_corners[2] = HotCornerAction::from_str(val),
+                    "hot_corner_br" => self.hot_corners[3] = HotCornerAction::from_str(val),
+                    "hot_corner_delay_ms" => {
+                        if let Ok(ms) = val.parse::<u32>() {
+                            self.hot_corner_delay_ms = ms.clamp(0, 600);
+                        }
+                    }
+                    "audio_overamp" => self.audio_overamp = val == "true",
                     "show_workspaces" => self.show_workspaces = val != "false",
                     "accent_preset" => {
                         if let Ok(idx) = val.parse::<usize>() {
@@ -734,6 +897,22 @@ impl PanelState {
         body.push_str(&format!("dock_padding = {}\n", self.dock_pad()));
         body.push_str(&format!("dock_autohide = {}\n", self.dock_autohide));
         body.push_str(&format!("target_refresh_hz = {}\n", self.target_refresh_hz));
+        body.push_str(&format!("window_corner_radius = {}\n", self.window_corner_radius));
+        body.push_str(&format!("window_opacity = {:.2}\n", self.window_opacity));
+        body.push_str(&format!("scroll_speed = {:.2}\n", self.scroll_speed));
+        body.push_str(&format!("kb_repeat_delay = {}\n", self.kb_repeat_delay));
+        body.push_str(&format!("kb_repeat_rate = {}\n", self.kb_repeat_rate));
+        body.push_str(&format!("focus_follows_mouse = {}\n", self.focus_follows_mouse));
+        body.push_str(&format!("titlebar_dblclick_action = \"{}\"\n", self.titlebar_dblclick_action.as_str()));
+        body.push_str(&format!("night_light_enabled = {}\n", self.night_light_enabled));
+        body.push_str(&format!("night_light_temp = {}\n", self.night_light_temp));
+        body.push_str(&format!("game_mode = {}\n", self.game_mode));
+        body.push_str(&format!("hot_corner_tl = \"{}\"\n", self.hot_corners[0].as_str()));
+        body.push_str(&format!("hot_corner_tr = \"{}\"\n", self.hot_corners[1].as_str()));
+        body.push_str(&format!("hot_corner_bl = \"{}\"\n", self.hot_corners[2].as_str()));
+        body.push_str(&format!("hot_corner_br = \"{}\"\n", self.hot_corners[3].as_str()));
+        body.push_str(&format!("hot_corner_delay_ms = {}\n", self.hot_corner_delay_ms));
+        body.push_str(&format!("audio_overamp = {}\n", self.audio_overamp));
         body.push_str(&format!("adshield_enabled = {}\n", self.adshield_enabled));
         body.push_str(&format!("pointer_accel_disabled = {}\n", self.pointer_accel_disabled));
         for d in &self.adshield_whitelist {

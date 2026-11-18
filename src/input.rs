@@ -786,6 +786,7 @@ fn handle_pointer_motion_absolute<I: InputBackend>(
 
 fn move_pointer_to(state: &mut OkayState, pos: Point<f64, Logical>, time_msec: u32) {
     state.pointer_location = pos;
+    state.process_hot_corners();
 
     if crate::settings::handle_settings_motion(state, pos) {
         state.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
@@ -911,6 +912,14 @@ fn move_pointer_to(state: &mut OkayState, pos: Point<f64, Logical>, time_msec: u
     }
 
     let under = state.surface_under(pos);
+
+    if state.panel.focus_follows_mouse && !state.overlays.overview_open && !state.overlays.locked {
+        if let Some(ref win) = state.window_under(pos) {
+            if state.focused_window().as_ref() != Some(win) {
+                state.focus_window(win);
+            }
+        }
+    }
 
     if let Some(pointer) = state.seat.get_pointer() {
         pointer.motion(
@@ -1223,12 +1232,13 @@ fn handle_pointer_button<I: InputBackend>(state: &mut OkayState, event: I::Point
 fn handle_pointer_axis<I: InputBackend>(state: &mut OkayState, event: I::PointerAxisEvent) {
     let source = event.source();
     let dir = if state.natural_scroll { -1.0 } else { 1.0 };
+    let spd = state.panel.scroll_speed.clamp(0.25, 3.0);
     let horizontal_amount = event.amount(Axis::Horizontal).unwrap_or_else(|| {
         event.amount_v120(Axis::Horizontal).unwrap_or(0.0) * 15.0 / 120.0
-    }) * dir;
+    }) * dir * spd;
     let vertical_amount = event.amount(Axis::Vertical).unwrap_or_else(|| {
         event.amount_v120(Axis::Vertical).unwrap_or(0.0) * 15.0 / 120.0
-    }) * dir;
+    }) * dir * spd;
 
     // Pro-User Scroll Gestures on Topbar & Dock
     let raw_v = event.amount(Axis::Vertical).unwrap_or_else(|| {
@@ -1285,6 +1295,17 @@ fn handle_pointer_axis<I: InputBackend>(state: &mut OkayState, event: I::Pointer
                     Some(state.panel.brightness_percent),
                 );
                 return;
+            }
+        }
+
+        // Scroll over a window's server-side titlebar -> Window Shade / Unshade
+        if !ctrl_held && !state.overlays.overview_open && !state.overlays.locked {
+            if let Some((win, _)) = state.window_titlebar_under(state.pointer_location, None) {
+                let is_shaded = state.workspaces.is_shaded(&win);
+                if (step_sign > 0 && !is_shaded) || (step_sign < 0 && is_shaded) {
+                    state.toggle_shade_window(&win);
+                    return;
+                }
             }
         }
     }

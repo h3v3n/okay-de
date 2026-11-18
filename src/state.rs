@@ -126,6 +126,7 @@ pub struct WorkspaceManager {
     pub minimized: HashSet<ObjectId>,
     pub fullscreen: HashSet<ObjectId>,
     pub maximized: HashSet<ObjectId>,
+    pub shaded: HashSet<ObjectId>,
     pub always_on_top: HashSet<ObjectId>,
     pub saved_geometries: HashMap<ObjectId, Rectangle<i32, Logical>>,
     pub layout_mode: LayoutMode,
@@ -144,6 +145,7 @@ impl Default for WorkspaceManager {
             minimized: HashSet::new(),
             fullscreen: HashSet::new(),
             maximized: HashSet::new(),
+            shaded: HashSet::new(),
             always_on_top: HashSet::new(),
             saved_geometries: HashMap::new(),
             layout_mode: LayoutMode::Floating,
@@ -185,6 +187,7 @@ impl WorkspaceManager {
         self.minimized.remove(surface_id);
         self.fullscreen.remove(surface_id);
         self.maximized.remove(surface_id);
+        self.shaded.remove(surface_id);
         self.always_on_top.remove(surface_id);
         self.saved_geometries.remove(surface_id);
         self.tile_order.retain(|x| x != surface_id);
@@ -220,6 +223,13 @@ impl WorkspaceManager {
         window
             .toplevel()
             .map(|t| self.maximized.contains(&t.wl_surface().id()))
+            .unwrap_or(false)
+    }
+
+    pub fn is_shaded(&self, window: &Window) -> bool {
+        window
+            .toplevel()
+            .map(|t| self.shaded.contains(&t.wl_surface().id()))
             .unwrap_or(false)
     }
 
@@ -329,6 +339,10 @@ pub struct OkayState {
     pub caffeine_child: Option<std::process::Child>,
     pub last_titlebar_click: Option<(ObjectId, Instant)>,
     pub last_status_poll: Instant,
+    pub last_config_poll: Instant,
+    pub config_last_mtime: Option<std::time::SystemTime>,
+    pub hot_corner_hover: Option<(usize, Instant)>,
+    pub hot_corner_fired: bool,
 
     // Desktop, window registry & workspaces
     pub space: Space<Window>,
@@ -456,6 +470,10 @@ impl OkayState {
             caffeine_child: None,
             last_titlebar_click: None,
             last_status_poll: Instant::now(),
+            last_config_poll: Instant::now(),
+            config_last_mtime: None,
+            hot_corner_hover: None,
+            hot_corner_fired: false,
             space: Space::default(),
             popups: PopupManager::default(),
             workspaces: WorkspaceManager::default(),
@@ -1301,7 +1319,11 @@ impl OkayState {
                 let x0 = win_loc.x + geo.loc.x;
                 let y0 = win_loc.y + geo.loc.y - TITLEBAR_HEIGHT;
                 let w = geo.size.w.max(120);
-                let h = geo.size.h + TITLEBAR_HEIGHT;
+                let h = if self.workspaces.is_shaded(window) {
+                    TITLEBAR_HEIGHT
+                } else {
+                    geo.size.h + TITLEBAR_HEIGHT
+                };
                 if px >= x0 && px < x0 + w && py >= y0 && py < y0 + h {
                     return Some(window.clone());
                 }
@@ -1391,7 +1413,11 @@ impl OkayState {
                 .unwrap_or(false);
             if is_double {
                 self.last_titlebar_click = None;
-                self.toggle_maximize_window(&window);
+                match self.panel.titlebar_dblclick_action {
+                    crate::panel::TitlebarDblClick::Maximize => self.toggle_maximize_window(&window),
+                    crate::panel::TitlebarDblClick::Shade => self.toggle_shade_window(&window),
+                    crate::panel::TitlebarDblClick::Minimize => self.toggle_minimize_window(&window),
+                }
                 return true;
             }
             self.last_titlebar_click = Some((win_id, now));
@@ -1816,6 +1842,123 @@ impl OkayState {
             x.max(output_geo.loc.x + 16),
             y.clamp(min_y, max_y),
         ))
+    }
+
+    pub fn toggle_shade_window(&mut self, win: &Window) {
+        let Some(id) = win.toplevel().map(|t| t.wl_surface().id()) else {
+            return;
+        };
+        if self.workspaces.shaded.contains(&id) {
+            self.workspaces.shaded.remove(&id);
+        } else {
+            self.workspaces.shaded.insert(id);
+        }
+    }
+
+    pub fn poll_config_hot_reload(&mut self) {
+        if self.last_config_poll.elapsed() < std::time::Duration::from_millis(500) {
+            return;
+        }
+        self.last_config_poll = Instant::now();
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let path = PathBuf::from(home).join(".config/okay-de/config.toml");
+        let Ok(meta) = std::fs::metadata(&path) else {
+            return;
+        };
+        let Ok(mtime) = meta.modified() else {
+            return;
+        };
+        if self.config_last_mtime.is_none() {
+            self.config_last_mtime = Some(mtime);
+            return;
+        }
+        if self.config_last_mtime != Some(mtime) {
+            self.config_last_mtime = Some(mtime);
+            let cfg = self.panel.load_config_file();
+            self.pointer_sensitivity = cfg.pointer_speed;
+            self.natural_scroll = cfg.natural_scroll;
+            self.pointer_accel_disabled = self.panel.pointer_accel_disabled;
+            self.apply_pointer_accel_profile();
+            if let Some(kb) = self.seat.get_keyboard() {
+                kb.change_repeat_info(self.panel.kb_repeat_rate, self.panel.kb_repeat_delay);
+            }
+            self.animations.enabled = if self.panel.game_mode { false } else { cfg.anim_enabled };
+            self.animations.speed = cfg.anim_speed;
+            self.animations.minimize_effect = cfg.minimize_effect;
+            self.theme.active_border_color = self.panel.accent_f32();
+            self.retile_workspace();
+            self.blur_dirty = true;
+            tracing::info!("Hot-reloaded ~/.config/okay-de/config.toml");
+        }
+    }
+
+    pub fn process_hot_corners(&mut self) {
+        let Some(out) = self.output_under_pointer() else {
+            self.hot_corner_hover = None;
+            self.hot_corner_fired = false;
+            return;
+        };
+        let Some(geo) = self.space.output_geometry(&out) else {
+            return;
+        };
+        let px = self.pointer_location.x.round() as i32;
+        let py = self.pointer_location.y.round() as i32;
+        let pad = 6;
+        let corner = if px <= geo.loc.x + pad && py <= geo.loc.y + pad {
+            Some(0)
+        } else if px >= geo.loc.x + geo.size.w - pad && py <= geo.loc.y + pad {
+            Some(1)
+        } else if px <= geo.loc.x + pad && py >= geo.loc.y + geo.size.h - pad {
+            Some(2)
+        } else if px >= geo.loc.x + geo.size.w - pad && py >= geo.loc.y + geo.size.h - pad {
+            Some(3)
+        } else {
+            None
+        };
+
+        let Some(c_idx) = corner else {
+            self.hot_corner_hover = None;
+            self.hot_corner_fired = false;
+            return;
+        };
+        let action = self.panel.hot_corners[c_idx];
+        if action == crate::panel::HotCornerAction::None {
+            return;
+        }
+        let now = Instant::now();
+        match self.hot_corner_hover {
+            Some((idx, since)) if idx == c_idx => {
+                if !self.hot_corner_fired
+                    && now.duration_since(since).as_millis() >= self.panel.hot_corner_delay_ms as u128
+                {
+                    self.hot_corner_fired = true;
+                    match action {
+                        crate::panel::HotCornerAction::Overview => {
+                            self.overlays.overview_open = !self.overlays.overview_open;
+                        }
+                        crate::panel::HotCornerAction::Launcher => {
+                            self.panel.launcher_open = !self.panel.launcher_open;
+                        }
+                        crate::panel::HotCornerAction::LockScreen => {
+                            self.overlays.locked = true;
+                            self.overlays.lock_input.clear();
+                            self.overlays.lock_error = false;
+                        }
+                        crate::panel::HotCornerAction::ColorPicker => {
+                            self.overlays.color_picker_active = true;
+                            self.overlays.show_osd("Color Picker", "Click any pixel to copy #RRGGBB", None);
+                        }
+                        crate::panel::HotCornerAction::None => {}
+                    }
+                }
+            }
+            _ => {
+                self.hot_corner_hover = Some((c_idx, now));
+                self.hot_corner_fired = false;
+            }
+        }
     }
 
     pub fn toggle_caffeine(&mut self) {

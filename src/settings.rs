@@ -133,6 +133,21 @@ enum SettingsAction {
     SetAnimPreset(bool, f32),
     SetTargetRefreshHz(u32),
     RebuildIconCacheAndReload,
+    AdjustCornerRadius(i32),
+    AdjustWindowOpacity(f32),
+    ToggleNightLight,
+    AdjustNightLightTemp(i32),
+    AdjustScrollSpeed(f64),
+    AdjustKbRepeatDelay(i32),
+    AdjustKbRepeatRate(i32),
+    ToggleFocusFollowsMouse,
+    CycleTitlebarDblClick,
+    CycleHotCorner(usize),
+    AdjustHotCornerDelay(i32),
+    ToggleGameMode,
+    SetPowerProfile(&'static str),
+    ToggleAudioOveramp,
+    CopySystemInfo,
     ToggleAnimations,
     AdjustAnimSpeed(f32),
     CycleMinimizeEffect,
@@ -548,6 +563,94 @@ pub fn handle_settings_click(state: &mut OkayState, global_pos: Point<f64, Logic
                 state.retile_workspace();
                 state.blur_dirty = true;
                 crate::worker::dispatch(crate::worker::WorkerRequest::RebuildIconCache);
+            }
+            SettingsAction::AdjustCornerRadius(delta) => {
+                state.panel.window_corner_radius = (state.panel.window_corner_radius + delta).clamp(0, 24);
+                save_all_prefs(state);
+            }
+            SettingsAction::AdjustWindowOpacity(delta) => {
+                state.panel.window_opacity = (state.panel.window_opacity + delta).clamp(0.5, 1.0);
+                save_all_prefs(state);
+            }
+            SettingsAction::ToggleNightLight => {
+                state.panel.night_light_enabled = !state.panel.night_light_enabled;
+                save_all_prefs(state);
+            }
+            SettingsAction::AdjustNightLightTemp(delta) => {
+                state.panel.night_light_temp = (state.panel.night_light_temp + delta).clamp(2700, 6500);
+                save_all_prefs(state);
+            }
+            SettingsAction::AdjustScrollSpeed(delta) => {
+                state.panel.scroll_speed = (state.panel.scroll_speed + delta).clamp(0.25, 3.0);
+                save_all_prefs(state);
+            }
+            SettingsAction::AdjustKbRepeatDelay(delta) => {
+                state.panel.kb_repeat_delay = (state.panel.kb_repeat_delay + delta).clamp(150, 600);
+                if let Some(kb) = state.seat.get_keyboard() {
+                    kb.change_repeat_info(state.panel.kb_repeat_rate, state.panel.kb_repeat_delay);
+                }
+                save_all_prefs(state);
+            }
+            SettingsAction::AdjustKbRepeatRate(delta) => {
+                state.panel.kb_repeat_rate = (state.panel.kb_repeat_rate + delta).clamp(15, 60);
+                if let Some(kb) = state.seat.get_keyboard() {
+                    kb.change_repeat_info(state.panel.kb_repeat_rate, state.panel.kb_repeat_delay);
+                }
+                save_all_prefs(state);
+            }
+            SettingsAction::ToggleFocusFollowsMouse => {
+                state.panel.focus_follows_mouse = !state.panel.focus_follows_mouse;
+                save_all_prefs(state);
+            }
+            SettingsAction::CycleTitlebarDblClick => {
+                state.panel.titlebar_dblclick_action = state.panel.titlebar_dblclick_action.next();
+                save_all_prefs(state);
+            }
+            SettingsAction::CycleHotCorner(idx) => {
+                if idx < 4 {
+                    state.panel.hot_corners[idx] = state.panel.hot_corners[idx].next();
+                    save_all_prefs(state);
+                }
+            }
+            SettingsAction::AdjustHotCornerDelay(delta) => {
+                state.panel.hot_corner_delay_ms = (state.panel.hot_corner_delay_ms as i32 + delta).clamp(0, 600) as u32;
+                save_all_prefs(state);
+            }
+            SettingsAction::ToggleGameMode => {
+                state.panel.game_mode = !state.panel.game_mode;
+                state.animations.enabled = !state.panel.game_mode;
+                state.overlays.dnd_enabled = state.panel.game_mode;
+                save_all_prefs(state);
+                state.overlays.show_osd(
+                    "Game Mode",
+                    if state.panel.game_mode { "Enabled (No Anim + DND)" } else { "Disabled" },
+                    None,
+                );
+            }
+            SettingsAction::SetPowerProfile(prof) => {
+                crate::worker::dispatch(crate::worker::WorkerRequest::RunCommand {
+                    program: "powerprofilesctl".to_string(),
+                    args: vec!["set".to_string(), prof.to_string()],
+                });
+                state.overlays.show_osd("Power Profile", prof, None);
+            }
+            SettingsAction::ToggleAudioOveramp => {
+                state.panel.audio_overamp = !state.panel.audio_overamp;
+                save_all_prefs(state);
+            }
+            SettingsAction::CopySystemInfo => {
+                let info = format!(
+                    "OS: {}\nKernel: {}\nCPU: {}\nGPU: {}\nRAM: {}\nDisk: {}",
+                    state.settings.os_name,
+                    state.settings.kernel_ver,
+                    state.settings.cpu_model,
+                    state.settings.gpu_renderer,
+                    state.settings.ram_summary,
+                    state.settings.disk_summary,
+                );
+                state.overlays.push_clipboard_text(info.clone());
+                state.set_compositor_clipboard(info);
+                state.overlays.push_notification("System Info", "Copied hardware summary to clipboard");
             }
             SettingsAction::ToggleAnimations => {
                 state.animations.enabled = !state.animations.enabled;
@@ -1402,7 +1505,28 @@ pub fn render_settings_elements(
                     .settings
                     .hit_regions
                     .push((swap_rect, SettingsAction::SwapMonitorsOrder));
+                cy += 42;
             }
+
+            // Night Light (Warm Color Temperature 2700K - 6500K)
+            let nl_btn = Rectangle::new((wx + content_x, wy + cy).into(), (240, 32).into());
+            let nl_lbl = if state.panel.night_light_enabled {
+                format!("Night Light: ON ({}K)", state.panel.night_light_temp)
+            } else {
+                format!("Night Light: OFF ({}K)", state.panel.night_light_temp)
+            };
+            draw_setting_button(&mut canvas, content_x, cy, 240, 32, &nl_lbl, state.panel.night_light_enabled, accent);
+            state.settings.hit_regions.push((nl_btn, SettingsAction::ToggleNightLight));
+
+            let nl_dec = Rectangle::new((wx + content_x + 250, wy + cy).into(), (122, 32).into());
+            canvas.fill_rounded_rect_aa(content_x + 250, cy, 122, 32, 6, [44, 46, 68, 255]);
+            canvas.draw_text_px(content_x + 266, cy + 8, "-300K (Warmer)", 11.5, [238, 240, 252, 255]);
+            state.settings.hit_regions.push((nl_dec, SettingsAction::AdjustNightLightTemp(-300)));
+
+            let nl_inc = Rectangle::new((wx + content_x + 380, wy + cy).into(), (126, 32).into());
+            canvas.fill_rounded_rect_aa(content_x + 380, cy, 126, 32, 6, [44, 46, 68, 255]);
+            canvas.draw_text_px(content_x + 398, cy + 8, "+300K (Cooler)", 11.5, [238, 240, 252, 255]);
+            state.settings.hit_regions.push((nl_inc, SettingsAction::AdjustNightLightTemp(300)));
         }
 
         SettingsTab::Network => {
@@ -1839,7 +1963,31 @@ pub fn render_settings_elements(
                 .settings
                 .hit_regions
                 .push((kb_rect, SettingsAction::CycleKeyboardLayout));
-            cy += 44;
+            cy += 40;
+
+            // Scroll Speed + Keyboard Repeat Delay / Rate (applied live to Smithay)
+            let ss_lbl = format!("Scroll Speed: {:.2}x", state.panel.scroll_speed);
+            canvas.draw_text_px(content_x, cy + 4, &ss_lbl, 12.0, [225, 228, 245, 255]);
+            let ss_dec = Rectangle::new((wx + content_x + 170, wy + cy).into(), (32, 24).into());
+            canvas.fill_rounded_rect_aa(content_x + 170, cy, 32, 24, 5, [44, 46, 68, 255]);
+            canvas.draw_text_px(content_x + 182, cy + 4, "-", 13.0, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((ss_dec, SettingsAction::AdjustScrollSpeed(-0.25)));
+            let ss_inc = Rectangle::new((wx + content_x + 208, wy + cy).into(), (32, 24).into());
+            canvas.fill_rounded_rect_aa(content_x + 208, cy, 32, 24, 5, [44, 46, 68, 255]);
+            canvas.draw_text_px(content_x + 219, cy + 4, "+", 13.0, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((ss_inc, SettingsAction::AdjustScrollSpeed(0.25)));
+
+            let rp_lbl = format!("Repeat: {}ms / {}/s", state.panel.kb_repeat_delay, state.panel.kb_repeat_rate);
+            canvas.draw_text_px(content_x + 252, cy + 4, &rp_lbl, 12.0, [225, 228, 245, 255]);
+            let dl_dec = Rectangle::new((wx + content_x + 420, wy + cy).into(), (38, 24).into());
+            canvas.fill_rounded_rect_aa(content_x + 420, cy, 38, 24, 5, [44, 46, 68, 255]);
+            canvas.draw_text_px(content_x + 426, cy + 4, "-ms", 11.0, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((dl_dec, SettingsAction::AdjustKbRepeatDelay(-25)));
+            let rt_inc = Rectangle::new((wx + content_x + 464, wy + cy).into(), (42, 24).into());
+            canvas.fill_rounded_rect_aa(content_x + 464, cy, 42, 24, 5, [44, 46, 68, 255]);
+            canvas.draw_text_px(content_x + 469, cy + 4, "+rate", 11.0, [240, 242, 252, 255]);
+            state.settings.hit_regions.push((rt_inc, SettingsAction::AdjustKbRepeatRate(5)));
+            cy += 34;
 
             canvas.draw_text_px(
                 content_x,
@@ -1995,25 +2143,33 @@ pub fn render_settings_elements(
             let upd_txt = truncate_with_ellipsis(&canvas, &state.settings.update_status, 12.0, 260);
             canvas.draw_text_px(content_x + 12, cy + 14, &upd_txt, 12.0, [226, 232, 248, 255]);
 
-            let chk_rect = Rectangle::new((wx + content_x + 280, wy + cy + 7).into(), (104, 28).into());
-            canvas.fill_rounded_rect_aa(content_x + 280, cy + 7, 104, 28, 6, [52, 56, 78, 255]);
-            canvas.draw_text_px(content_x + 292, cy + 14, "Check GitHub", 11.5, [238, 240, 252, 255]);
+            let chk_rect = Rectangle::new((wx + content_x + 210, wy + cy + 7).into(), (92, 28).into());
+            canvas.fill_rounded_rect_aa(content_x + 210, cy + 7, 92, 28, 6, [52, 56, 78, 255]);
+            canvas.draw_text_px(content_x + 218, cy + 14, "Check Git", 11.5, [238, 240, 252, 255]);
             state
                 .settings
                 .hit_regions
                 .push((chk_rect, SettingsAction::CheckUpdates));
 
-            let inst_rect = Rectangle::new((wx + content_x + 392, wy + cy + 7).into(), (104, 28).into());
+            let cp_rect = Rectangle::new((wx + content_x + 308, wy + cy + 7).into(), (86, 28).into());
+            canvas.fill_rounded_rect_aa(content_x + 308, cy + 7, 86, 28, 6, [52, 56, 78, 255]);
+            canvas.draw_text_px(content_x + 318, cy + 14, "Copy Info", 11.5, [238, 240, 252, 255]);
+            state
+                .settings
+                .hit_regions
+                .push((cp_rect, SettingsAction::CopySystemInfo));
+
+            let inst_rect = Rectangle::new((wx + content_x + 400, wy + cy + 7).into(), (96, 28).into());
             canvas.fill_rounded_rect_aa(
-                content_x + 392,
+                content_x + 400,
                 cy + 7,
-                104,
+                96,
                 28,
                 6,
                 [accent[0], accent[1], accent[2], 235],
             );
             canvas.draw_text_raw(
-                content_x + 408,
+                content_x + 414,
                 cy + 14,
                 "Update DE",
                 11.5,
@@ -2300,13 +2456,13 @@ pub fn render_settings_elements(
             }
             cy += 52;
 
-            let rebuild_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 38).into());
+            let rebuild_rect = Rectangle::new((wx + content_x, wy + cy).into(), (506, 32).into());
             draw_setting_button(
                 &mut canvas,
                 content_x,
                 cy,
                 506,
-                38,
+                32,
                 "Rebuild Icon Cache (gtk-update-icon-cache) & Reload DE",
                 true,
                 accent,
@@ -2315,7 +2471,53 @@ pub fn render_settings_elements(
                 .settings
                 .hit_regions
                 .push((rebuild_rect, SettingsAction::RebuildIconCacheAndReload));
-            cy += 52;
+            cy += 40;
+
+            // Window Corner Radius, Opacity & Focus / Titlebar Double-Click
+            let rad_lbl = format!("Radius: {}px", state.panel.window_corner_radius);
+            let rad_btn = Rectangle::new((wx + content_x, wy + cy).into(), (120, 28).into());
+            draw_setting_button(&mut canvas, content_x, cy, 120, 28, &rad_lbl, false, accent);
+            state.settings.hit_regions.push((rad_btn, SettingsAction::AdjustCornerRadius(if state.panel.window_corner_radius >= 24 { -24 } else { 4 })));
+
+            let focus_lbl = if state.panel.focus_follows_mouse { "Focus: Hover" } else { "Focus: Click" };
+            let focus_btn = Rectangle::new((wx + content_x + 128, wy + cy).into(), (122, 28).into());
+            draw_setting_button(&mut canvas, content_x + 128, cy, 122, 28, focus_lbl, state.panel.focus_follows_mouse, accent);
+            state.settings.hit_regions.push((focus_btn, SettingsAction::ToggleFocusFollowsMouse));
+
+            let dbl_lbl = format!("DblClick: {}", state.panel.titlebar_dblclick_action.label());
+            let dbl_btn = Rectangle::new((wx + content_x + 258, wy + cy).into(), (140, 28).into());
+            draw_setting_button(&mut canvas, content_x + 258, cy, 140, 28, &dbl_lbl, false, accent);
+            state.settings.hit_regions.push((dbl_btn, SettingsAction::CycleTitlebarDblClick));
+
+            let gm_btn = Rectangle::new((wx + content_x + 406, wy + cy).into(), (100, 28).into());
+            draw_setting_button(&mut canvas, content_x + 406, cy, 100, 28, "GameMode", state.panel.game_mode, accent);
+            state.settings.hit_regions.push((gm_btn, SettingsAction::ToggleGameMode));
+            cy += 36;
+
+            // Hot Corners (TL / TR / BL / BR) + Power Profile
+            let corner_names = ["TL", "TR", "BL", "BR"];
+            for (ci, cname) in corner_names.iter().enumerate() {
+                let bx = content_x + ci as i32 * 128;
+                let lbl = format!("{}: {}", cname, state.panel.hot_corners[ci].label());
+                let cr = Rectangle::new((wx + bx, wy + cy).into(), (120, 28).into());
+                let active = state.panel.hot_corners[ci] != crate::panel::HotCornerAction::None;
+                draw_setting_button(&mut canvas, bx, cy, 120, 28, &lbl, active, accent);
+                state.settings.hit_regions.push((cr, SettingsAction::CycleHotCorner(ci)));
+            }
+            cy += 36;
+
+            let pwr_opts: [(&str, &str); 3] = [
+                ("Power: Perf", "performance"),
+                ("Balanced", "balanced"),
+                ("Power Saver", "power-saver"),
+            ];
+            for (pi, (plbl, pval)) in pwr_opts.iter().enumerate() {
+                let bx = content_x + pi as i32 * 170;
+                let pr = Rectangle::new((wx + bx, wy + cy).into(), (162, 28).into());
+                draw_setting_button(&mut canvas, bx, cy, 162, 28, plbl, false, accent);
+                state.settings.hit_regions.push((pr, SettingsAction::SetPowerProfile(pval)));
+            }
+            cy += 36;
 
             canvas.draw_text_px(
                 content_x,

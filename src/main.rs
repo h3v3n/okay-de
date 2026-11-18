@@ -384,6 +384,8 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
 
     while state.running {
         event_loop.dispatch(Some(target_frame_duration(&state)), &mut state)?;
+        state.poll_config_hot_reload();
+        state.process_hot_corners();
         state.adshield.poll_updates();
         if state.last_status_poll.elapsed() >= Duration::from_secs(5) {
             state.last_status_poll = Instant::now();
@@ -597,6 +599,8 @@ fn run_drm() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
         }
+        state.poll_config_hot_reload();
+        state.process_hot_corners();
         state.adshield.poll_updates();
 
         // Render active DRM outputs when not waiting for a VBlank flip
